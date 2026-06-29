@@ -116,7 +116,7 @@ export default function DualMapViewer() {
       format: 'image/png',
       transparent: true,
       time: new Date(currentTime).toISOString(),
-      className: 'mix-blend-luminosity contrast-125 transition-opacity duration-500 ease-in-out',
+      className: 'mix-blend-luminosity brightness-[1.15] contrast-[1.15] transition-opacity duration-500 ease-in-out',
       opacity: 0
     } as any);
     fusionLayerRef.current = fusionLayer;
@@ -175,7 +175,7 @@ export default function DualMapViewer() {
       fusionLayerRef.current.addTo(map2Instance.current);
       setTimeout(() => {
         if (fusionLayerRef.current) {
-          fusionLayerRef.current.setOpacity(0.8);
+          fusionLayerRef.current.setOpacity(0.7);
         }
       }, 50);
     } else {
@@ -328,13 +328,13 @@ export default function DualMapViewer() {
 
       // FUSION LOGIC: Draw RGB, then blend VIS 0.6 in "luminosity" mode
       // Improve saturation and brightness of RGB first
-      ctx.filter = 'saturate(130%) brightness(105%)';
+      ctx.filter = 'saturate(130%) brightness(110%)';
       ctx.drawImage(imgRgb, 0, 0);
       
       // Then apply VIS as luminosity with enhanced contrast
-      ctx.filter = 'contrast(120%)';
+      ctx.filter = 'brightness(115%) contrast(115%)';
       ctx.globalCompositeOperation = 'luminosity';
-      ctx.globalAlpha = 0.85; // Allow some original RGB luminance to pass through
+      ctx.globalAlpha = 0.7; // Allow some original RGB luminance to pass through
       ctx.drawImage(imgVis, 0, 0);
       
       // Reset context
@@ -345,12 +345,12 @@ export default function DualMapViewer() {
       const applyWatermark = (context: CanvasRenderingContext2D, w: number, h: number) => {
         context.save();
         context.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        context.fillRect(w - 320, h - 30, 320, 30);
+        context.fillRect(w - 450, h - 30, 450, 30);
         context.fillStyle = 'rgba(255, 255, 255, 0.9)';
         context.font = '12px "JetBrains Mono", monospace, sans-serif';
         context.textAlign = 'right';
         context.textBaseline = 'middle';
-        context.fillText('Sources: EUMETSAT / MTG | Quentin Rey', w - 10, h - 15);
+        context.fillText('Sources: EUMETSAT / MTG | MTG-RGB-HD par Quentin Rey', w - 10, h - 15);
         context.restore();
       };
 
@@ -656,16 +656,16 @@ export default function DualMapViewer() {
                 Cette application permet de visualiser, comparer et superposer les images satellites du canal visible (VIS) et du composite True Color (RGB) issues de Meteosat Third Generation (MTG). Elle offre également la possibilité d'exporter ces vues en haute résolution.
               </p>
               <p>
-                Outil créé par <strong className="text-white">Quentin Rey</strong>.
+                <strong className="text-white">MTG-RGB-HD</strong> est un outil créé par <strong className="text-white">Quentin Rey</strong>.
               </p>
               <p>
                 <strong className="text-white">Sources :</strong><br />
-                Images satellites fournies par <strong className="text-blue-400">EUMETSAT / Meteosat Third Generation (MTG)</strong>.
+                Images satellites fournies par <a href="https://www.eumetsat.int/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">EUMETSAT / Meteosat Third Generation (MTG)</a>.
               </p>
             </div>
             
             <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-              Version 1.0.0
+              Version 1.0.1
             </div>
           </div>
         </div>

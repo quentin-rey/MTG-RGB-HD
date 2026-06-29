@@ -5,7 +5,7 @@ MTG-RGB-HD is a specialized web application for synchronizing, comparing, and ex
 ## Features
 - **Dual Map Synchronization**: Automatically synchronizes pan and zoom across two independent map views.
 - **VIS 0.6 & RGB True Color**: Provides instant comparison between the visible channel and true color composite.
-- **Image Export**: Allows users to download a `.zip` pack containing the visual representation of both channels, along with a transparent blended layer, complete with borders and city overlays (based on user settings).
+- **Image Export**: Allows users to download a `.zip` pack containing the visual representation of both channels, along with a transparent blended layer (with improved brightness/contrast rendering for optimal visual quality), complete with borders and city overlays (based on user settings).
 - **Time Selection**: Select and view past data by navigating historical records (in 10-minute increments, matching the EUMETSAT update cycle).
 - **Overlay Customization**: Toggle political borders and city names directly from the settings menu.
 
