@@ -116,7 +116,7 @@ export default function DualMapViewer() {
       format: 'image/png',
       transparent: true,
       time: new Date(currentTime).toISOString(),
-      className: 'mix-blend-luminosity brightness-[1.15] contrast-[1.15] transition-opacity duration-500 ease-in-out',
+      className: 'mix-blend-luminosity transition-opacity duration-500 ease-in-out',
       opacity: 0
     } as any);
     fusionLayerRef.current = fusionLayer;
@@ -175,7 +175,7 @@ export default function DualMapViewer() {
       fusionLayerRef.current.addTo(map2Instance.current);
       setTimeout(() => {
         if (fusionLayerRef.current) {
-          fusionLayerRef.current.setOpacity(0.7);
+          fusionLayerRef.current.setOpacity(0.55);
         }
       }, 50);
     } else {
@@ -327,14 +327,14 @@ export default function DualMapViewer() {
       const ctx = canvas.getContext('2d')!;
 
       // FUSION LOGIC: Draw RGB, then blend VIS 0.6 in "luminosity" mode
-      // Improve saturation and brightness of RGB first
-      ctx.filter = 'saturate(130%) brightness(110%)';
+      // Lightly boost saturation of RGB
+      ctx.filter = 'saturate(115%)';
       ctx.drawImage(imgRgb, 0, 0);
       
-      // Then apply VIS as luminosity with enhanced contrast
-      ctx.filter = 'brightness(115%) contrast(115%)';
+      // Then apply VIS as luminosity
+      ctx.filter = 'none';
       ctx.globalCompositeOperation = 'luminosity';
-      ctx.globalAlpha = 0.7; // Allow some original RGB luminance to pass through
+      ctx.globalAlpha = 0.55; // Lower alpha to retain more of the original RGB luminance
       ctx.drawImage(imgVis, 0, 0);
       
       // Reset context
@@ -464,26 +464,27 @@ export default function DualMapViewer() {
   return (
     <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
       {/* Header */}
-      <div className="h-16 flex items-center justify-between px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+      <div className="h-16 flex items-center justify-between px-3 sm:px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
             <span className="font-bold text-sm tracking-tighter">MTG</span>
           </div>
-          <div>
-            <h1 className="text-lg font-medium tracking-tight text-slate-100">MTG-RGB-HD</h1>
-            <p className="text-xs text-slate-400">Visualisation VIS 0.6 & RGB</p>
+          <div className="flex flex-col">
+            <h1 className="text-base sm:text-lg font-medium tracking-tight text-slate-100 whitespace-nowrap">MTG-RGB-HD</h1>
+            <p className="hidden md:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6 & RGB</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-4 relative">
+        <div className="flex items-center gap-2 sm:gap-4 relative">
           {/* Custom Date/Time Picker */}
           <div className="relative" ref={datePickerRef}>
             <button
               onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
               className="flex items-center gap-2 bg-[#222] border border-white/10 rounded-md px-3 py-1.5 text-sm text-white hover:bg-[#333] transition-colors"
             >
-              <Clock className="w-4 h-4 text-slate-400" />
-              {currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')}
+              <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+              <span className="hidden sm:inline">{currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')}</span>
+              <span className="sm:hidden">{currentTime.split('T')[1].replace(':', 'h')}</span>
             </button>
             
             {isDatePickerOpen && (
@@ -594,10 +595,10 @@ export default function DualMapViewer() {
           <button
             onClick={downloadPack}
             disabled={isExporting}
-            className="flex items-center gap-2 bg-white text-black hover:bg-slate-200 px-4 py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 bg-white text-black hover:bg-slate-200 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
           >
-            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {isExporting ? 'Génération du pack...' : 'Télécharger les images'}
+            {isExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
+            <span className="hidden sm:inline">{isExporting ? 'Génération...' : 'Télécharger'}</span>
           </button>
         </div>
       </div>
@@ -605,7 +606,7 @@ export default function DualMapViewer() {
       {/* Maps Layout */}
       <div className="flex-1 flex flex-col md:flex-row w-full min-h-0 relative z-0">
         {/* Map 1: VIS */}
-        <div className="flex-1 relative border-r border-white/10 z-0 h-full">
+        <div className="hidden md:block flex-1 relative border-r border-white/10 z-0 h-full">
           <div className="absolute top-4 left-4 z-[400] bg-black/60 backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border border-white/10 pointer-events-none text-white shadow-xl">
             Couche: VIS 0.6 µm
           </div>
@@ -665,7 +666,7 @@ export default function DualMapViewer() {
             </div>
             
             <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-              Version 1.0.1
+              Version 1.0.3
             </div>
           </div>
         </div>
