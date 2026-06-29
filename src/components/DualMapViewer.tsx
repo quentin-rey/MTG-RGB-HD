@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Download, Loader2, Info, Clock, Layers, Settings, X } from 'lucide-react';
+import { Download, Loader2, Info, Clock, Layers, Settings, X, Sliders } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -13,6 +13,64 @@ const WMS_URL_DIRECT = 'https://view.eumetsat.int/geoserver/ows';
 const WMS_URL_PROXY = 'https://view.eumetsat.int/geoserver/ows';
 const LAYER_VIS = 'mtg_fd:vis06_hrfi';
 const LAYER_RGB = 'mtg_fd:rgb_truecolour';
+
+// Helper to get the latest reasonably available time (EUMETSAT images have ~15-20 min processing delay)
+const getLatestAvailableTime = () => {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - 20); // 20 min buffer
+  now.setMinutes(Math.floor(now.getMinutes() / 10) * 10);
+  now.setSeconds(0);
+  now.setMilliseconds(0);
+  return now.toISOString().slice(0, 16);
+};
+
+// Helper function to apply a 3x3 convolution sharpen filter to ImageData
+function applySharpenFilter(imageData: ImageData, intensity: number): ImageData {
+  const { width, height, data } = imageData;
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
+  const dst = output.data;
+
+  // Kernel for 3x3 sharpening:
+  // [  0,  -k,   0 ]
+  // [ -k, 1+4k, -k ]
+  // [  0,  -k,   0 ]
+  const k = intensity;
+  const centerWeight = 1 + 4 * k;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+
+      // Handle borders simply by copying the original pixel
+      if (y === 0 || y === height - 1 || x === 0 || x === width - 1) {
+        dst[idx] = data[idx];
+        dst[idx + 1] = data[idx + 1];
+        dst[idx + 2] = data[idx + 2];
+        dst[idx + 3] = data[idx + 3];
+        continue;
+      }
+
+      // 3x3 neighbor indices
+      const topIdx = idx - width * 4;
+      const bottomIdx = idx + width * 4;
+      const leftIdx = idx - 4;
+      const rightIdx = idx + 4;
+
+      // Process R, G, B channels
+      for (let c = 0; c < 3; c++) {
+        const val = 
+          data[idx + c] * centerWeight - 
+          (data[topIdx + c] + data[bottomIdx + c] + data[leftIdx + c] + data[rightIdx + c]) * k;
+        
+        dst[idx + c] = Math.min(255, Math.max(0, val));
+      }
+      // Copy alpha channel as is
+      dst[idx + 3] = data[idx + 3];
+    }
+  }
+
+  return output;
+}
 
 export default function DualMapViewer() {
   const map1Ref = useRef<HTMLDivElement>(null);
@@ -32,6 +90,50 @@ export default function DualMapViewer() {
   const [isFusionMode, setIsFusionMode] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
   
+  // Floating Adjustments panel state & ref
+  const [isAdjustmentsOpen, setIsAdjustmentsOpen] = useState(false);
+  const adjustmentsRef = useRef<HTMLDivElement>(null);
+
+  // Dynamic Image Enhancement state
+  const [visBrightness, setVisBrightness] = useState(() => {
+    try {
+      const val = localStorage.getItem('mtg_vis_brightness');
+      return val ? parseFloat(val) : 1.05;
+    } catch (e) { return 1.05; }
+  });
+  const [visContrast, setVisContrast] = useState(() => {
+    try {
+      const val = localStorage.getItem('mtg_vis_contrast');
+      return val ? parseFloat(val) : 1.15;
+    } catch (e) { return 1.15; }
+  });
+  const [visSharpen, setVisSharpen] = useState<number>(() => {
+    try {
+      const val = localStorage.getItem('mtg_vis_sharpen_intensity_v3');
+      return val ? parseFloat(val) : 0.0;
+    } catch (e) { return 0.0; }
+  });
+  const [rgbSaturation, setRgbSaturation] = useState(() => {
+    try {
+      const val = localStorage.getItem('mtg_rgb_saturation');
+      return val ? parseFloat(val) : 1.15;
+    } catch (e) { return 1.15; }
+  });
+  const [fusionOpacity, setFusionOpacity] = useState(() => {
+    try {
+      const val = localStorage.getItem('mtg_fusion_opacity');
+      return val ? parseFloat(val) : 0.55;
+    } catch (e) { return 0.55; }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('mtg_vis_brightness', String(visBrightness));
+    localStorage.setItem('mtg_vis_contrast', String(visContrast));
+    localStorage.setItem('mtg_vis_sharpen_intensity_v3', String(visSharpen));
+    localStorage.setItem('mtg_rgb_saturation', String(rgbSaturation));
+    localStorage.setItem('mtg_fusion_opacity', String(fusionOpacity));
+  }, [visBrightness, visContrast, visSharpen, rgbSaturation, fusionOpacity]);
+  
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [mapOptions, setMapOptions] = useState(() => {
     try {
@@ -45,14 +147,20 @@ export default function DualMapViewer() {
     localStorage.setItem('mtg_map_options', JSON.stringify(mapOptions));
   }, [mapOptions]);
 
-  // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min)
-  const [currentTime, setCurrentTime] = useState(() => {
-    const now = new Date();
-    now.setMinutes(Math.floor(now.getMinutes() / 10) * 10);
-    now.setSeconds(0);
-    now.setMilliseconds(0);
-    return now.toISOString().slice(0, 16); // format: YYYY-MM-DDThh:mm
-  });
+  // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer)
+  const [currentTime, setCurrentTime] = useState(() => getLatestAvailableTime());
+
+  // Function to safely update time while preventing future dates
+  const handleTimeChange = (newTimeStr: string) => {
+    const newTime = new Date(newTimeStr);
+    const maxTime = new Date(getLatestAvailableTime());
+    
+    if (newTime > maxTime) {
+      setCurrentTime(getLatestAvailableTime());
+    } else {
+      setCurrentTime(newTimeStr);
+    }
+  };
 
   useEffect(() => {
     if (!map1Ref.current || !map2Ref.current) return;
@@ -81,7 +189,8 @@ export default function DualMapViewer() {
       format: 'image/png',
       transparent: true,
       attribution: '© EUMETSAT',
-      time: new Date(currentTime).toISOString()
+      time: new Date(currentTime + 'Z').toISOString(),
+      className: 'vis-layer-tiles'
     } as any).addTo(map1);
     visLayerRef.current = visLayer;
 
@@ -107,7 +216,8 @@ export default function DualMapViewer() {
       format: 'image/png',
       transparent: true,
       attribution: '© EUMETSAT',
-      time: new Date(currentTime).toISOString()
+      time: new Date(currentTime + 'Z').toISOString(),
+      className: 'rgb-layer-tiles'
     } as any).addTo(map2);
     rgbLayerRef.current = rgbLayer;
 
@@ -116,8 +226,8 @@ export default function DualMapViewer() {
       layers: LAYER_VIS,
       format: 'image/png',
       transparent: true,
-      time: new Date(currentTime).toISOString(),
-      className: 'mix-blend-luminosity transition-opacity duration-500 ease-in-out',
+      time: new Date(currentTime + 'Z').toISOString(),
+      className: 'fusion-layer-tiles mix-blend-luminosity transition-opacity duration-500 ease-in-out',
       opacity: 0
     } as any);
     fusionLayerRef.current = fusionLayer;
@@ -153,7 +263,7 @@ export default function DualMapViewer() {
   // Effect to handle time changes
   useEffect(() => {
     try {
-      const isoTime = new Date(currentTime).toISOString();
+      const isoTime = new Date(currentTime + 'Z').toISOString();
       if (visLayerRef.current) {
         visLayerRef.current.setParams({ time: isoTime } as any);
       }
@@ -176,7 +286,7 @@ export default function DualMapViewer() {
       fusionLayerRef.current.addTo(map2Instance.current);
       setTimeout(() => {
         if (fusionLayerRef.current) {
-          fusionLayerRef.current.setOpacity(0.55);
+          fusionLayerRef.current.setOpacity(fusionOpacity);
         }
       }, 50);
     } else {
@@ -189,7 +299,7 @@ export default function DualMapViewer() {
         }, 500);
       }
     }
-  }, [isFusionMode]);
+  }, [isFusionMode, fusionOpacity]);
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
@@ -208,15 +318,19 @@ export default function DualMapViewer() {
       if (infoRef.current && !infoRef.current.contains(event.target as Node)) {
         setIsInfoOpen(false);
       }
+      if (adjustmentsRef.current && !adjustmentsRef.current.contains(event.target as Node)) {
+        setIsAdjustmentsOpen(false);
+      }
     };
     const handleEsc = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setIsSettingsOpen(false);
         setIsDatePickerOpen(false);
         setIsInfoOpen(false);
+        setIsAdjustmentsOpen(false);
       }
     };
-    if (isSettingsOpen || isDatePickerOpen || isInfoOpen) {
+    if (isSettingsOpen || isDatePickerOpen || isInfoOpen || isAdjustmentsOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleEsc);
     }
@@ -224,7 +338,7 @@ export default function DualMapViewer() {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [isSettingsOpen, isDatePickerOpen, isInfoOpen]);
+  }, [isSettingsOpen, isDatePickerOpen, isInfoOpen, isAdjustmentsOpen]);
 
   // Effect to toggle overlays based on options
   useEffect(() => {
@@ -296,10 +410,12 @@ export default function DualMapViewer() {
       const bbox = `${sw.x},${sw.y},${ne.x},${ne.y}`;
       
       // Determine export size based on the current container dimensions
+      // Upscale factor for higher resolution exports (WMS max is typically 4096)
       const rect = map1Ref.current!.getBoundingClientRect();
-      const width = Math.min(Math.round(rect.width), 4096);
-      const height = Math.min(Math.round(rect.height), 4096);
-      const isoTime = new Date(currentTime).toISOString();
+      const upscaleFactor = 1; 
+      const width = Math.min(Math.round(rect.width * upscaleFactor), 4096);
+      const height = Math.min(Math.round(rect.height * upscaleFactor), 4096);
+      const isoTime = new Date(currentTime + 'Z').toISOString();
 
       const buildWmsUrl = (layer: string) => {
         return `${WMS_URL_PROXY}?service=WMS&request=GetMap&layers=${layer}&styles=&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=${width}&height=${height}&time=${isoTime}`;
@@ -321,28 +437,50 @@ export default function DualMapViewer() {
         loadImage(buildWmsUrl(LAYER_RGB))
       ]);
 
-      // Create an offscreen canvas to perform the fusion
+      // 1. Pre-process VIS image (apply brightness, contrast, and sharpening)
+      const visTempCanvas = document.createElement('canvas');
+      visTempCanvas.width = width;
+      visTempCanvas.height = height;
+      const visTempCtx = visTempCanvas.getContext('2d')!;
+      
+      visTempCtx.filter = `brightness(${visBrightness}) contrast(${visContrast})`;
+      visTempCtx.drawImage(imgVis, 0, 0);
+      visTempCtx.filter = 'none';
+      
+      if (visSharpen > 0) {
+        const imgData = visTempCtx.getImageData(0, 0, width, height);
+        const sharpened = applySharpenFilter(imgData, visSharpen);
+        visTempCtx.putImageData(sharpened, 0, 0);
+      }
+
+      // 2. Pre-process RGB image (apply saturation)
+      const rgbTempCanvas = document.createElement('canvas');
+      rgbTempCanvas.width = width;
+      rgbTempCanvas.height = height;
+      const rgbTempCtx = rgbTempCanvas.getContext('2d')!;
+      
+      rgbTempCtx.filter = `saturate(${Math.round(rgbSaturation * 100)}%)`;
+      rgbTempCtx.drawImage(imgRgb, 0, 0);
+      rgbTempCtx.filter = 'none';
+
+      // 3. Create Fusion canvas and perform blending
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d')!;
 
-      // FUSION LOGIC: Draw RGB, then blend VIS 0.6 in "luminosity" mode
-      // Lightly boost saturation of RGB
-      ctx.filter = 'saturate(115%)';
-      ctx.drawImage(imgRgb, 0, 0);
+      // Draw the processed RGB image
+      ctx.drawImage(rgbTempCanvas, 0, 0);
       
-      // Then apply VIS as luminosity
-      ctx.filter = 'none';
+      // Draw the processed VIS image on top with luminosity blend mode
       ctx.globalCompositeOperation = 'luminosity';
-      ctx.globalAlpha = 0.55; // Lower alpha to retain more of the original RGB luminance
-      ctx.drawImage(imgVis, 0, 0);
+      ctx.globalAlpha = fusionOpacity;
+      ctx.drawImage(visTempCanvas, 0, 0);
       
       // Reset context
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1.0;
-      ctx.filter = 'none';
-
+      
       const applyWatermark = (context: CanvasRenderingContext2D, w: number, h: number) => {
         context.save();
         context.fillStyle = 'rgba(0, 0, 0, 0.5)';
@@ -364,14 +502,18 @@ export default function DualMapViewer() {
           const data = (map1BordersRef.current.toGeoJSON() as any);
           context.save();
           context.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-          context.lineWidth = 1;
+          context.lineWidth = Math.max(1, Math.round(1.0 * (w / rect.width)));
           context.beginPath();
           
           const drawLineString = (coords: any[]) => {
             coords.forEach((coord, i) => {
-              const pt = map1Instance.current!.latLngToContainerPoint([coord[1], coord[0]]);
-              if (i === 0) context.moveTo(pt.x, pt.y);
-              else context.lineTo(pt.x, pt.y);
+              const projected = L.CRS.EPSG3857.project(L.latLng(coord[1], coord[0]));
+              const xPercentage = (projected.x - sw.x) / (ne.x - sw.x);
+              const yPercentage = (ne.y - projected.y) / (ne.y - sw.y);
+              const canvasX = xPercentage * w;
+              const canvasY = yPercentage * h;
+              if (i === 0) context.moveTo(canvasX, canvasY);
+              else context.lineTo(canvasX, canvasY);
             });
           };
 
@@ -410,8 +552,17 @@ export default function DualMapViewer() {
                  img.onload = () => {
                    const px = x * tileSize - bounds.min!.x;
                    const py = y * tileSize - bounds.min!.y;
+                   
+                   const containerWidth = bounds.max!.x - bounds.min!.x;
+                   const containerHeight = bounds.max!.y - bounds.min!.y;
+                   
+                   const canvasX = (px / containerWidth) * w;
+                   const canvasY = (py / containerHeight) * h;
+                   const canvasTileSizeX = (tileSize / containerWidth) * w;
+                   const canvasTileSizeY = (tileSize / containerHeight) * h;
+
                    context.globalAlpha = 0.8;
-                   context.drawImage(img, px, py, tileSize, tileSize);
+                   context.drawImage(img, canvasX, canvasY, canvasTileSizeX, canvasTileSizeY);
                    context.globalAlpha = 1.0;
                    resolve();
                  };
@@ -424,7 +575,7 @@ export default function DualMapViewer() {
         }
       };
 
-      const getBlob = async (canvasObj: HTMLCanvasElement | HTMLImageElement): Promise<Blob> => {
+      const getBlob = async (canvasObj: HTMLCanvasElement): Promise<Blob> => {
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = width;
         tempCanvas.height = height;
@@ -439,8 +590,8 @@ export default function DualMapViewer() {
       };
 
       const [blobVis, blobRgb, blobFusion] = await Promise.all([
-        getBlob(imgVis),
-        getBlob(imgRgb),
+        getBlob(visTempCanvas),
+        getBlob(rgbTempCanvas),
         getBlob(canvas)
       ]);
 
@@ -461,6 +612,11 @@ export default function DualMapViewer() {
       setIsExporting(false);
     }
   };
+
+  // Dynamic sharpen kernel matrix elements:
+  // surrounding cells: -visSharpen
+  // center cell: 1 + 4 * visSharpen
+  const sharpenMatrix = `0 ${-visSharpen} 0 ${-visSharpen} ${1 + 4 * visSharpen} ${-visSharpen} 0 ${-visSharpen} 0`;
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
@@ -484,8 +640,8 @@ export default function DualMapViewer() {
               className="flex items-center gap-2 bg-[#222] border border-white/10 rounded-md px-3 py-1.5 text-sm text-white hover:bg-[#333] transition-colors"
             >
               <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="hidden sm:inline">{currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')}</span>
-              <span className="sm:hidden">{currentTime.split('T')[1].replace(':', 'h')}</span>
+              <span className="hidden sm:inline">{currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')} UTC</span>
+              <span className="sm:hidden">{currentTime.split('T')[1].replace(':', 'h')} UTC</span>
             </button>
             
             {isDatePickerOpen && (
@@ -495,9 +651,10 @@ export default function DualMapViewer() {
                     <label className="text-xs font-medium text-slate-400 mb-1.5 block">Date</label>
                     <input 
                       type="date"
+                      max={getLatestAvailableTime().split('T')[0]}
                       value={currentTime.split('T')[0]}
                       onChange={(e) => {
-                        if(e.target.value) setCurrentTime(`${e.target.value}T${currentTime.split('T')[1]}`);
+                        if(e.target.value) handleTimeChange(`${e.target.value}T${currentTime.split('T')[1]}`);
                       }}
                       className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert cursor-pointer"
                     />
@@ -509,7 +666,7 @@ export default function DualMapViewer() {
                         value={currentTime.split('T')[1].split(':')[0]}
                         onChange={(e) => {
                           const currentMins = currentTime.split('T')[1].split(':')[1];
-                          setCurrentTime(`${currentTime.split('T')[0]}T${e.target.value}:${currentMins}`);
+                          handleTimeChange(`${currentTime.split('T')[0]}T${e.target.value}:${currentMins}`);
                         }}
                         className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
                       >
@@ -525,7 +682,7 @@ export default function DualMapViewer() {
                         value={currentTime.split('T')[1].split(':')[1]}
                         onChange={(e) => {
                           const currentHour = currentTime.split('T')[1].split(':')[0];
-                          setCurrentTime(`${currentTime.split('T')[0]}T${currentHour}:${e.target.value}`);
+                          handleTimeChange(`${currentTime.split('T')[0]}T${currentHour}:${e.target.value}`);
                         }}
                         className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
                       >
@@ -535,6 +692,13 @@ export default function DualMapViewer() {
                       </select>
                     </div>
                   </div>
+                  
+                  <button
+                    onClick={() => handleTimeChange(getLatestAvailableTime())}
+                    className="w-full mt-2 bg-[#333] hover:bg-[#444] border border-white/10 rounded-md px-3 py-2 text-sm text-white transition-colors"
+                  >
+                    Aller au plus récent
+                  </button>
                 </div>
               </div>
             )}
@@ -627,7 +791,7 @@ export default function DualMapViewer() {
                   ? 'border-blue-500 text-blue-400 hover:bg-black/80' 
                   : 'border-white/10 text-white hover:bg-black/80'
               }`}
-              title="Visualisation HD"
+              title="Visualisation HD (Superposition VIS 0.6 µm + RGB)"
             >
               <input 
                 type="checkbox" 
@@ -637,6 +801,129 @@ export default function DualMapViewer() {
               />
               HD
             </label>
+
+            <div className="relative">
+              <button
+                onClick={() => setIsAdjustmentsOpen(!isAdjustmentsOpen)}
+                className={`flex items-center justify-center w-8 h-8 rounded-md border text-xs font-medium shadow-xl transition-colors bg-black/60 backdrop-blur-md hover:bg-black/80 ${
+                  isAdjustmentsOpen ? 'border-blue-500 text-blue-400' : 'border-white/10 text-white'
+                }`}
+                title="Ajustements d'image (Nuages HD)"
+              >
+                <Sliders className="w-4 h-4" />
+              </button>
+
+              {isAdjustmentsOpen && (
+                <div 
+                  ref={adjustmentsRef}
+                  className="absolute right-0 top-full mt-2 w-72 bg-[#1a1a1a]/95 backdrop-blur-md border border-white/10 rounded-lg shadow-2xl p-4 z-[500] text-slate-200"
+                >
+                  <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
+                    <span className="text-xs font-semibold text-white tracking-wider uppercase">Optimisation des Nuages</span>
+                    <button 
+                      onClick={() => {
+                        setVisBrightness(1.05);
+                        setVisContrast(1.15);
+                        setVisSharpen(false);
+                        setRgbSaturation(1.15);
+                        setFusionOpacity(0.55);
+                      }}
+                      className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors uppercase font-medium"
+                    >
+                      Réinitialiser
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* VIS Settings */}
+                    <div>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Contraste VIS (Nuages)</span>
+                        <span className="text-white font-mono">{visContrast.toFixed(2)}x</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="0.6"
+                        max="2.0"
+                        step="0.05"
+                        value={visContrast}
+                        onChange={(e) => setVisContrast(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Luminosité VIS (Nuages)</span>
+                        <span className="text-white font-mono">{visBrightness.toFixed(2)}x</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="0.6"
+                        max="1.8"
+                        step="0.05"
+                        value={visBrightness}
+                        onChange={(e) => setVisBrightness(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+
+                    {/* Sharpen Intensity Slider */}
+                    <div className="border-t border-white/5 pt-2">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Netteté HD (Convolution)</span>
+                        <span className="text-white font-mono">{visSharpen === 0 ? 'Désactivé' : `${Math.round(visSharpen * 100)}%`}</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="0"
+                        max="1.5"
+                        step="0.05"
+                        value={visSharpen}
+                        onChange={(e) => setVisSharpen(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+
+                    {/* RGB Settings */}
+                    <div className="border-t border-white/5 pt-2">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Saturation Couleurs (RGB)</span>
+                        <span className="text-white font-mono">{Math.round(rgbSaturation * 100)}%</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.05"
+                        value={rgbSaturation}
+                        onChange={(e) => setRgbSaturation(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+
+                    {/* Fusion Opacity (Only when fusion is active) */}
+                    {isFusionMode && (
+                      <div className="border-t border-white/5 pt-2">
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-slate-400">Intensité de Fusion (Luminosité)</span>
+                          <span className="text-white font-mono">{Math.round(fusionOpacity * 100)}%</span>
+                        </div>
+                        <input 
+                          type="range"
+                          min="0.1"
+                          max="1.0"
+                          step="0.05"
+                          value={fusionOpacity}
+                          onChange={(e) => setFusionOpacity(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
@@ -667,11 +954,37 @@ export default function DualMapViewer() {
             </div>
             
             <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-              Version 1.0.3
+              Version 1.2.2
             </div>
           </div>
         </div>
       )}
+
+      {/* SVG filter for hardware-accelerated image sharpening */}
+      <svg className="absolute w-0 h-0 pointer-events-none" style={{ position: 'absolute', width: 0, height: 0 }}>
+        <defs>
+          <filter id="sharpen-filter">
+            <feConvolveMatrix
+              order="3"
+              kernelMatrix={sharpenMatrix}
+              preserveAlpha="true"
+            />
+          </filter>
+        </defs>
+      </svg>
+
+      {/* Dynamic stylesheets to apply adjustments in real-time */}
+      <style>{`
+        .vis-layer-tiles {
+          filter: brightness(${visBrightness}) contrast(${visContrast}) ${visSharpen > 0 ? 'url(#sharpen-filter)' : ''};
+        }
+        .rgb-layer-tiles {
+          filter: saturate(${rgbSaturation});
+        }
+        .fusion-layer-tiles {
+          filter: brightness(${visBrightness}) contrast(${visContrast}) ${visSharpen > 0 ? 'url(#sharpen-filter)' : ''};
+        }
+      `}</style>
     </div>
   );
 }
