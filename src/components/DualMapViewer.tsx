@@ -9,7 +9,8 @@ import { saveAs } from 'file-saver';
 // MSG standard layers are used by default for reliability as MTG is progressively rolling out on WMS.
 // You can replace these with MTG layers (e.g., mtg_fci:rgb_truecolor) when they are fully stable.
 const WMS_URL_DIRECT = 'https://view.eumetsat.int/geoserver/ows';
-const WMS_URL_PROXY = '/api/wms';
+// Use direct URL for both display and export, as EUMETSAT supports CORS
+const WMS_URL_PROXY = 'https://view.eumetsat.int/geoserver/ows';
 const LAYER_VIS = 'mtg_fd:vis06_hrfi';
 const LAYER_RGB = 'mtg_fd:rgb_truecolour';
 
@@ -314,7 +315,7 @@ export default function DualMapViewer() {
         });
       };
 
-      // Fetch images via our Express Proxy to bypass CORS restrictions for the Canvas processing
+      // Fetch images directly (EUMETSAT supports CORS, so no proxy needed)
       const [imgVis, imgRgb] = await Promise.all([
         loadImage(buildWmsUrl(LAYER_VIS)),
         loadImage(buildWmsUrl(LAYER_RGB))
@@ -455,7 +456,7 @@ export default function DualMapViewer() {
 
     } catch (err) {
       console.error("Export failed:", err);
-      alert("L'exportation a échoué. Assurez-vous que le serveur proxy fonctionne (pas d'erreurs réseau).");
+      alert("L'exportation a échoué. Veuillez vérifier votre connexion réseau.");
     } finally {
       setIsExporting(false);
     }
