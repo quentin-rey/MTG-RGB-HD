@@ -1,0 +1,8 @@
+{
+  "name": "MTG-RGB-HD",
+  "description": "Visualiseur synchronisé de vues satellites MTG (VIS 0.6 et RGB) avec outil d'exportation fusionné.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
