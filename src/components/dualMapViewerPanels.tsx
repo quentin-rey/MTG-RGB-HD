@@ -1,5 +1,5 @@
-import type React from 'react';
-import { Clock, Github, Info, Settings, Sliders, X } from 'lucide-react';
+import { useState, type React } from 'react';
+import { Clock, Github, Info, Sliders, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -12,155 +12,108 @@ import {
   type MapOptions,
 } from './dualMapViewerShared';
 
-type DateTimePopoverProps = {
+type TimeDockProps = {
   currentTime: string;
-  datePickerRef: React.RefObject<HTMLDivElement | null>;
-  isOpen: boolean;
   onLatest: () => void;
   onTimeChange: (newTime: string) => void;
-  onToggle: () => void;
 };
 
-export function DateTimePopover(props: DateTimePopoverProps) {
-  const { currentTime, datePickerRef, isOpen, onLatest, onTimeChange, onToggle } = props;
+export function TimeDock(props: TimeDockProps) {
+  const { currentTime, onLatest, onTimeChange } = props;
+  const [isMobileActionsExpanded, setIsMobileActionsExpanded] = useState(false);
+  const [datePart, timePart] = currentTime.split('T');
+  const [hourPart, minutePart] = timePart.split(':');
+  const totalMinutes = Number(hourPart) * 60 + Number(minutePart);
+
+  const updateTimeFromTotalMinutes = (nextTotalMinutes: number) => {
+    const normalized = Math.max(0, Math.min(23 * 60 + 50, Math.round(nextTotalMinutes / 10) * 10));
+    const nextHour = String(Math.floor(normalized / 60)).padStart(2, '0');
+    const nextMinute = String(normalized % 60).padStart(2, '0');
+    onTimeChange(`${datePart}T${nextHour}:${nextMinute}`);
+  };
 
   return (
-    <div className="relative" ref={datePickerRef}>
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-2 bg-[#222] border border-white/10 rounded-md px-3 py-1.5 text-sm text-white hover:bg-[#333] transition-colors"
-      >
-        <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-        <span className="hidden sm:inline">{currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')} UTC</span>
-        <span className="sm:hidden">{currentTime.split('T')[1].replace(':', 'h')} UTC</span>
-      </button>
+    <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
+      <div className="bg-black/65 backdrop-blur-md border border-white/15 rounded-xl shadow-2xl px-2.5 py-2 sm:px-4 sm:py-3">
+        <div className="flex items-center justify-between gap-2 text-[10px] sm:text-[11px] text-slate-300 mb-1.5 sm:mb-2">
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <Clock className="w-3.5 h-3.5 text-blue-300" />
+            Temps UTC
+          </span>
+          <span className="font-mono text-white">{datePart} {hourPart}:{minutePart}</span>
+        </div>
 
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a1a] border border-white/10 rounded-md shadow-2xl p-4 z-50">
-          <div className="flex flex-col gap-3">
-            <div>
-              <label className="text-xs font-medium text-slate-400 mb-1.5 block">Date</label>
-              <input
-                type="date"
-                max={getLatestAvailableTime().split('T')[0]}
-                value={currentTime.split('T')[0]}
-                onChange={(e) => {
-                  if (e.target.value) onTimeChange(`${e.target.value}T${currentTime.split('T')[1]}`);
-                }}
-                className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert cursor-pointer"
-              />
-            </div>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <label className="text-xs font-medium text-slate-400 mb-1.5 block">Heure</label>
-                <select
-                  value={currentTime.split('T')[1].split(':')[0]}
-                  onChange={(e) => {
-                    const currentMins = currentTime.split('T')[1].split(':')[1];
-                    onTimeChange(`${currentTime.split('T')[0]}T${e.target.value}:${currentMins}`);
-                  }}
-                  className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
-                >
-                  {Array.from({ length: 24 }).map((_, i) => {
-                    const hour = String(i).padStart(2, '0');
-                    return <option key={hour} value={hour}>{hour}h</option>;
-                  })}
-                </select>
-              </div>
-              <div className="flex-1">
-                <label className="text-xs font-medium text-slate-400 mb-1.5 block">Minute</label>
-                <select
-                  value={currentTime.split('T')[1].split(':')[1]}
-                  onChange={(e) => {
-                    const currentHour = currentTime.split('T')[1].split(':')[0];
-                    onTimeChange(`${currentTime.split('T')[0]}T${currentHour}:${e.target.value}`);
-                  }}
-                  className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
-                >
-                  {['00', '10', '20', '30', '40', '50'].map((minute) => (
-                    <option key={minute} value={minute}>{minute}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+          <input
+            type="date"
+            max={getLatestAvailableTime().split('T')[0]}
+            value={datePart}
+            onChange={(e) => {
+              if (e.target.value) onTimeChange(`${e.target.value}T${timePart}`);
+            }}
+            className="sm:w-[10rem] w-full bg-[#222] border border-white/10 rounded-md px-2 py-1.5 text-[11px] sm:text-xs text-white outline-none focus:border-blue-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert cursor-pointer"
+          />
 
+          <div className="flex-1 min-w-0">
+            <input
+              type="range"
+              min={0}
+              max={23 * 60 + 50}
+              step={10}
+              value={totalMinutes}
+              onChange={(e) => updateTimeFromTotalMinutes(Number(e.target.value))}
+              className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+            <div className="mt-1 flex justify-between text-[9px] sm:text-[10px] text-slate-500 font-mono">
+              <span>00:00</span>
+              <span>06:00</span>
+              <span>12:00</span>
+              <span>18:00</span>
+              <span>23:50</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setIsMobileActionsExpanded((prev) => !prev)}
+            className="sm:hidden bg-[#222] hover:bg-[#333] border border-white/10 rounded-md px-2 py-1 text-[11px] text-slate-200 transition-colors"
+          >
+            {isMobileActionsExpanded ? 'Masquer actions' : 'Afficher actions'}
+          </button>
+
+          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-5 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
+            <button
+              onClick={() => updateTimeFromTotalMinutes(totalMinutes - 30)}
+              className="bg-[#222] hover:bg-[#333] border border-white/10 rounded-md px-2 py-1 text-[11px] text-slate-200 transition-colors"
+            >
+              -30m
+            </button>
+            <button
+              onClick={() => updateTimeFromTotalMinutes(totalMinutes - 10)}
+              className="bg-[#222] hover:bg-[#333] border border-white/10 rounded-md px-2 py-1 text-[11px] text-slate-200 transition-colors"
+            >
+              -10m
+            </button>
+            <button
+              onClick={() => updateTimeFromTotalMinutes(totalMinutes + 10)}
+              className="bg-[#222] hover:bg-[#333] border border-white/10 rounded-md px-2 py-1 text-[11px] text-slate-200 transition-colors"
+            >
+              +10m
+            </button>
+            <button
+              onClick={() => updateTimeFromTotalMinutes(totalMinutes + 30)}
+              className="bg-[#222] hover:bg-[#333] border border-white/10 rounded-md px-2 py-1 text-[11px] text-slate-200 transition-colors"
+            >
+              +30m
+            </button>
             <button
               onClick={onLatest}
-              className="w-full mt-2 bg-[#333] hover:bg-[#444] border border-white/10 rounded-md px-3 py-2 text-sm text-white transition-colors"
+              className="bg-[#333] hover:bg-[#444] border border-white/10 rounded-md px-2 py-1 text-[11px] text-white transition-colors"
             >
-              Aller au plus récent
+              Latest
             </button>
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-type SettingsPopoverProps = {
-  isOpen: boolean;
-  mapOptions: MapOptions;
-  onClose: () => void;
-  onToggle: () => void;
-  onUpdate: (next: MapOptions) => void;
-  settingsRef: React.RefObject<HTMLDivElement | null>;
-};
-
-export function SettingsPopover(props: SettingsPopoverProps) {
-  const { isOpen, mapOptions, onClose, onToggle, onUpdate, settingsRef } = props;
-
-  return (
-    <div className="relative" ref={settingsRef}>
-      <button
-        onClick={onToggle}
-        className="flex items-center justify-center w-9 h-9 bg-[#222] border border-white/10 rounded-md hover:bg-[#333] transition-colors"
-        title="Options"
-      >
-        <Settings className="w-4 h-4 text-slate-300" />
-      </button>
-
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a1a] border border-white/10 rounded-md shadow-2xl p-4 z-50">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium text-white">Options d'affichage</h3>
-            <button onClick={onClose} className="text-slate-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
-              <input
-                type="checkbox"
-                checked={mapOptions.showBorders}
-                onChange={(e) => onUpdate({ ...mapOptions, showBorders: e.target.checked })}
-                className="w-4 h-4 rounded-sm accent-blue-500"
-              />
-              Affichage des frontières
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
-              <input
-                type="checkbox"
-                checked={mapOptions.showFranceDepartments}
-                onChange={(e) => onUpdate({ ...mapOptions, showFranceDepartments: e.target.checked })}
-                className="w-4 h-4 rounded-sm accent-blue-500"
-              />
-              Affichage des départements (France)
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
-              <input
-                type="checkbox"
-                checked={mapOptions.showCities}
-                onChange={(e) => onUpdate({ ...mapOptions, showCities: e.target.checked })}
-                className="w-4 h-4 rounded-sm accent-blue-500"
-              />
-              Affichage des villes
-            </label>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -173,9 +126,10 @@ type AdjustmentsPanelProps = {
   effectiveSandwichOpacity: number;
   irStyle: IrStyle;
   isOpen: boolean;
+  mapOptions: MapOptions;
   onAutoReduceVisAtNightChange: (value: boolean) => void;
-  onClose: () => void;
   onIrStyleChange: (value: IrStyle) => void;
+  onMapOptionsChange: (next: MapOptions) => void;
   onReset: () => void;
   onRgbHdOpacityChange: (value: number) => void;
   onRgbSaturationChange: (value: number) => void;
@@ -200,8 +154,10 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
     effectiveSandwichOpacity,
     irStyle,
     isOpen,
+    mapOptions,
     onAutoReduceVisAtNightChange,
     onIrStyleChange,
+    onMapOptionsChange,
     onReset,
     onRgbHdOpacityChange,
     onRgbSaturationChange,
@@ -230,7 +186,7 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-72 bg-[#1a1a1a]/95 backdrop-blur-md border border-white/10 rounded-lg shadow-2xl p-4 z-[500] text-slate-200">
+        <div className="absolute right-0 top-full mt-2 w-[min(92vw,22rem)] bg-[#1a1a1a]/95 backdrop-blur-md border border-white/10 rounded-lg shadow-2xl p-4 z-[500] text-slate-200 max-h-[72vh] overflow-auto">
           <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
             <span className="text-xs font-semibold text-white tracking-wider uppercase">Ajustements image</span>
             <button
@@ -242,6 +198,37 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
           </div>
 
           <div className="space-y-4">
+            <div className="rounded-md border border-white/10 bg-black/20 p-2.5 space-y-2">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Calques carte</div>
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
+                <input
+                  type="checkbox"
+                  checked={mapOptions.showBorders}
+                  onChange={(e) => onMapOptionsChange({ ...mapOptions, showBorders: e.target.checked })}
+                  className="w-4 h-4 rounded-sm accent-blue-500"
+                />
+                Frontieres
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
+                <input
+                  type="checkbox"
+                  checked={mapOptions.showFranceDepartments}
+                  onChange={(e) => onMapOptionsChange({ ...mapOptions, showFranceDepartments: e.target.checked })}
+                  className="w-4 h-4 rounded-sm accent-blue-500"
+                />
+                Departements (France)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
+                <input
+                  type="checkbox"
+                  checked={mapOptions.showCities}
+                  onChange={(e) => onMapOptionsChange({ ...mapOptions, showCities: e.target.checked })}
+                  className="w-4 h-4 rounded-sm accent-blue-500"
+                />
+                Villes
+              </label>
+            </div>
+
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <span className="text-slate-400">Contraste VIS (Nuages)</span>
@@ -309,6 +296,10 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                     />
                   </div>
                 )}
+
+                {activeLayers.vis && (
+                  <p className="text-[11px] text-slate-500">Rendu HD RGB+VIS fixe: doux (soft-light).</p>
+                )}
               </div>
             )}
 
@@ -348,23 +339,25 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                     </select>
                   </div>
 
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-slate-400">Intensite IR/Sandwich</span>
-                      <span className="text-white font-mono">{Math.round(sandwichOpacity * 100)}%</span>
+                  {(activeLayers.vis || activeLayers.rgb) && (
+                    <div>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-slate-400">Intensite IR/Sandwich</span>
+                        <span className="text-white font-mono">{Math.round(sandwichOpacity * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.05"
+                        value={sandwichOpacity}
+                        onChange={(e) => onSandwichOpacityChange(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
                     </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1.0"
-                      step="0.05"
-                      value={sandwichOpacity}
-                      onChange={(e) => onSandwichOpacityChange(parseFloat(e.target.value))}
-                      className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                    />
-                  </div>
+                  )}
 
-                  {activeLayers.vis && (
+                  {activeLayers.vis && activeLayers.ir && (
                     <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
                       <input
                         type="checkbox"
@@ -376,14 +369,16 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                     </label>
                   )}
 
-                  <div className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300 leading-relaxed">
-                    <div>Soleil au centre: <span className="text-white font-mono">{solarElevation.toFixed(1)}°</span></div>
-                    {activeLayers.vis && activeLayers.rgb ? (
-                      <div>Apport VIS effectif: <span className="text-white font-mono">{Math.round(effectiveHybridVisOpacity * 100)}%</span></div>
-                    ) : (
-                      <div>Apport VIS effectif: <span className="text-white font-mono">{Math.round(effectiveSandwichOpacity * 100)}%</span></div>
-                    )}
-                  </div>
+                  {activeLayers.vis && (
+                    <div className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300 leading-relaxed">
+                      <div>Soleil au centre: <span className="text-white font-mono">{solarElevation.toFixed(1)}°</span></div>
+                      {activeLayers.rgb ? (
+                        <div>Apport VIS effectif: <span className="text-white font-mono">{Math.round(effectiveHybridVisOpacity * 100)}%</span></div>
+                      ) : (
+                        <div>Apport VIS effectif: <span className="text-white font-mono">{Math.round(effectiveSandwichOpacity * 100)}%</span></div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -437,7 +432,7 @@ export function InfoModal(props: InfoModalProps) {
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-          Version 1.3.0
+          Version 1.3.1
         </div>
       </div>
     </div>
@@ -554,14 +549,22 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
 
 type Map2TitleBadgeProps = {
   activeLayers: ActiveLayers;
+  isNightIrFallbackActive: boolean;
 };
 
 export function Map2TitleBadge(props: Map2TitleBadgeProps) {
-  const { activeLayers } = props;
+  const { activeLayers, isNightIrFallbackActive } = props;
 
   return (
-    <div className="absolute top-4 left-4 z-[400] bg-black/60 backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border border-white/10 pointer-events-none text-white shadow-xl">
-      {getSinglePanelTitle(activeLayers)}
+    <div className="absolute top-4 left-4 z-[400] pointer-events-none">
+      <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border border-white/10 text-white shadow-xl">
+        {getSinglePanelTitle(activeLayers)}
+      </div>
+      {isNightIrFallbackActive && (
+        <div className="mt-1.5 inline-flex items-center bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[10px] font-medium border border-blue-400/35 text-blue-200 shadow-xl">
+          Fallback IR nocturne actif
+        </div>
+      )}
     </div>
   );
 }
@@ -574,9 +577,11 @@ type Map2ControlBarProps = {
   effectiveSandwichOpacity: number;
   irStyle: IrStyle;
   isAdjustmentsOpen: boolean;
+  mapOptions: MapOptions;
   onActiveLayersChange: (next: ActiveLayers) => void;
   onAutoReduceVisAtNightChange: (value: boolean) => void;
   onIrStyleChange: (value: IrStyle) => void;
+  onMapOptionsChange: (next: MapOptions) => void;
   onResetAdjustments: () => void;
   onRgbHdOpacityChange: (value: number) => void;
   onRgbSaturationChange: (value: number) => void;
@@ -601,9 +606,11 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     effectiveSandwichOpacity,
     irStyle,
     isAdjustmentsOpen,
+    mapOptions,
     onActiveLayersChange,
     onAutoReduceVisAtNightChange,
     onIrStyleChange,
+    onMapOptionsChange,
     onResetAdjustments,
     onRgbHdOpacityChange,
     onRgbSaturationChange,
@@ -621,10 +628,7 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
 
   const toggleLayer = (key: keyof ActiveLayers) => {
     const next = { ...activeLayers, [key]: !activeLayers[key] };
-    if (!next.rgb && !next.vis && !next.ir) {
-      onActiveLayersChange({ ...activeLayers });
-      return;
-    }
+    if (!next.rgb && !next.vis && !next.ir) return;
     onActiveLayersChange(next);
   };
 
@@ -668,11 +672,10 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         effectiveSandwichOpacity={effectiveSandwichOpacity}
         irStyle={irStyle}
         isOpen={isAdjustmentsOpen}
+        mapOptions={mapOptions}
         onAutoReduceVisAtNightChange={onAutoReduceVisAtNightChange}
-        onClose={() => {
-          if (isAdjustmentsOpen) onToggleAdjustments();
-        }}
         onIrStyleChange={onIrStyleChange}
+        onMapOptionsChange={onMapOptionsChange}
         onReset={onResetAdjustments}
         onRgbHdOpacityChange={onRgbHdOpacityChange}
         onRgbSaturationChange={onRgbSaturationChange}

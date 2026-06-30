@@ -17,13 +17,12 @@ import {
 import { downloadSatellitePack } from './dualMapExport';
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
-  DateTimePopover,
   DownloadModal,
   HeaderInfoButton,
   InfoModal,
   Map2ControlBar,
   Map2TitleBadge,
-  SettingsPopover,
+  TimeDock,
 } from './dualMapViewerPanels';
 import { useImageAdjustments } from './useImageAdjustments';
 import { useViewerPanelsState } from './useViewerPanelsState';
@@ -45,20 +44,14 @@ export default function DualMapViewer() {
 
   const {
     adjustmentsRef,
-    datePickerRef,
     downloadModalRef,
     infoRef,
     isAdjustmentsOpen,
-    isDatePickerOpen,
     isDownloadModalOpen,
     isInfoOpen,
-    isSettingsOpen,
     setIsAdjustmentsOpen,
-    setIsDatePickerOpen,
     setIsDownloadModalOpen,
     setIsInfoOpen,
-    setIsSettingsOpen,
-    settingsRef,
   } = useViewerPanelsState();
 
   const {
@@ -101,6 +94,7 @@ export default function DualMapViewer() {
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
     getVisibleCityFeatures,
+    isNightIrFallbackActive,
     isMapLoading,
     loadingProgress,
     loadingTileCount,
@@ -118,15 +112,26 @@ export default function DualMapViewer() {
     rgbHdOpacity,
     sandwichOpacity,
   });
+  const rgbVisNightFade = Math.max(0, Math.min(1, (solarElevation + 2) / 6));
+  const rgbVisNightBrightness = activeLayers.rgb && activeLayers.vis && !activeLayers.ir
+    ? 0.55 + rgbVisNightFade * 0.45
+    : 1;
+  const rgbLegacyFusionSaturationBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.45 : 1;
+  const rgbLegacyFusionBrightnessBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.12 : 1;
+  const rgbLayerEffectiveSaturation = rgbSaturation * rgbLegacyFusionSaturationBoost;
+  const rgbLayerEffectiveBrightness = rgbVisNightBrightness * rgbLegacyFusionBrightnessBoost;
+  const visHdLegacyBrightness = Math.min(2, visBrightness * 1.2);
+  const visHdLegacyContrast = Math.min(2.4, visContrast * 1.2);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
   const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
 
   const handleTimeChange = (newTimeStr: string) => {
     const newTime = new Date(newTimeStr);
-    const maxTime = new Date(getLatestAvailableTime());
+    const latestAvailable = getLatestAvailableTime();
+    const maxTime = new Date(latestAvailable);
 
     if (newTime > maxTime) {
-      setCurrentTime(getLatestAvailableTime());
+      setCurrentTime(latestAvailable);
     } else {
       setCurrentTime(newTimeStr);
     }
@@ -182,36 +187,18 @@ export default function DualMapViewer() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
-      <div className="h-16 flex items-center justify-between px-3 sm:px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
-            <span className="font-bold text-sm tracking-tighter">MTG</span>
+      <div className="min-h-16 flex items-center justify-between px-3 py-2 sm:px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0 gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-full bg-slate-800 border border-white/15 flex items-center justify-center shrink-0">
+            <span className="text-base leading-none" aria-hidden="true">🛰️</span>
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-w-0">
             <h1 className="text-base sm:text-lg font-medium tracking-tight text-slate-100 whitespace-nowrap">MTG-RGB-HD</h1>
-            <p className="hidden md:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6, RGB et Sandwich(IR)</p>
+            <p className="hidden lg:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6, RGB et Sandwich(IR)</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-4 relative">
-          <DateTimePopover
-            currentTime={currentTime}
-            datePickerRef={datePickerRef}
-            isOpen={isDatePickerOpen}
-            onLatest={() => handleTimeChange(getLatestAvailableTime())}
-            onTimeChange={handleTimeChange}
-            onToggle={() => setIsDatePickerOpen(!isDatePickerOpen)}
-          />
-
-          <SettingsPopover
-            isOpen={isSettingsOpen}
-            mapOptions={mapOptions}
-            onClose={() => setIsSettingsOpen(false)}
-            onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
-            onUpdate={setMapOptions}
-            settingsRef={settingsRef}
-          />
-
+        <div className="flex items-center gap-2 sm:gap-3 relative shrink-0">
           <HeaderInfoButton onClick={() => setIsInfoOpen(true)} />
 
           <button
@@ -234,7 +221,7 @@ export default function DualMapViewer() {
             aria-hidden="true"
           />
 
-          <Map2TitleBadge activeLayers={activeLayers} />
+          <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} />
 
             <Map2ControlBar
               activeLayers={activeLayers}
@@ -244,9 +231,11 @@ export default function DualMapViewer() {
               effectiveSandwichOpacity={effectiveSandwichOpacity}
               irStyle={irStyle}
               isAdjustmentsOpen={isAdjustmentsOpen}
+              mapOptions={mapOptions}
               onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
               onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
               onIrStyleChange={setIrStyle}
+              onMapOptionsChange={setMapOptions}
               onResetAdjustments={resetAdjustments}
               onRgbHdOpacityChange={setRgbHdOpacity}
               onRgbSaturationChange={setRgbSaturation}
@@ -263,6 +252,12 @@ export default function DualMapViewer() {
             />
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
+
+          <TimeDock
+            currentTime={currentTime}
+            onLatest={() => handleTimeChange(getLatestAvailableTime())}
+            onTimeChange={handleTimeChange}
+          />
 
           {isMapLoading && (
             <div className="absolute inset-0 z-[390] pointer-events-none flex items-end justify-center pb-6">
@@ -327,7 +322,7 @@ export default function DualMapViewer() {
           filter: brightness(${visBrightness}) contrast(${visContrast});
         }
         .rgb-layer-tiles {
-          filter: saturate(${rgbSaturation});
+          filter: saturate(${rgbLayerEffectiveSaturation}) brightness(${rgbLayerEffectiveBrightness});
         }
         .ir-overlay-layer-tiles {
           mix-blend-mode: color;
@@ -338,6 +333,18 @@ export default function DualMapViewer() {
           filter: saturate(1.2) contrast(1.08);
         }
         .vis-overlay-layer-tiles {
+          mix-blend-mode: soft-light;
+          filter: brightness(${visBrightness}) contrast(${visContrast});
+        }
+        .vis-overlay-layer-tiles-rgb-hd {
+          mix-blend-mode: luminosity;
+          filter: brightness(${visHdLegacyBrightness}) contrast(${visHdLegacyContrast});
+        }
+        .vis-overlay-layer-tiles-on-ir {
+          mix-blend-mode: screen;
+          filter: brightness(${visBrightness}) contrast(${visContrast}) saturate(1.05);
+        }
+        .vis-overlay-layer-tiles-hybrid {
           mix-blend-mode: luminosity;
           filter: brightness(${visBrightness}) contrast(${visContrast});
         }

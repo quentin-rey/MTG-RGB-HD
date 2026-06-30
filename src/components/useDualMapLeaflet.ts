@@ -44,6 +44,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const map1Instance = useRef<L.Map | null>(null);
   const map2Instance = useRef<L.Map | null>(null);
   const secondaryBaseLayerRef = useRef<L.TileLayer.WMS | null>(null);
+  const irFallbackBaseLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const visOverlayLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const irOverlayLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const irCloudOnlyLayerRef = useRef<L.GridLayer | null>(null);
@@ -79,15 +80,48 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   });
 
   const solarElevation = getSolarElevation(new Date(currentTime + 'Z'), viewportCenter.lat, viewportCenter.lng);
-  const visNightFactor = autoReduceVisAtNight && activeLayers.vis
+  const visNightFactor = autoReduceVisAtNight && activeLayers.vis && activeLayers.ir
     ? getDaylightVisFactor(solarElevation)
     : 1;
+  const daylightVisFactor = Math.max(0, Math.min(1, getDaylightVisFactor(solarElevation)));
+  const hybridVisNightFactor = Math.pow(visNightFactor, 1.6);
   const effectiveSandwichOpacity = sandwichOpacity * visNightFactor;
-  const effectiveHybridVisOpacity = rgbHdOpacity * visNightFactor;
+  const isRgbVisOnlyMode = activeLayers.rgb && activeLayers.vis && !activeLayers.ir;
+  // In luminosity blend mode, high VIS opacity can noticeably darken RGB.
+  // Keep a conservative dynamic cap to preserve VIS detail without dimming daytime RGB too much.
+  const hybridVisOpacityCap = 0.48 + daylightVisFactor * 0.14;
+  const rgbVisOnlyOpacityCap = 0.8;
+  const rgbVisOnlyNightFactor = Math.max(0.7, visNightFactor);
+  const effectiveRgbVisOnlyVisOpacity = Math.min(
+    rgbHdOpacity * rgbVisOnlyNightFactor,
+    rgbVisOnlyOpacityCap,
+  );
+  const effectiveHybridOnlyVisOpacity = Math.min(rgbHdOpacity * hybridVisNightFactor, hybridVisOpacityCap);
+  const effectiveHybridVisOpacity = isRgbVisOnlyMode ? effectiveRgbVisOnlyVisOpacity : effectiveHybridOnlyVisOpacity;
   const effectiveHybridIrOpacity = sandwichOpacity;
   const isHybridMode = activeLayers.rgb && activeLayers.vis && activeLayers.ir;
   const isRgbIrMode = activeLayers.rgb && activeLayers.ir && !activeLayers.vis;
-  const baseLayer: 'rgb' | 'ir' | 'vis' = activeLayers.rgb ? 'rgb' : activeLayers.ir ? 'ir' : 'vis';
+  const isVisIrMode = activeLayers.vis && activeLayers.ir && !activeLayers.rgb;
+  const shouldPreferIrBaseAtNight = activeLayers.rgb && (activeLayers.vis || activeLayers.ir) && solarElevation < 1.5;
+  const isNightIrFallbackActive = shouldPreferIrBaseAtNight;
+  const baseLayer: 'rgb' | 'ir' | 'vis' = shouldPreferIrBaseAtNight
+    ? 'ir'
+    : activeLayers.rgb
+      ? 'rgb'
+      : activeLayers.vis
+        ? 'vis'
+        : 'ir';
+  const rgbToIrTransition = activeLayers.rgb && activeLayers.ir
+    ? Math.max(0, Math.min(1, (1.5 - solarElevation) / 12))
+    : 0;
+  const isRgbBasedCloudOnlyMode = baseLayer === 'rgb' && (isHybridMode || isRgbIrMode);
+  const isCloudOnlyIrMode = isVisIrMode || isRgbBasedCloudOnlyMode;
+  const effectiveCloudOnlyIrOpacity = isRgbBasedCloudOnlyMode
+    ? effectiveHybridIrOpacity * (1 - rgbToIrTransition)
+    : isVisIrMode
+      ? sandwichOpacity
+      : 0;
+  const hybridVisMaskWeight = Math.min(0.35, Math.max(0, (daylightVisFactor - 0.35) / 0.65));
   const isVisOverlayEnabled = activeLayers.vis && baseLayer !== 'vis';
   const isIrOverlayEnabled = activeLayers.ir && baseLayer !== 'ir';
   const currentVisOverlayOpacity = activeLayers.rgb ? effectiveHybridVisOpacity : effectiveSandwichOpacity;
@@ -157,7 +191,20 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     } as any);
   };
 
-  const createVisOverlayLayer = (isoTime: string) => {
+  const createVisOverlayLayer = (
+    isoTime: string,
+    isHybridVariant: boolean,
+    isVisOnIrVariant: boolean,
+    isRgbVisOnlyVariant: boolean,
+  ) => {
+    const visOverlayClass = isHybridVariant
+      ? 'vis-overlay-layer-tiles-hybrid'
+      : isVisOnIrVariant
+        ? 'vis-overlay-layer-tiles-on-ir'
+        : isRgbVisOnlyVariant
+          ? 'vis-overlay-layer-tiles-rgb-hd'
+          : 'vis-overlay-layer-tiles';
+
     return L.tileLayer.wms(WMS_URL_DIRECT, {
       layers: LAYER_VIS,
       format: 'image/png',
@@ -165,7 +212,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       time: isoTime,
       keepBuffer: 2,
       updateWhenIdle: true,
-      className: 'vis-overlay-layer-tiles transition-opacity duration-500 ease-in-out',
+      className: `${visOverlayClass} transition-opacity duration-500 ease-in-out`,
       opacity: 0,
       zIndex: 290,
     } as any);
@@ -183,6 +230,22 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       className: 'ir-overlay-layer-tiles transition-opacity duration-500 ease-in-out',
       opacity: 0,
       zIndex: 330,
+    } as any);
+  };
+
+  const createIrFallbackBaseLayer = (isoTime: string, nextIrStyle: IrStyle) => {
+    return L.tileLayer.wms(WMS_URL_DIRECT, {
+      layers: LAYER_IR,
+      styles: nextIrStyle,
+      format: 'image/png',
+      transparent: true,
+      attribution: '© EUMETSAT',
+      time: isoTime,
+      keepBuffer: 2,
+      updateWhenIdle: true,
+      className: 'ir-fallback-base-layer-tiles',
+      zIndex: 220,
+      opacity: 0,
     } as any);
   };
 
@@ -321,7 +384,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     });
   };
 
-  const createCloudOnlyIrLayer = (isoTime: string, nextIrStyle: IrStyle, maskSource: 'vis' | 'rgb') => {
+  const createCloudOnlyIrLayer = (
+    isoTime: string,
+    nextIrStyle: IrStyle,
+    visMaskWeight: number,
+    useRgbMaskInCloudDetection: boolean,
+  ) => {
     const HYBRID_TILE_CACHE_LIMIT = 320;
 
     const touchCacheKey = (key: string) => {
@@ -355,7 +423,11 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       tile.width = 256;
       tile.height = 256;
 
-      const cacheKey = `${isoTime}|${nextIrStyle}|${maskSource}|${coords.z}|${coords.x}|${coords.y}`;
+      const normalizedVisWeight = Math.max(0, Math.min(1, visMaskWeight));
+      const useVisMask = normalizedVisWeight > 0.01;
+      const useRgbMask = useRgbMaskInCloudDetection;
+
+      const cacheKey = `${isoTime}|${nextIrStyle}|w${normalizedVisWeight.toFixed(2)}|${coords.z}|${coords.x}|${coords.y}`;
       const cachedTile = hybridTileCacheRef.current.get(cacheKey);
       if (cachedTile) {
         const tileCtx = tile.getContext('2d')!;
@@ -379,17 +451,36 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       const se3857 = L.CRS.EPSG3857.project(seLatLng);
       const bbox = `${nw3857.x},${se3857.y},${se3857.x},${nw3857.y}`;
 
-      const maskUrl = buildWmsTileUrl(maskSource === 'vis' ? LAYER_VIS : LAYER_RGB, '', bbox, isoTime);
+      const visMaskUrl = buildWmsTileUrl(LAYER_VIS, '', bbox, isoTime);
+      const rgbMaskUrl = buildWmsTileUrl(LAYER_RGB, '', bbox, isoTime);
       const irUrl = buildWmsTileUrl(LAYER_IR, nextIrStyle, bbox, isoTime);
 
-      void Promise.all([loadImage(maskUrl), loadImage(irUrl)])
-        .then(([maskImage, irImage]) => {
-          const maskCanvas = document.createElement('canvas');
-          maskCanvas.width = 256;
-          maskCanvas.height = 256;
-          const maskCtx = maskCanvas.getContext('2d')!;
-          maskCtx.drawImage(maskImage, 0, 0);
-          const maskData = maskCtx.getImageData(0, 0, 256, 256).data;
+      void Promise.all([
+        useVisMask ? loadImage(visMaskUrl) : Promise.resolve(null),
+        useRgbMask ? loadImage(rgbMaskUrl) : Promise.resolve(null),
+        loadImage(irUrl),
+      ])
+        .then(([visMaskImage, rgbMaskImage, irImage]) => {
+          let visMaskData: Uint8ClampedArray | null = null;
+          let rgbMaskData: Uint8ClampedArray | null = null;
+
+          if (visMaskImage) {
+            const visMaskCanvas = document.createElement('canvas');
+            visMaskCanvas.width = 256;
+            visMaskCanvas.height = 256;
+            const visMaskCtx = visMaskCanvas.getContext('2d')!;
+            visMaskCtx.drawImage(visMaskImage, 0, 0);
+            visMaskData = visMaskCtx.getImageData(0, 0, 256, 256).data;
+          }
+
+          if (rgbMaskImage) {
+            const rgbMaskCanvas = document.createElement('canvas');
+            rgbMaskCanvas.width = 256;
+            rgbMaskCanvas.height = 256;
+            const rgbMaskCtx = rgbMaskCanvas.getContext('2d')!;
+            rgbMaskCtx.drawImage(rgbMaskImage, 0, 0);
+            rgbMaskData = rgbMaskCtx.getImageData(0, 0, 256, 256).data;
+          }
 
           const irCanvas = document.createElement('canvas');
           irCanvas.width = 256;
@@ -402,11 +493,21 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
           const outImage = outCtx.createImageData(256, 256);
           const outData = outImage.data;
 
+          const visThresholdBase = 90;
+          const visThresholdSpan = 100;
+          const rgbThresholdBase = 120;
+          const rgbThresholdSpan = 90;
+
           for (let i = 0; i < outData.length; i += 4) {
-            const maskLum = (maskData[i] + maskData[i + 1] + maskData[i + 2]) / 3;
-            const thresholdBase = maskSource === 'vis' ? 90 : 120;
-            const thresholdSpan = maskSource === 'vis' ? 100 : 90;
-            const cloudMask = Math.min(1, Math.max(0, (maskLum - thresholdBase) / thresholdSpan));
+            const visLum = visMaskData ? (visMaskData[i] + visMaskData[i + 1] + visMaskData[i + 2]) / 3 : 0;
+            const rgbLum = rgbMaskData ? (rgbMaskData[i] + rgbMaskData[i + 1] + rgbMaskData[i + 2]) / 3 : visLum;
+
+            const rgbCloudMask = Math.min(1, Math.max(0, (rgbLum - rgbThresholdBase) / rgbThresholdSpan));
+            const visCloudMask = Math.min(1, Math.max(0, (visLum - visThresholdBase) / visThresholdSpan));
+            const refinedCloudMask = rgbCloudMask * (1 - normalizedVisWeight) + visCloudMask * normalizedVisWeight;
+            // RGB floor increases only when VIS becomes unreliable (dusk/night).
+            const rgbFloorFactor = (1 - normalizedVisWeight) * 0.85;
+            const cloudMask = Math.max(rgbCloudMask * rgbFloorFactor, refinedCloudMask);
 
             if (cloudMask < 0.02) {
               outData[i + 3] = 0;
@@ -474,18 +575,17 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     map1.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
     map2.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap contributors, © CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20,
-      keepBuffer: 2,
-      updateWhenIdle: true,
-    }).addTo(map2);
+    // Keep the satellite view clean: no opaque basemap underlay to avoid visual bleed-through.
 
     const initialIsoTime = new Date(currentTime + 'Z').toISOString();
     beginLoadingCycle();
     secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, initialIsoTime, irStyle).addTo(map2);
-    visOverlayLayerRef.current = createVisOverlayLayer(initialIsoTime);
+    visOverlayLayerRef.current = createVisOverlayLayer(
+      initialIsoTime,
+      isHybridMode,
+      !activeLayers.rgb && activeLayers.ir,
+      activeLayers.rgb && activeLayers.vis && !activeLayers.ir,
+    );
     irOverlayLayerRef.current = createIrOverlayLayer(initialIsoTime, irStyle);
 
     const unbindBaseLoading = bindLayerLoading(secondaryBaseLayerRef.current);
@@ -559,6 +659,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     try {
       const isoTime = new Date(currentTime + 'Z').toISOString();
       secondaryBaseLayerRef.current?.setParams({ time: isoTime } as any);
+      irFallbackBaseLayerRef.current?.setParams({ time: isoTime, styles: irStyle } as any);
       visOverlayLayerRef.current?.setParams({ time: isoTime } as any);
       irOverlayLayerRef.current?.setParams({ time: isoTime } as any);
     } catch (e) {
@@ -579,6 +680,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     secondaryBaseLayerRef.current?.remove();
     secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle).addTo(map2);
 
+    if (irFallbackBaseLayerRef.current && map2.hasLayer(irFallbackBaseLayerRef.current)) {
+      irFallbackBaseLayerRef.current.remove();
+    }
+    irFallbackBaseLayerRef.current = createIrFallbackBaseLayer(isoTime, irStyle);
+    if (baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && rgbToIrTransition > 0.01) {
+      irFallbackBaseLayerRef.current.addTo(map2);
+      irFallbackBaseLayerRef.current.setOpacity(rgbToIrTransition);
+    }
+
     if (visOverlayLayerRef.current && map2.hasLayer(visOverlayLayerRef.current)) {
       visOverlayLayerRef.current.remove();
     }
@@ -586,10 +696,16 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       irOverlayLayerRef.current.remove();
     }
 
-    visOverlayLayerRef.current = createVisOverlayLayer(isoTime);
+    visOverlayLayerRef.current = createVisOverlayLayer(
+      isoTime,
+      isHybridMode,
+      !activeLayers.rgb && activeLayers.ir,
+      activeLayers.rgb && activeLayers.vis && !activeLayers.ir,
+    );
     irOverlayLayerRef.current = createIrOverlayLayer(isoTime, irStyle);
 
     const unbindBaseLoading = bindLayerLoading(secondaryBaseLayerRef.current);
+    const unbindIrFallbackLoading = bindLayerLoading(irFallbackBaseLayerRef.current);
     const unbindVisOverlayLoading = bindLayerLoading(visOverlayLayerRef.current);
     const unbindIrOverlayLoading = bindLayerLoading(irOverlayLayerRef.current);
 
@@ -627,20 +743,22 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       }, 500);
     }
 
-    if (isHybridMode || isRgbIrMode) {
+    if (isCloudOnlyIrMode) {
       if (map2.hasLayer(irOverlayLayer)) {
         irOverlayLayer.remove();
       }
       if (irCloudOnlyLayerRef.current && map2.hasLayer(irCloudOnlyLayerRef.current)) {
         irCloudOnlyLayerRef.current.remove();
       }
-      irCloudOnlyLayerRef.current = createCloudOnlyIrLayer(isoTime, irStyle, isHybridMode ? 'vis' : 'rgb');
+      const visMaskWeight = isHybridMode ? hybridVisMaskWeight : isVisIrMode ? 1 : 0;
+      irCloudOnlyLayerRef.current = createCloudOnlyIrLayer(isoTime, irStyle, visMaskWeight, !isVisIrMode);
       const unbindHybridLoading = bindLayerLoading(irCloudOnlyLayerRef.current);
       irCloudOnlyLayerRef.current.addTo(map2);
-      irCloudOnlyLayerRef.current.setOpacity(effectiveHybridIrOpacity);
+      irCloudOnlyLayerRef.current.setOpacity(effectiveCloudOnlyIrOpacity);
 
       return () => {
         unbindBaseLoading();
+        unbindIrFallbackLoading();
         unbindVisOverlayLoading();
         unbindIrOverlayLoading();
         unbindHybridLoading();
@@ -669,6 +787,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     return () => {
       unbindBaseLoading();
+      unbindIrFallbackLoading();
       unbindVisOverlayLoading();
       unbindIrOverlayLoading();
       if (overlayFadeInTimeoutRef.current !== null) {
@@ -685,34 +804,56 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     currentTime,
     irStyle,
     isHybridMode,
+    isVisIrMode,
     isRgbIrMode,
+    isCloudOnlyIrMode,
+    rgbToIrTransition,
+    effectiveCloudOnlyIrOpacity,
+    hybridVisMaskWeight,
     isIrOverlayEnabled,
     isVisOverlayEnabled,
+    sandwichOpacity,
   ]);
 
   useEffect(() => {
     const map2 = map2Instance.current;
     const visOverlayLayer = visOverlayLayerRef.current;
+    const irFallbackBaseLayer = irFallbackBaseLayerRef.current;
     const irOverlayLayer = irOverlayLayerRef.current;
     const irCloudOnlyLayer = irCloudOnlyLayerRef.current;
 
     if (map2 && visOverlayLayer && isVisOverlayEnabled && map2.hasLayer(visOverlayLayer)) {
       visOverlayLayer.setOpacity(currentVisOverlayOpacity);
     }
+    if (map2 && baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && rgbToIrTransition > 0.01 && irFallbackBaseLayer) {
+      if (!map2.hasLayer(irFallbackBaseLayer)) {
+        irFallbackBaseLayer.addTo(map2);
+      }
+      irFallbackBaseLayer.setOpacity(rgbToIrTransition);
+    } else if (map2 && irFallbackBaseLayer && map2.hasLayer(irFallbackBaseLayer)) {
+      irFallbackBaseLayer.remove();
+    }
+
     if (map2 && !isHybridMode && irOverlayLayer && isIrOverlayEnabled && map2.hasLayer(irOverlayLayer)) {
       irOverlayLayer.setOpacity(activeLayers.rgb ? effectiveHybridIrOpacity : sandwichOpacity);
     }
-    if (map2 && (isHybridMode || isRgbIrMode) && irCloudOnlyLayer && map2.hasLayer(irCloudOnlyLayer)) {
-      irCloudOnlyLayer.setOpacity(effectiveHybridIrOpacity);
+    if (map2 && isCloudOnlyIrMode && irCloudOnlyLayer && map2.hasLayer(irCloudOnlyLayer)) {
+      irCloudOnlyLayer.setOpacity(effectiveCloudOnlyIrOpacity);
     }
   }, [
+    baseLayer,
     activeLayers.rgb,
+    activeLayers.ir,
     currentVisOverlayOpacity,
+    effectiveCloudOnlyIrOpacity,
     effectiveHybridIrOpacity,
     isHybridMode,
+    isVisIrMode,
     isRgbIrMode,
+    isCloudOnlyIrMode,
     isIrOverlayEnabled,
     isVisOverlayEnabled,
+    rgbToIrTransition,
     sandwichOpacity,
   ]);
 
@@ -833,6 +974,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
     getVisibleCityFeatures,
+    isNightIrFallbackActive,
     map1BordersRef,
     map1Ref,
     map2Instance,

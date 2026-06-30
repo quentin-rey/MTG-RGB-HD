@@ -1,37 +1,37 @@
 # MTG-RGB-HD
 
-MTG-RGB-HD est une application web de visualisation et d'export d'images satellites MTG (EUMETSAT), centrée sur la France, avec fusion multi-couches en temps reel.
+MTG-RGB-HD is a web app to visualize and export MTG (EUMETSAT) satellite imagery, focused on France, with real-time multi-layer blending.
 
-## Fonctionnalites
-- Panneau unique par couches actives: activation/desactivation independante de RGB, VIS et IR.
-- Combinaisons prises en charge:
+## Features
+- Single control panel for active layers, with independent RGB, VIS, and IR toggles.
+- Supported combinations:
    - RGB
    - VIS
    - IR
-   - RGB + VIS (fusion luminosite)
+   - RGB + VIS (luminosity blend)
    - VIS + IR (Sandwich)
-   - RGB + IR (fusion cloud-only)
-   - RGB + VIS + IR (hybride)
-- Ajustements image contextuels selon les couches actives:
-   - contraste et luminosite VIS
-   - saturation RGB
-   - apport VIS sur RGB (quand pertinent)
-   - intensite IR/Sandwich
-   - style IR 10.5
-   - reduction automatique du VIS la nuit
-- Loader visuel de tuiles avec pourcentage et tuiles en attente.
-- Export ZIP preselectionne selon les couches actives (VIS, RGB, IR, HD, Sandwich, Hybride).
-- Selection temporelle en pas de 10 minutes.
-- Overlays: frontieres, departements France, villes.
+   - RGB + IR (cloud-only blend)
+   - RGB + VIS + IR (hybrid)
+- Context-aware image adjustments depending on active layers:
+   - VIS contrast and brightness
+   - RGB saturation
+   - VIS contribution over RGB (when relevant)
+   - IR/Sandwich intensity
+   - IR 10.5 style
+   - Automatic VIS reduction at night
+- Tile loading indicator with percentage and pending tile count.
+- ZIP export with smart preselection based on active layers (VIS, RGB, IR, HD, Sandwich, Hybrid).
+- Time selection in 10-minute steps.
+- Overlays: borders, France departments, and cities.
 
-## Optimisations de chargement
-- Vue initiale resserree sur la France (bounds dedies).
-- Chargement evite sur la carte technique cachee (pas de double trafic tuiles).
-- keepBuffer + updateWhenIdle sur les couches tuiles.
-- Cache LRU des tuiles cloud-only IR pour les modes hybrides.
-- Rendu des labels villes uniquement sur la carte visible.
+## Loading Optimizations
+- Initial view constrained to France (dedicated bounds).
+- No extra loading on the hidden technical map (prevents duplicate tile traffic).
+- `keepBuffer` and `updateWhenIdle` enabled on tile layers.
+- LRU cache for cloud-only IR tiles in hybrid-related modes.
+- City labels rendered only on the visible map.
 
-## Stack technique
+## Tech Stack
 - React 19
 - Vite
 - Leaflet (WMS)
@@ -40,32 +40,32 @@ MTG-RGB-HD est une application web de visualisation et d'export d'images satelli
 - Lucide Icons
 
 ## Installation
-Prerequis:
+Prerequisites:
 - Node.js 18+
 - npm
 
-Commandes:
+Commands:
 ```bash
 npm install
 npm run dev
 ```
 
-Checks qualite:
+Quality check:
 ```bash
 npm run lint
 ```
 
-## Utilisation
-1. Choisir la date/heure (UTC) dans le selecteur en haut.
-2. Activer les couches RGB, VIS, IR depuis la barre de controle.
-3. Ouvrir Ajustements pour modifier les parametres disponibles pour la combinaison courante.
-4. Activer les overlays via les Parametres (roue crantee).
-5. Ouvrir la modale de telechargement pour choisir les exports proposes et generer un ZIP.
+## Usage
+1. Pick date/time (UTC) from the top selector.
+2. Enable RGB, VIS, and IR layers from the control bar.
+3. Open Adjustments to tune available parameters for the current combination.
+4. Enable overlays from Settings (gear icon).
+5. Open the download modal to choose exports and generate a ZIP.
 
-## Credits et sources
-- Auteur: Quentin Rey
-- Imagerie: EUMETSAT / Meteosat Third Generation (MTG)
-- Fond de carte: CARTO, OpenStreetMap contributors
+## Credits and Sources
+- Author: Quentin Rey
+- Satellite imagery: EUMETSAT / Meteosat Third Generation (MTG)
+- Basemap: CARTO, OpenStreetMap contributors
 
-## Licence
-Projet a but educatif et informatif. L'utilisation des donnees satellites reste soumise aux conditions EUMETSAT.
+## License
+This project is for educational and informational purposes. Satellite data usage remains subject to EUMETSAT terms.

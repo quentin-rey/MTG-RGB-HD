@@ -35,6 +35,15 @@ export function useImageAdjustments() {
   });
 
   useEffect(() => {
+    try {
+      // Cleanup legacy storage key from the removed multi-render HD option.
+      localStorage.removeItem('mtg_export_hd_vis_blend_mode');
+    } catch {
+      // Ignore storage persistence failures.
+    }
+  }, []);
+
+  useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.visBrightness, String(visBrightness));
     safeSetLocalStorage(STORAGE_KEYS.visContrast, String(visContrast));
     safeSetLocalStorage(STORAGE_KEYS.rgbSaturation, String(rgbSaturation));
