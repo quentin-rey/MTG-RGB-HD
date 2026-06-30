@@ -9,28 +9,6 @@ async function startServer() {
 
   app.use(cors());
 
-  // Proxy for EUMETView WMS to bypass CORS for canvas processing
-  app.get('/api/wms', async (req, res) => {
-    const eumetsatUrl = new URL('https://view.eumetsat.int/geoserver/ows');
-    Object.entries(req.query).forEach(([key, value]) => {
-      eumetsatUrl.searchParams.append(key, value as string);
-    });
-
-    try {
-      const response = await fetch(eumetsatUrl.toString());
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      
-      res.set('Content-Type', response.headers.get('content-type') || 'image/png');
-      res.set('Cache-Control', 'public, max-age=86400');
-      res.set('Access-Control-Allow-Origin', '*');
-      res.send(buffer);
-    } catch (error) {
-      console.error('WMS Proxy Error:', error);
-      res.status(500).send('Error proxying WMS');
-    }
-  });
-
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

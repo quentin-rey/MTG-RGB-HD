@@ -1,160 +1,130 @@
-import React, { useEffect, useRef, useState } from 'react';
-import L from 'leaflet';
+import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Download, Loader2, Info, Clock, Layers, Settings, X, Sliders } from 'lucide-react';
-import JSZip from 'jszip';
-import { saveAs } from 'file-saver';
-
-// EUMETView Configuration
-// MSG standard layers are used by default for reliability as MTG is progressively rolling out on WMS.
-// You can replace these with MTG layers (e.g., mtg_fci:rgb_truecolor) when they are fully stable.
-const WMS_URL_DIRECT = 'https://view.eumetsat.int/geoserver/ows';
-// Use direct URL for both display and export, as EUMETSAT supports CORS
-const WMS_URL_PROXY = 'https://view.eumetsat.int/geoserver/ows';
-const LAYER_VIS = 'mtg_fd:vis06_hrfi';
-const LAYER_RGB = 'mtg_fd:rgb_truecolour';
-
-// Helper to get the latest reasonably available time (EUMETSAT images have ~15-20 min processing delay)
-const getLatestAvailableTime = () => {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() - 20); // 20 min buffer
-  now.setMinutes(Math.floor(now.getMinutes() / 10) * 10);
-  now.setSeconds(0);
-  now.setMilliseconds(0);
-  return now.toISOString().slice(0, 16);
-};
-
-// Helper function to apply a 3x3 convolution sharpen filter to ImageData
-function applySharpenFilter(imageData: ImageData, intensity: number): ImageData {
-  const { width, height, data } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
-  const dst = output.data;
-
-  // Kernel for 3x3 sharpening:
-  // [  0,  -k,   0 ]
-  // [ -k, 1+4k, -k ]
-  // [  0,  -k,   0 ]
-  const k = intensity;
-  const centerWeight = 1 + 4 * k;
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 4;
-
-      // Handle borders simply by copying the original pixel
-      if (y === 0 || y === height - 1 || x === 0 || x === width - 1) {
-        dst[idx] = data[idx];
-        dst[idx + 1] = data[idx + 1];
-        dst[idx + 2] = data[idx + 2];
-        dst[idx + 3] = data[idx + 3];
-        continue;
-      }
-
-      // 3x3 neighbor indices
-      const topIdx = idx - width * 4;
-      const bottomIdx = idx + width * 4;
-      const leftIdx = idx - 4;
-      const rightIdx = idx + 4;
-
-      // Process R, G, B channels
-      for (let c = 0; c < 3; c++) {
-        const val = 
-          data[idx + c] * centerWeight - 
-          (data[topIdx + c] + data[bottomIdx + c] + data[leftIdx + c] + data[rightIdx + c]) * k;
-        
-        dst[idx + c] = Math.min(255, Math.max(0, val));
-      }
-      // Copy alpha channel as is
-      dst[idx + 3] = data[idx + 3];
-    }
-  }
-
-  return output;
-}
+import { Download, Loader2 } from 'lucide-react';
+import {
+  DEFAULT_ACTIVE_LAYERS,
+  getAvailableExportKindsFromLayers,
+  getLatestAvailableTime,
+  getSolarElevation,
+  sanitizeActiveLayers,
+  STORAGE_KEYS,
+  type ActiveLayers,
+  type MapOptions,
+  readStoredJson,
+  safeSetLocalStorage,
+  type ExportKind,
+} from './dualMapViewerShared';
+import { downloadSatellitePack } from './dualMapExport';
+import { useDualMapLeaflet } from './useDualMapLeaflet';
+import {
+  DateTimePopover,
+  DownloadModal,
+  HeaderInfoButton,
+  InfoModal,
+  Map2ControlBar,
+  Map2TitleBadge,
+  SettingsPopover,
+} from './dualMapViewerPanels';
+import { useImageAdjustments } from './useImageAdjustments';
+import { useViewerPanelsState } from './useViewerPanelsState';
 
 export default function DualMapViewer() {
-  const map1Ref = useRef<HTMLDivElement>(null);
-  const map2Ref = useRef<HTMLDivElement>(null);
-  const map1Instance = useRef<L.Map | null>(null);
-  const map2Instance = useRef<L.Map | null>(null);
-  const visLayerRef = useRef<L.TileLayer.WMS | null>(null);
-  const rgbLayerRef = useRef<L.TileLayer.WMS | null>(null);
-  const fusionLayerRef = useRef<L.TileLayer.WMS | null>(null);
-  const map1BordersRef = useRef<L.GeoJSON | null>(null);
-  const map2BordersRef = useRef<L.GeoJSON | null>(null);
-  const map1CitiesRef = useRef<L.TileLayer | null>(null);
-  const map2CitiesRef = useRef<L.TileLayer | null>(null);
-  
-  const isSyncing = useRef(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [isFusionMode, setIsFusionMode] = useState(false);
-  const [mapsReady, setMapsReady] = useState(false);
-  
-  // Floating Adjustments panel state & ref
-  const [isAdjustmentsOpen, setIsAdjustmentsOpen] = useState(false);
-  const adjustmentsRef = useRef<HTMLDivElement>(null);
+  const [selectedExports, setSelectedExports] = useState<Record<ExportKind, boolean>>({
+    vis: true,
+    rgb: true,
+    ir: false,
+    hd: false,
+    sandwich: false,
+    hybrid: false,
+  });
+  const [activeLayers, setActiveLayers] = useState<ActiveLayers>(() => {
+    const stored = readStoredJson<ActiveLayers>(STORAGE_KEYS.activeLayers, DEFAULT_ACTIVE_LAYERS);
+    return sanitizeActiveLayers(stored);
+  });
 
-  // Dynamic Image Enhancement state
-  const [visBrightness, setVisBrightness] = useState(() => {
-    try {
-      const val = localStorage.getItem('mtg_vis_brightness');
-      return val ? parseFloat(val) : 1.05;
-    } catch (e) { return 1.05; }
-  });
-  const [visContrast, setVisContrast] = useState(() => {
-    try {
-      const val = localStorage.getItem('mtg_vis_contrast');
-      return val ? parseFloat(val) : 1.15;
-    } catch (e) { return 1.15; }
-  });
-  const [visSharpen, setVisSharpen] = useState<number>(() => {
-    try {
-      const val = localStorage.getItem('mtg_vis_sharpen_intensity_v3');
-      return val ? parseFloat(val) : 0.0;
-    } catch (e) { return 0.0; }
-  });
-  const [rgbSaturation, setRgbSaturation] = useState(() => {
-    try {
-      const val = localStorage.getItem('mtg_rgb_saturation');
-      return val ? parseFloat(val) : 1.15;
-    } catch (e) { return 1.15; }
-  });
-  const [fusionOpacity, setFusionOpacity] = useState(() => {
-    try {
-      const val = localStorage.getItem('mtg_fusion_opacity');
-      return val ? parseFloat(val) : 0.55;
-    } catch (e) { return 0.55; }
+  const {
+    adjustmentsRef,
+    datePickerRef,
+    downloadModalRef,
+    infoRef,
+    isAdjustmentsOpen,
+    isDatePickerOpen,
+    isDownloadModalOpen,
+    isInfoOpen,
+    isSettingsOpen,
+    setIsAdjustmentsOpen,
+    setIsDatePickerOpen,
+    setIsDownloadModalOpen,
+    setIsInfoOpen,
+    setIsSettingsOpen,
+    settingsRef,
+  } = useViewerPanelsState();
+
+  const {
+    autoReduceVisAtNight,
+    irStyle,
+    resetAdjustments,
+    rgbHdOpacity,
+    rgbSaturation,
+    sandwichOpacity,
+    setAutoReduceVisAtNight,
+    setIrStyle,
+    setRgbHdOpacity,
+    setRgbSaturation,
+    setSandwichOpacity,
+    setVisBrightness,
+    setVisContrast,
+    visBrightness,
+    visContrast,
+  } = useImageAdjustments();
+
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.activeLayers, JSON.stringify(activeLayers));
+  }, [activeLayers]);
+  
+  const [mapOptions, setMapOptions] = useState<MapOptions>(() => {
+    const defaults: MapOptions = { showBorders: false, showCities: false, showFranceDepartments: false };
+    const stored = readStoredJson<MapOptions>(STORAGE_KEYS.mapOptions, defaults);
+    return { ...defaults, ...stored };
   });
 
   useEffect(() => {
-    localStorage.setItem('mtg_vis_brightness', String(visBrightness));
-    localStorage.setItem('mtg_vis_contrast', String(visContrast));
-    localStorage.setItem('mtg_vis_sharpen_intensity_v3', String(visSharpen));
-    localStorage.setItem('mtg_rgb_saturation', String(rgbSaturation));
-    localStorage.setItem('mtg_fusion_opacity', String(fusionOpacity));
-  }, [visBrightness, visContrast, visSharpen, rgbSaturation, fusionOpacity]);
-  
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [mapOptions, setMapOptions] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mtg_map_options');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return { showBorders: false, showCities: false };
-  });
-
-  useEffect(() => {
-    localStorage.setItem('mtg_map_options', JSON.stringify(mapOptions));
+    safeSetLocalStorage(STORAGE_KEYS.mapOptions, JSON.stringify(mapOptions));
   }, [mapOptions]);
 
   // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer)
   const [currentTime, setCurrentTime] = useState(() => getLatestAvailableTime());
 
-  // Function to safely update time while preventing future dates
+  const {
+    cityLoadPromiseRef,
+    effectiveHybridVisOpacity,
+    effectiveSandwichOpacity,
+    getVisibleCityFeatures,
+    isMapLoading,
+    loadingProgress,
+    loadingTileCount,
+    map1BordersRef,
+    map1Ref,
+    map2Instance,
+    map2Ref,
+    solarElevation,
+  } = useDualMapLeaflet({
+    autoReduceVisAtNight,
+    activeLayers,
+    currentTime,
+    irStyle,
+    mapOptions,
+    rgbHdOpacity,
+    sandwichOpacity,
+  });
+  const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
+  const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
+
   const handleTimeChange = (newTimeStr: string) => {
     const newTime = new Date(newTimeStr);
     const maxTime = new Date(getLatestAvailableTime());
-    
+
     if (newTime > maxTime) {
       setCurrentTime(getLatestAvailableTime());
     } else {
@@ -162,465 +132,56 @@ export default function DualMapViewer() {
     }
   };
 
-  useEffect(() => {
-    if (!map1Ref.current || !map2Ref.current) return;
-    if (map1Instance.current || map2Instance.current) return;
-
-    // Fix for Leaflet tile pane z-index overlapping UI
-    L.Icon.Default.imagePath = '/';
-
-    // Initialize Map 1 (VIS)
-    const map1 = L.map(map1Ref.current, {
-      center: [46.603354, 1.888334],
-      zoom: 5,
-      zoomControl: false,
-      attributionControl: false
-    });
-    
-    // Add base map for orientation
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap contributors, © CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20
-    }).addTo(map1);
-
-    const visLayer = L.tileLayer.wms(WMS_URL_DIRECT, {
-      layers: LAYER_VIS,
-      format: 'image/png',
-      transparent: true,
-      attribution: '© EUMETSAT',
-      time: new Date(currentTime + 'Z').toISOString(),
-      className: 'vis-layer-tiles'
-    } as any).addTo(map1);
-    visLayerRef.current = visLayer;
-
-    L.control.attribution({ position: 'bottomleft' }).addTo(map1);
-
-    // Initialize Map 2 (RGB)
-    const map2 = L.map(map2Ref.current, {
-      center: [46.603354, 1.888334],
-      zoom: 5,
-      zoomControl: false,
-      attributionControl: false
-    });
-
-    // Add base map for orientation
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap contributors, © CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20
-    }).addTo(map2);
-
-    const rgbLayer = L.tileLayer.wms(WMS_URL_DIRECT, {
-      layers: LAYER_RGB,
-      format: 'image/png',
-      transparent: true,
-      attribution: '© EUMETSAT',
-      time: new Date(currentTime + 'Z').toISOString(),
-      className: 'rgb-layer-tiles'
-    } as any).addTo(map2);
-    rgbLayerRef.current = rgbLayer;
-
-    // Create the fusion overlay layer (not added to map yet)
-    const fusionLayer = L.tileLayer.wms(WMS_URL_DIRECT, {
-      layers: LAYER_VIS,
-      format: 'image/png',
-      transparent: true,
-      time: new Date(currentTime + 'Z').toISOString(),
-      className: 'fusion-layer-tiles mix-blend-luminosity transition-opacity duration-500 ease-in-out',
-      opacity: 0
-    } as any);
-    fusionLayerRef.current = fusionLayer;
-
-    L.control.attribution({ position: 'bottomright' }).addTo(map2);
-
-    // Strict 2-way sync logic to prevent infinite loops
-    const syncMaps = (source: L.Map, target: L.Map) => {
-      source.on('move', () => {
-        if (!isSyncing.current) {
-          isSyncing.current = true;
-          target.setView(source.getCenter(), source.getZoom(), { animate: false });
-          isSyncing.current = false;
-        }
-      });
+  const openDownloadModal = () => {
+    const nextSelection: Record<ExportKind, boolean> = {
+      vis: availableExportKinds.includes('vis'),
+      rgb: availableExportKinds.includes('rgb'),
+      ir: availableExportKinds.includes('ir'),
+      hd: availableExportKinds.includes('hd'),
+      sandwich: availableExportKinds.includes('sandwich'),
+      hybrid: availableExportKinds.includes('hybrid'),
     };
+    setSelectedExports(nextSelection);
+    setIsDownloadModalOpen(true);
+  };
 
-    syncMaps(map1, map2);
-    syncMaps(map2, map1);
-
-    map1Instance.current = map1;
-    map2Instance.current = map2;
-    setMapsReady(true);
-
-    return () => {
-      map1.remove();
-      map2.remove();
-      map1Instance.current = null;
-      map2Instance.current = null;
-    };
-  }, []); // Run once on mount
-
-  // Effect to handle time changes
-  useEffect(() => {
-    try {
-      const isoTime = new Date(currentTime + 'Z').toISOString();
-      if (visLayerRef.current) {
-        visLayerRef.current.setParams({ time: isoTime } as any);
-      }
-      if (rgbLayerRef.current) {
-        rgbLayerRef.current.setParams({ time: isoTime } as any);
-      }
-      if (fusionLayerRef.current) {
-        fusionLayerRef.current.setParams({ time: isoTime } as any);
-      }
-    } catch (e) {
-      console.warn("Invalid time format", e);
-    }
-  }, [currentTime]);
-
-  // Effect to toggle fusion mode layer on Map 2
-  useEffect(() => {
-    if (!map2Instance.current || !fusionLayerRef.current) return;
-    
-    if (isFusionMode) {
-      fusionLayerRef.current.addTo(map2Instance.current);
-      setTimeout(() => {
-        if (fusionLayerRef.current) {
-          fusionLayerRef.current.setOpacity(fusionOpacity);
-        }
-      }, 50);
-    } else {
-      if (map2Instance.current.hasLayer(fusionLayerRef.current)) {
-        fusionLayerRef.current.setOpacity(0);
-        setTimeout(() => {
-          if (!isFusionMode && fusionLayerRef.current) {
-            fusionLayerRef.current.remove();
-          }
-        }, 500);
-      }
-    }
-  }, [isFusionMode, fusionOpacity]);
-
-  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-  const [isInfoOpen, setIsInfoOpen] = useState(false);
-  const datePickerRef = useRef<HTMLDivElement>(null);
-  const settingsRef = useRef<HTMLDivElement>(null);
-  const infoRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
-        setIsSettingsOpen(false);
-      }
-      if (datePickerRef.current && !datePickerRef.current.contains(event.target as Node)) {
-        setIsDatePickerOpen(false);
-      }
-      if (infoRef.current && !infoRef.current.contains(event.target as Node)) {
-        setIsInfoOpen(false);
-      }
-      if (adjustmentsRef.current && !adjustmentsRef.current.contains(event.target as Node)) {
-        setIsAdjustmentsOpen(false);
-      }
-    };
-    const handleEsc = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsSettingsOpen(false);
-        setIsDatePickerOpen(false);
-        setIsInfoOpen(false);
-        setIsAdjustmentsOpen(false);
-      }
-    };
-    if (isSettingsOpen || isDatePickerOpen || isInfoOpen || isAdjustmentsOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEsc);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEsc);
-    };
-  }, [isSettingsOpen, isDatePickerOpen, isInfoOpen, isAdjustmentsOpen]);
-
-  // Effect to toggle overlays based on options
-  useEffect(() => {
-    if (!mapsReady || !map1Instance.current || !map2Instance.current) return;
-
-    // Initialize borders
-    if (!map1BordersRef.current) {
-      map1BordersRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(255, 255, 255, 0.4)', weight: 1, fillOpacity: 0 },
-        interactive: false
-      });
-      map2BordersRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(255, 255, 255, 0.4)', weight: 1, fillOpacity: 0 },
-        interactive: false
-      });
-      
-      fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
-        .then(res => res.json())
-        .then(data => {
-          if (map1BordersRef.current) map1BordersRef.current.addData(data);
-          if (map2BordersRef.current) map2BordersRef.current.addData(data);
-        })
-        .catch(err => console.error("Could not load borders:", err));
-    }
-
-    // Initialize cities/labels
-    if (!map1CitiesRef.current) {
-      const citiesUrl = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png';
-      map1CitiesRef.current = L.tileLayer(citiesUrl, {
-        zIndex: 1000,
-        opacity: 0.8,
-        interactive: false
-      } as any);
-      map2CitiesRef.current = L.tileLayer(citiesUrl, {
-        zIndex: 1000,
-        opacity: 0.8,
-        interactive: false
-      } as any);
-    }
-
-    // Toggle Borders
-    if (mapOptions.showBorders) {
-      if (!map1Instance.current.hasLayer(map1BordersRef.current)) map1BordersRef.current.addTo(map1Instance.current);
-      if (!map2Instance.current.hasLayer(map2BordersRef.current)) map2BordersRef.current.addTo(map2Instance.current);
-    } else {
-      if (map1Instance.current.hasLayer(map1BordersRef.current)) map1BordersRef.current.remove();
-      if (map2Instance.current.hasLayer(map2BordersRef.current)) map2BordersRef.current.remove();
-    }
-
-    // Toggle Cities
-    if (mapOptions.showCities) {
-      if (!map1Instance.current.hasLayer(map1CitiesRef.current)) map1CitiesRef.current.addTo(map1Instance.current);
-      if (!map2Instance.current.hasLayer(map2CitiesRef.current)) map2CitiesRef.current.addTo(map2Instance.current);
-    } else {
-      if (map1Instance.current.hasLayer(map1CitiesRef.current)) map1CitiesRef.current.remove();
-      if (map2Instance.current.hasLayer(map2CitiesRef.current)) map2CitiesRef.current.remove();
-    }
-  }, [mapOptions, mapsReady]);
-
-  const downloadPack = async () => {
-    if (!map1Instance.current) return;
+  const downloadPack = async (requestedKinds: ExportKind[]) => {
+    if (!map2Instance.current || !map2Ref.current) return;
+    if (requestedKinds.length === 0) return;
     setIsExporting(true);
 
     try {
-      const map = map1Instance.current;
-      const exportBounds = map.getBounds();
-      const ne = L.CRS.EPSG3857.project(exportBounds.getNorthEast());
-      const sw = L.CRS.EPSG3857.project(exportBounds.getSouthWest());
-      const bbox = `${sw.x},${sw.y},${ne.x},${ne.y}`;
-      
-      // Determine export size based on the current container dimensions
-      // Upscale factor for higher resolution exports (WMS max is typically 4096)
-      const rect = map1Ref.current!.getBoundingClientRect();
-      const upscaleFactor = 1; 
-      const width = Math.min(Math.round(rect.width * upscaleFactor), 4096);
-      const height = Math.min(Math.round(rect.height * upscaleFactor), 4096);
-      const isoTime = new Date(currentTime + 'Z').toISOString();
-
-      const buildWmsUrl = (layer: string) => {
-        return `${WMS_URL_PROXY}?service=WMS&request=GetMap&layers=${layer}&styles=&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=${width}&height=${height}&time=${isoTime}`;
-      };
-
-      const loadImage = (url: string): Promise<HTMLImageElement> => {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.crossOrigin = 'Anonymous';
-          img.onload = () => resolve(img);
-          img.onerror = () => reject(new Error(`Failed to load: ${url}`));
-          img.src = url;
-        });
-      };
-
-      // Fetch images directly (EUMETSAT supports CORS, so no proxy needed)
-      const [imgVis, imgRgb] = await Promise.all([
-        loadImage(buildWmsUrl(LAYER_VIS)),
-        loadImage(buildWmsUrl(LAYER_RGB))
-      ]);
-
-      // 1. Pre-process VIS image (apply brightness, contrast, and sharpening)
-      const visTempCanvas = document.createElement('canvas');
-      visTempCanvas.width = width;
-      visTempCanvas.height = height;
-      const visTempCtx = visTempCanvas.getContext('2d')!;
-      
-      visTempCtx.filter = `brightness(${visBrightness}) contrast(${visContrast})`;
-      visTempCtx.drawImage(imgVis, 0, 0);
-      visTempCtx.filter = 'none';
-      
-      if (visSharpen > 0) {
-        const imgData = visTempCtx.getImageData(0, 0, width, height);
-        const sharpened = applySharpenFilter(imgData, visSharpen);
-        visTempCtx.putImageData(sharpened, 0, 0);
-      }
-
-      // 2. Pre-process RGB image (apply saturation)
-      const rgbTempCanvas = document.createElement('canvas');
-      rgbTempCanvas.width = width;
-      rgbTempCanvas.height = height;
-      const rgbTempCtx = rgbTempCanvas.getContext('2d')!;
-      
-      rgbTempCtx.filter = `saturate(${Math.round(rgbSaturation * 100)}%)`;
-      rgbTempCtx.drawImage(imgRgb, 0, 0);
-      rgbTempCtx.filter = 'none';
-
-      // 3. Create Fusion canvas and perform blending
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d')!;
-
-      // Draw the processed RGB image
-      ctx.drawImage(rgbTempCanvas, 0, 0);
-      
-      // Draw the processed VIS image on top with luminosity blend mode
-      ctx.globalCompositeOperation = 'luminosity';
-      ctx.globalAlpha = fusionOpacity;
-      ctx.drawImage(visTempCanvas, 0, 0);
-      
-      // Reset context
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 1.0;
-      
-      const applyWatermark = (context: CanvasRenderingContext2D, w: number, h: number) => {
-        context.save();
-        context.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        context.fillRect(w - 450, h - 30, 450, 30);
-        context.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        context.font = '12px "JetBrains Mono", monospace, sans-serif';
-        context.textAlign = 'right';
-        context.textBaseline = 'middle';
-        context.fillText('Sources: EUMETSAT / MTG | MTG-RGB-HD par Quentin Rey', w - 10, h - 15);
-        context.restore();
-      };
-
-      // Apply watermark to fusion canvas
-      // (Moved inside getBlob for individual application)
-
-      const drawOverlays = async (context: CanvasRenderingContext2D, w: number, h: number) => {
-        // Draw Borders
-        if (mapOptions.showBorders && map1BordersRef.current) {
-          const data = (map1BordersRef.current.toGeoJSON() as any);
-          context.save();
-          context.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-          context.lineWidth = Math.max(1, Math.round(1.0 * (w / rect.width)));
-          context.beginPath();
-          
-          const drawLineString = (coords: any[]) => {
-            coords.forEach((coord, i) => {
-              const projected = L.CRS.EPSG3857.project(L.latLng(coord[1], coord[0]));
-              const xPercentage = (projected.x - sw.x) / (ne.x - sw.x);
-              const yPercentage = (ne.y - projected.y) / (ne.y - sw.y);
-              const canvasX = xPercentage * w;
-              const canvasY = yPercentage * h;
-              if (i === 0) context.moveTo(canvasX, canvasY);
-              else context.lineTo(canvasX, canvasY);
-            });
-          };
-
-          data.features?.forEach((feature: any) => {
-            if (feature.geometry.type === 'Polygon') {
-              feature.geometry.coordinates.forEach(drawLineString);
-            } else if (feature.geometry.type === 'MultiPolygon') {
-              feature.geometry.coordinates.forEach((polygon: any[]) => {
-                polygon.forEach(drawLineString);
-              });
-            } else if (feature.geometry.type === 'LineString') {
-              drawLineString(feature.geometry.coordinates);
-            }
-          });
-          context.stroke();
-          context.restore();
-        }
-
-        // Draw Cities (CartoDB tiles)
-        if (mapOptions.showCities) {
-           const zoom = Math.round(map1Instance.current!.getZoom());
-           const bounds = map1Instance.current!.getPixelBounds();
-           const tileSize = 256;
-           
-           const minX = Math.floor(bounds.min!.x / tileSize);
-           const maxX = Math.floor(bounds.max!.x / tileSize);
-           const minY = Math.floor(bounds.min!.y / tileSize);
-           const maxY = Math.floor(bounds.max!.y / tileSize);
-
-           const promises = [];
-           for (let x = minX; x <= maxX; x++) {
-             for (let y = minY; y <= maxY; y++) {
-               promises.push(new Promise<void>((resolve) => {
-                 const img = new Image();
-                 img.crossOrigin = 'anonymous';
-                 img.onload = () => {
-                   const px = x * tileSize - bounds.min!.x;
-                   const py = y * tileSize - bounds.min!.y;
-                   
-                   const containerWidth = bounds.max!.x - bounds.min!.x;
-                   const containerHeight = bounds.max!.y - bounds.min!.y;
-                   
-                   const canvasX = (px / containerWidth) * w;
-                   const canvasY = (py / containerHeight) * h;
-                   const canvasTileSizeX = (tileSize / containerWidth) * w;
-                   const canvasTileSizeY = (tileSize / containerHeight) * h;
-
-                   context.globalAlpha = 0.8;
-                   context.drawImage(img, canvasX, canvasY, canvasTileSizeX, canvasTileSizeY);
-                   context.globalAlpha = 1.0;
-                   resolve();
-                 };
-                 img.onerror = () => resolve(); // Ignore failed tiles
-                 img.src = `https://a.basemaps.cartocdn.com/dark_only_labels/${zoom}/${x}/${y}.png`;
-               }));
-             }
-           }
-           await Promise.all(promises);
-        }
-      };
-
-      const getBlob = async (canvasObj: HTMLCanvasElement): Promise<Blob> => {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = width;
-        tempCanvas.height = height;
-        const tempCtx = tempCanvas.getContext('2d')!;
-        
-        tempCtx.drawImage(canvasObj, 0, 0);
-
-        await drawOverlays(tempCtx, width, height);
-        applyWatermark(tempCtx, width, height);
-
-        return new Promise(resolve => tempCanvas.toBlob(b => resolve(b!), 'image/png'));
-      };
-
-      const [blobVis, blobRgb, blobFusion] = await Promise.all([
-        getBlob(visTempCanvas),
-        getBlob(rgbTempCanvas),
-        getBlob(canvas)
-      ]);
-
-      const safeTimeStr = currentTime.replace('T', '_').replace(/:/g, '-');
-
-      const zip = new JSZip();
-      zip.file(`1_VIS_0.6_${safeTimeStr}.png`, blobVis);
-      zip.file(`2_RGB_${safeTimeStr}.png`, blobRgb);
-      zip.file(`3_FUSION_RGB_VIS_${safeTimeStr}.png`, blobFusion);
-
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      saveAs(zipBlob, `MTG_SATELLITE_PACK_${safeTimeStr}.zip`);
-
+      const map = map2Instance.current;
+      const exportCenter = map.getCenter();
+      await downloadSatellitePack({
+        requestedKinds,
+        map,
+        mapContainer: map2Ref.current,
+        currentTime,
+        activeLayers,
+        irStyle,
+        visBrightness,
+        visContrast,
+        rgbSaturation,
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        exportSolarElevation: getSolarElevation(new Date(currentTime + 'Z'), exportCenter.lat, exportCenter.lng),
+        mapOptions,
+        map1BordersLayer: map1BordersRef.current,
+        cityLoadPromise: cityLoadPromiseRef.current,
+        getVisibleCityFeatures,
+      });
     } catch (err) {
-      console.error("Export failed:", err);
+      console.error('Export failed:', err);
       alert("L'exportation a échoué. Veuillez vérifier votre connexion réseau.");
     } finally {
       setIsExporting(false);
     }
   };
 
-  // Dynamic sharpen kernel matrix elements:
-  // surrounding cells: -visSharpen
-  // center cell: 1 + 4 * visSharpen
-  const sharpenMatrix = `0 ${-visSharpen} 0 ${-visSharpen} ${1 + 4 * visSharpen} ${-visSharpen} 0 ${-visSharpen} 0`;
-
   return (
     <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
-      {/* Header */}
       <div className="h-16 flex items-center justify-between px-3 sm:px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0">
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
@@ -628,137 +189,33 @@ export default function DualMapViewer() {
           </div>
           <div className="flex flex-col">
             <h1 className="text-base sm:text-lg font-medium tracking-tight text-slate-100 whitespace-nowrap">MTG-RGB-HD</h1>
-            <p className="hidden md:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6 & RGB</p>
+            <p className="hidden md:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6, RGB et Sandwich(IR)</p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-2 sm:gap-4 relative">
-          {/* Custom Date/Time Picker */}
-          <div className="relative" ref={datePickerRef}>
-            <button
-              onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
-              className="flex items-center gap-2 bg-[#222] border border-white/10 rounded-md px-3 py-1.5 text-sm text-white hover:bg-[#333] transition-colors"
-            >
-              <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="hidden sm:inline">{currentTime.split('T')[0]} à {currentTime.split('T')[1].replace(':', 'h')} UTC</span>
-              <span className="sm:hidden">{currentTime.split('T')[1].replace(':', 'h')} UTC</span>
-            </button>
-            
-            {isDatePickerOpen && (
-              <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a1a] border border-white/10 rounded-md shadow-2xl p-4 z-50">
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-slate-400 mb-1.5 block">Date</label>
-                    <input 
-                      type="date"
-                      max={getLatestAvailableTime().split('T')[0]}
-                      value={currentTime.split('T')[0]}
-                      onChange={(e) => {
-                        if(e.target.value) handleTimeChange(`${e.target.value}T${currentTime.split('T')[1]}`);
-                      }}
-                      className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert cursor-pointer"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <label className="text-xs font-medium text-slate-400 mb-1.5 block">Heure</label>
-                      <select 
-                        value={currentTime.split('T')[1].split(':')[0]}
-                        onChange={(e) => {
-                          const currentMins = currentTime.split('T')[1].split(':')[1];
-                          handleTimeChange(`${currentTime.split('T')[0]}T${e.target.value}:${currentMins}`);
-                        }}
-                        className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
-                      >
-                        {Array.from({length: 24}).map((_, i) => {
-                          const h = String(i).padStart(2, '0');
-                          return <option key={h} value={h}>{h}h</option>
-                        })}
-                      </select>
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-xs font-medium text-slate-400 mb-1.5 block">Minute</label>
-                      <select 
-                        value={currentTime.split('T')[1].split(':')[1]}
-                        onChange={(e) => {
-                          const currentHour = currentTime.split('T')[1].split(':')[0];
-                          handleTimeChange(`${currentTime.split('T')[0]}T${currentHour}:${e.target.value}`);
-                        }}
-                        className="w-full bg-[#222] border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-blue-500 cursor-pointer"
-                      >
-                        {['00', '10', '20', '30', '40', '50'].map(m => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  
-                  <button
-                    onClick={() => handleTimeChange(getLatestAvailableTime())}
-                    className="w-full mt-2 bg-[#333] hover:bg-[#444] border border-white/10 rounded-md px-3 py-2 text-sm text-white transition-colors"
-                  >
-                    Aller au plus récent
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          
-          <div className="relative" ref={settingsRef}>
-            <button
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="flex items-center justify-center w-9 h-9 bg-[#222] border border-white/10 rounded-md hover:bg-[#333] transition-colors"
-              title="Options"
-            >
-              <Settings className="w-4 h-4 text-slate-300" />
-            </button>
-            
-            {isSettingsOpen && (
-              <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a1a] border border-white/10 rounded-md shadow-2xl p-4 z-50">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-white">Options d'affichage</h3>
-                  <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-white">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                
-                <div className="space-y-3">
-                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
-                    <input 
-                      type="checkbox" 
-                      checked={mapOptions.showBorders}
-                      onChange={(e) => setMapOptions({...mapOptions, showBorders: e.target.checked})}
-                      className="w-4 h-4 rounded-sm accent-blue-500"
-                    />
-                    Affichage des frontières
-                  </label>
-                  
-                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer hover:text-white transition-colors">
-                    <input 
-                      type="checkbox" 
-                      checked={mapOptions.showCities}
-                      onChange={(e) => setMapOptions({...mapOptions, showCities: e.target.checked})}
-                      className="w-4 h-4 rounded-sm accent-blue-500"
-                    />
-                    Affichage des villes
-                  </label>
-                </div>
-              </div>
-            )}
-          </div>
 
-          <div className="relative">
-            <button
-              onClick={() => setIsInfoOpen(true)}
-              className="flex items-center justify-center w-9 h-9 bg-[#222] border border-white/10 rounded-md hover:bg-[#333] transition-colors"
-              title="Informations"
-            >
-              <Info className="w-4 h-4 text-slate-300" />
-            </button>
-          </div>
+        <div className="flex items-center gap-2 sm:gap-4 relative">
+          <DateTimePopover
+            currentTime={currentTime}
+            datePickerRef={datePickerRef}
+            isOpen={isDatePickerOpen}
+            onLatest={() => handleTimeChange(getLatestAvailableTime())}
+            onTimeChange={handleTimeChange}
+            onToggle={() => setIsDatePickerOpen(!isDatePickerOpen)}
+          />
+
+          <SettingsPopover
+            isOpen={isSettingsOpen}
+            mapOptions={mapOptions}
+            onClose={() => setIsSettingsOpen(false)}
+            onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
+            onUpdate={setMapOptions}
+            settingsRef={settingsRef}
+          />
+
+          <HeaderInfoButton onClick={() => setIsInfoOpen(true)} />
 
           <button
-            onClick={downloadPack}
+            onClick={openDownloadModal}
             disabled={isExporting}
             className="flex items-center justify-center gap-2 bg-white text-black hover:bg-slate-200 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
           >
@@ -769,220 +226,120 @@ export default function DualMapViewer() {
       </div>
 
       {/* Maps Layout */}
-      <div className="flex-1 flex flex-col md:flex-row w-full min-h-0 relative z-0">
-        {/* Map 1: VIS */}
-        <div className="hidden md:block flex-1 relative border-r border-white/10 z-0 h-full">
-          <div className="absolute top-4 left-4 z-[400] bg-black/60 backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border border-white/10 pointer-events-none text-white shadow-xl">
-            Couche: VIS 0.6 µm
-          </div>
-          <div ref={map1Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
-        </div>
-        
-        {/* Map 2: RGB */}
-        <div className="flex-1 relative z-0 h-full">
-          <div className="absolute top-4 left-4 z-[400] bg-black/60 backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border border-white/10 pointer-events-none text-white shadow-xl">
-            {isFusionMode ? 'Couche: FUSION (RGB + VIS)' : 'Couche: RGB Natural'}
-          </div>
-          
-          <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
-            <label 
-              className={`flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md border text-xs font-medium cursor-pointer shadow-xl transition-colors ${
-                isFusionMode 
-                  ? 'border-blue-500 text-blue-400 hover:bg-black/80' 
-                  : 'border-white/10 text-white hover:bg-black/80'
-              }`}
-              title="Visualisation HD (Superposition VIS 0.6 µm + RGB)"
-            >
-              <input 
-                type="checkbox" 
-                checked={isFusionMode}
-                onChange={(e) => setIsFusionMode(e.target.checked)}
-                className="w-3.5 h-3.5 rounded-sm accent-blue-500 cursor-pointer"
-              />
-              HD
-            </label>
+      <div className="flex-1 w-full min-h-0 relative z-0">
+        <div className="w-full h-full relative z-0">
+          <div
+            ref={map1Ref}
+            className="absolute -left-[99999px] top-0 w-px h-px opacity-0 pointer-events-none"
+            aria-hidden="true"
+          />
 
-            <div className="relative">
-              <button
-                onClick={() => setIsAdjustmentsOpen(!isAdjustmentsOpen)}
-                className={`flex items-center justify-center w-8 h-8 rounded-md border text-xs font-medium shadow-xl transition-colors bg-black/60 backdrop-blur-md hover:bg-black/80 ${
-                  isAdjustmentsOpen ? 'border-blue-500 text-blue-400' : 'border-white/10 text-white'
-                }`}
-                title="Ajustements d'image (Nuages HD)"
-              >
-                <Sliders className="w-4 h-4" />
-              </button>
+          <Map2TitleBadge activeLayers={activeLayers} />
 
-              {isAdjustmentsOpen && (
-                <div 
-                  ref={adjustmentsRef}
-                  className="absolute right-0 top-full mt-2 w-72 bg-[#1a1a1a]/95 backdrop-blur-md border border-white/10 rounded-lg shadow-2xl p-4 z-[500] text-slate-200"
-                >
-                  <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
-                    <span className="text-xs font-semibold text-white tracking-wider uppercase">Optimisation des Nuages</span>
-                    <button 
-                      onClick={() => {
-                        setVisBrightness(1.05);
-                        setVisContrast(1.15);
-                        setVisSharpen(false);
-                        setRgbSaturation(1.15);
-                        setFusionOpacity(0.55);
-                      }}
-                      className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors uppercase font-medium"
-                    >
-                      Réinitialiser
-                    </button>
-                  </div>
-
-                  <div className="space-y-4">
-                    {/* VIS Settings */}
-                    <div>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Contraste VIS (Nuages)</span>
-                        <span className="text-white font-mono">{visContrast.toFixed(2)}x</span>
-                      </div>
-                      <input 
-                        type="range"
-                        min="0.6"
-                        max="2.0"
-                        step="0.05"
-                        value={visContrast}
-                        onChange={(e) => setVisContrast(parseFloat(e.target.value))}
-                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Luminosité VIS (Nuages)</span>
-                        <span className="text-white font-mono">{visBrightness.toFixed(2)}x</span>
-                      </div>
-                      <input 
-                        type="range"
-                        min="0.6"
-                        max="1.8"
-                        step="0.05"
-                        value={visBrightness}
-                        onChange={(e) => setVisBrightness(parseFloat(e.target.value))}
-                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                      />
-                    </div>
-
-                    {/* Sharpen Intensity Slider */}
-                    <div className="border-t border-white/5 pt-2">
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Netteté HD (Convolution)</span>
-                        <span className="text-white font-mono">{visSharpen === 0 ? 'Désactivé' : `${Math.round(visSharpen * 100)}%`}</span>
-                      </div>
-                      <input 
-                        type="range"
-                        min="0"
-                        max="1.5"
-                        step="0.05"
-                        value={visSharpen}
-                        onChange={(e) => setVisSharpen(parseFloat(e.target.value))}
-                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                      />
-                    </div>
-
-                    {/* RGB Settings */}
-                    <div className="border-t border-white/5 pt-2">
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Saturation Couleurs (RGB)</span>
-                        <span className="text-white font-mono">{Math.round(rgbSaturation * 100)}%</span>
-                      </div>
-                      <input 
-                        type="range"
-                        min="0.5"
-                        max="2.0"
-                        step="0.05"
-                        value={rgbSaturation}
-                        onChange={(e) => setRgbSaturation(parseFloat(e.target.value))}
-                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                      />
-                    </div>
-
-                    {/* Fusion Opacity (Only when fusion is active) */}
-                    {isFusionMode && (
-                      <div className="border-t border-white/5 pt-2">
-                        <div className="flex justify-between text-xs mb-1">
-                          <span className="text-slate-400">Intensité de Fusion (Luminosité)</span>
-                          <span className="text-white font-mono">{Math.round(fusionOpacity * 100)}%</span>
-                        </div>
-                        <input 
-                          type="range"
-                          min="0.1"
-                          max="1.0"
-                          step="0.05"
-                          value={fusionOpacity}
-                          onChange={(e) => setFusionOpacity(parseFloat(e.target.value))}
-                          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+            <Map2ControlBar
+              activeLayers={activeLayers}
+              adjustmentsRef={adjustmentsRef}
+              autoReduceVisAtNight={autoReduceVisAtNight}
+              effectiveHybridVisOpacity={effectiveHybridVisOpacity}
+              effectiveSandwichOpacity={effectiveSandwichOpacity}
+              irStyle={irStyle}
+              isAdjustmentsOpen={isAdjustmentsOpen}
+              onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
+              onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
+              onIrStyleChange={setIrStyle}
+              onResetAdjustments={resetAdjustments}
+              onRgbHdOpacityChange={setRgbHdOpacity}
+              onRgbSaturationChange={setRgbSaturation}
+              onSandwichOpacityChange={setSandwichOpacity}
+              onToggleAdjustments={() => setIsAdjustmentsOpen((prev) => !prev)}
+              onVisBrightnessChange={setVisBrightness}
+              onVisContrastChange={setVisContrast}
+              rgbHdOpacity={rgbHdOpacity}
+              rgbSaturation={rgbSaturation}
+              sandwichOpacity={sandwichOpacity}
+              solarElevation={solarElevation}
+              visBrightness={visBrightness}
+              visContrast={visContrast}
+            />
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
+
+          {isMapLoading && (
+            <div className="absolute inset-0 z-[390] pointer-events-none flex items-end justify-center pb-6">
+              <div className="bg-black/65 backdrop-blur-md border border-white/15 rounded-lg px-4 py-3 text-xs text-slate-100 shadow-2xl w-[280px]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-300" />
+                    <span>Chargement des tuiles</span>
+                  </div>
+                  <span className="text-blue-200 font-mono tabular-nums">{loadingProgress}%</span>
+                </div>
+
+                <div className="mt-2 h-1.5 w-full rounded bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-400 transition-[width] duration-150"
+                    style={{ width: `${loadingProgress}%` }}
+                  />
+                </div>
+
+                {loadingTileCount > 0 && (
+                  <div className="mt-1 text-[11px] text-slate-300 font-mono">Tuiles en attente: {loadingTileCount}</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {isInfoOpen && (
-        <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div ref={infoRef} className="bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-6 max-w-md w-full">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-white">À propos</h3>
-              <button onClick={() => setIsInfoOpen(false)} className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/10 transition-colors">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="space-y-4 text-sm text-slate-300 leading-relaxed">
-              <p>
-                Cette application permet de visualiser, comparer et superposer les images satellites du canal visible (VIS) et du composite True Color (RGB) issues de Meteosat Third Generation (MTG). Elle offre également la possibilité d'exporter ces vues en haute résolution.
-              </p>
-              <p>
-                <strong className="text-white">MTG-RGB-HD</strong> est un outil créé par <strong className="text-white">Quentin Rey</strong>.
-              </p>
-              <p>
-                <strong className="text-white">Sources :</strong><br />
-                Images satellites fournies par <a href="https://www.eumetsat.int/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">EUMETSAT / Meteosat Third Generation (MTG)</a>.
-              </p>
-            </div>
-            
-            <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-              Version 1.2.2
-            </div>
-          </div>
-        </div>
-      )}
+      <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
 
-      {/* SVG filter for hardware-accelerated image sharpening */}
-      <svg className="absolute w-0 h-0 pointer-events-none" style={{ position: 'absolute', width: 0, height: 0 }}>
-        <defs>
-          <filter id="sharpen-filter">
-            <feConvolveMatrix
-              order="3"
-              kernelMatrix={sharpenMatrix}
-              preserveAlpha="true"
-            />
-          </filter>
-        </defs>
-      </svg>
+      <DownloadModal
+        availableExportKinds={availableExportKinds}
+        downloadModalRef={downloadModalRef}
+        isExporting={isExporting}
+        isOpen={isDownloadModalOpen}
+        onClose={() => setIsDownloadModalOpen(false)}
+        onConfirm={() => {
+          if (selectedExportKinds.length === 0) return;
+          setIsDownloadModalOpen(false);
+          void downloadPack(selectedExportKinds);
+        }}
+        onToggleKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}
+        selectedExports={selectedExports}
+        selectedExportKinds={selectedExportKinds}
+      />
 
       {/* Dynamic stylesheets to apply adjustments in real-time */}
       <style>{`
+        .city-label {
+          color: rgba(255, 255, 255, 0.88);
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
+          white-space: nowrap;
+          pointer-events: none;
+          font-family: Inter, system-ui, -apple-system, sans-serif;
+          font-weight: 500;
+          transform: translate(4px, -2px);
+        }
+        .city-label-sm { font-size: 10px; opacity: 0.82; }
+        .city-label-md { font-size: 11px; opacity: 0.88; }
+        .city-label-lg { font-size: 12px; opacity: 0.95; }
         .vis-layer-tiles {
-          filter: brightness(${visBrightness}) contrast(${visContrast}) ${visSharpen > 0 ? 'url(#sharpen-filter)' : ''};
+          filter: brightness(${visBrightness}) contrast(${visContrast});
         }
         .rgb-layer-tiles {
           filter: saturate(${rgbSaturation});
         }
-        .fusion-layer-tiles {
-          filter: brightness(${visBrightness}) contrast(${visContrast}) ${visSharpen > 0 ? 'url(#sharpen-filter)' : ''};
+        .ir-overlay-layer-tiles {
+          mix-blend-mode: color;
+          filter: saturate(1.2) contrast(1.08);
+        }
+        .ir-cloud-only-layer-tiles {
+          mix-blend-mode: color;
+          filter: saturate(1.2) contrast(1.08);
+        }
+        .vis-overlay-layer-tiles {
+          mix-blend-mode: luminosity;
+          filter: brightness(${visBrightness}) contrast(${visContrast});
         }
       `}</style>
     </div>

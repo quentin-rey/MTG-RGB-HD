@@ -1,51 +1,71 @@
 # MTG-RGB-HD
 
-MTG-RGB-HD is a specialized web application for synchronizing, comparing, and exporting high-resolution satellite imagery from EUMETSAT's Meteosat Third Generation (MTG). 
+MTG-RGB-HD est une application web de visualisation et d'export d'images satellites MTG (EUMETSAT), centrée sur la France, avec fusion multi-couches en temps reel.
 
-## Features
-- **Dual Map Synchronization**: Automatically synchronizes pan and zoom across two independent map views.
-- **VIS 0.6 & RGB True Color**: Provides instant comparison between the visible channel and true color composite.
-- **Adjustable HD Sharpening (Convolution)**: Advanced real-time image sharpening with an intensity slider (from 0% up to 150%) powered by custom canvas 3x3 convolution kernels.
-- **Image Export**: Allows users to download a `.zip` pack containing the visual representation of both channels, along with a transparent blended layer (with improved brightness, contrast, and custom sharpening intensity), complete with perfectly aligned borders and city overlays (rendered at precise 1:1 pixel-perfect resolution matching your exact screen framing).
-- **Time Selection**: Select and view past data by navigating historical records (in 10-minute increments, matching the EUMETSAT update cycle).
-- **Overlay Customization**: Toggle political borders and city names directly from the settings menu.
+## Fonctionnalites
+- Panneau unique par couches actives: activation/desactivation independante de RGB, VIS et IR.
+- Combinaisons prises en charge:
+   - RGB
+   - VIS
+   - IR
+   - RGB + VIS (fusion luminosite)
+   - VIS + IR (Sandwich)
+   - RGB + IR (fusion cloud-only)
+   - RGB + VIS + IR (hybride)
+- Ajustements image contextuels selon les couches actives:
+   - contraste et luminosite VIS
+   - saturation RGB
+   - apport VIS sur RGB (quand pertinent)
+   - intensite IR/Sandwich
+   - style IR 10.5
+   - reduction automatique du VIS la nuit
+- Loader visuel de tuiles avec pourcentage et tuiles en attente.
+- Export ZIP preselectionne selon les couches actives (VIS, RGB, IR, HD, Sandwich, Hybride).
+- Selection temporelle en pas de 10 minutes.
+- Overlays: frontieres, departements France, villes.
 
-## Tech Stack
-- **React 19**
-- **Vite**
-- **Leaflet**: Core mapping engine and WMS tile rendering.
-- **JSZip & FileSaver**: Client-side archiving and file generation.
-- **Tailwind CSS**: Rapid UI styling and layout design.
-- **Lucide Icons**: Beautiful, clean iconography.
+## Optimisations de chargement
+- Vue initiale resserree sur la France (bounds dedies).
+- Chargement evite sur la carte technique cachee (pas de double trafic tuiles).
+- keepBuffer + updateWhenIdle sur les couches tuiles.
+- Cache LRU des tuiles cloud-only IR pour les modes hybrides.
+- Rendu des labels villes uniquement sur la carte visible.
 
-## Getting Started
+## Stack technique
+- React 19
+- Vite
+- Leaflet (WMS)
+- JSZip + file-saver
+- Tailwind CSS
+- Lucide Icons
 
-### Prerequisites
-- Node.js (version 18+ recommended)
-- npm or yarn
+## Installation
+Prerequis:
+- Node.js 18+
+- npm
 
-### Installation
-1. Clone the repository
-2. Install the dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
-4. Access the application at `http://localhost:3000` (or as indicated in your terminal).
+Commandes:
+```bash
+npm install
+npm run dev
+```
 
-## Usage
-- **Navigation**: Click and drag to pan around the map. Scroll to zoom in and out. Both panels will remain perfectly synchronized.
-- **Historical Data**: Click the time selector (top right) to explore older captures. Only timestamps corresponding to actual captures (every 10 minutes) will fetch valid images.
-- **Settings**: Click the gear icon to toggle boundaries and city names.
-- **Download**: Click "Télécharger les images" to download a ZIP containing high-resolution views of your current framing.
+Checks qualite:
+```bash
+npm run lint
+```
 
-## Credits & Sources
-- Built by **Quentin Rey**
-- Satellite imagery provided by **EUMETSAT / Meteosat Third Generation (MTG)** via their WMS services.
-- Mapping orientation and city labels by **CARTO** and **OpenStreetMap contributors**.
+## Utilisation
+1. Choisir la date/heure (UTC) dans le selecteur en haut.
+2. Activer les couches RGB, VIS, IR depuis la barre de controle.
+3. Ouvrir Ajustements pour modifier les parametres disponibles pour la combinaison courante.
+4. Activer les overlays via les Parametres (roue crantee).
+5. Ouvrir la modale de telechargement pour choisir les exports proposes et generer un ZIP.
 
-## License
-This project is for educational and informational purposes. Satellite data is subject to EUMETSAT's terms of use.
+## Credits et sources
+- Auteur: Quentin Rey
+- Imagerie: EUMETSAT / Meteosat Third Generation (MTG)
+- Fond de carte: CARTO, OpenStreetMap contributors
+
+## Licence
+Projet a but educatif et informatif. L'utilisation des donnees satellites reste soumise aux conditions EUMETSAT.
