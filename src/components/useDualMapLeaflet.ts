@@ -125,6 +125,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const isVisOverlayEnabled = activeLayers.vis && baseLayer !== 'vis';
   const isIrOverlayEnabled = activeLayers.ir && baseLayer !== 'ir';
   const currentVisOverlayOpacity = activeLayers.rgb ? effectiveHybridVisOpacity : effectiveSandwichOpacity;
+  const borderStrokeOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
+  const departmentsStrokeOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
 
   const getVisibleCityFeatures = (bounds: L.LatLngBounds, zoom: number): CityFeature[] => {
     const allCities = cityFeaturesRef.current;
@@ -862,11 +864,11 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     if (!map1BordersRef.current) {
       map1BordersRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(255, 255, 255, 0.4)', weight: 1, fillOpacity: 0 },
+        style: { color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 },
         interactive: false,
       });
       map2BordersRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(255, 255, 255, 0.4)', weight: 1, fillOpacity: 0 },
+        style: { color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 },
         interactive: false,
       });
 
@@ -897,11 +899,11 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     if (!map1DepartmentsRef.current) {
       map1DepartmentsRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(225, 225, 230, 0.9)', weight: 1, fillOpacity: 0 },
+        style: { color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 },
         interactive: false,
       });
       map2DepartmentsRef.current = L.geoJSON(undefined, {
-        style: { color: 'rgba(225, 225, 230, 0.9)', weight: 1, fillOpacity: 0 },
+        style: { color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 },
         interactive: false,
       });
 
@@ -917,6 +919,11 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
           });
       }
     }
+
+    map1BordersRef.current?.setStyle({ color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 });
+    map2BordersRef.current?.setStyle({ color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 });
+    map1DepartmentsRef.current?.setStyle({ color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 });
+    map2DepartmentsRef.current?.setStyle({ color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 });
 
     const refreshCityLabels = async () => {
       if (!map2CitiesRef.current) return;

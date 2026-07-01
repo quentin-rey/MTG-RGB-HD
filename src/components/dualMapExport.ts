@@ -361,8 +361,9 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
   const drawOverlays = async (context: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
     if (mapOptions.showBorders && map1BordersLayer) {
       const data = map1BordersLayer.toGeoJSON() as any;
+      const bordersOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
       context.save();
-      context.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
       context.lineWidth = Math.max(1, Math.round(canvasWidth / rect.width));
       context.beginPath();
 

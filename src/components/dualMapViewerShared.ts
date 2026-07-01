@@ -19,10 +19,12 @@ export const STORAGE_KEYS = {
   activeLayers: 'mtg_active_layers',
   autoReduceVisAtNight: 'mtg_auto_reduce_vis_night',
   irStyle: 'mtg_ir_style',
+  language: 'mtg_language',
   mapOptions: 'mtg_map_options',
   rgbHdOpacity: 'mtg_rgb_hd_opacity',
   rgbSaturation: 'mtg_rgb_saturation',
   sandwichOpacity: 'mtg_sandwich_opacity',
+  themeMode: 'mtg_theme_mode',
   visBrightness: 'mtg_vis_brightness',
   visContrast: 'mtg_vis_contrast',
 } as const;
@@ -40,6 +42,8 @@ export type CityFeature = {
 export type IrStyle = (typeof IR_STYLES)[number]['id'];
 export type ExportKind = 'vis' | 'rgb' | 'ir' | 'hd' | 'sandwich' | 'hybrid';
 export type MapOptions = {
+  bordersOpacity: number;
+  franceDepartmentsOpacity: number;
   showBorders: boolean;
   showCities: boolean;
   showFranceDepartments: boolean;
@@ -62,13 +66,19 @@ export function sanitizeActiveLayers(input: ActiveLayers): ActiveLayers {
   return { ...DEFAULT_ACTIVE_LAYERS };
 }
 
-export function getSinglePanelTitle(layers: ActiveLayers): string {
-  const labels: string[] = [];
-  if (layers.rgb) labels.push('RGB');
-  if (layers.vis) labels.push('VIS');
-  if (layers.ir) labels.push('Sandwich(IR)');
-  if (labels.length === 0) return 'Couche: Aucune';
-  return `Couche: ${labels.join(' + ')}`;
+export function getSinglePanelTitle(layers: ActiveLayers, localized: {
+  layerPrefix: string;
+  none: string;
+  rgb: string;
+  vis: string;
+  ir: string;
+}): string {
+  const activeLabels: string[] = [];
+  if (layers.rgb) activeLabels.push(localized.rgb);
+  if (layers.vis) activeLabels.push(localized.vis);
+  if (layers.ir) activeLabels.push(localized.ir);
+  if (activeLabels.length === 0) return localized.none;
+  return `${localized.layerPrefix} ${activeLabels.join(' + ')}`;
 }
 
 export function getAvailableExportKindsFromLayers(layers: ActiveLayers): ExportKind[] {
@@ -82,13 +92,20 @@ export function getAvailableExportKindsFromLayers(layers: ActiveLayers): ExportK
   return kinds;
 }
 
-export function getExportLabel(kind: ExportKind): string {
-  if (kind === 'vis') return 'VIS 0.6';
-  if (kind === 'rgb') return 'RGB True Color';
-  if (kind === 'ir') return 'IR 10.5';
-  if (kind === 'hd') return 'RGB + VIS (HD)';
-  if (kind === 'hybrid') return 'VIS + RGB + Sandwich(IR)';
-  return 'Sandwich VIS + IR';
+export function getExportLabel(kind: ExportKind, labels: {
+  vis: string;
+  rgb: string;
+  ir: string;
+  hd: string;
+  hybrid: string;
+  sandwich: string;
+}): string {
+  if (kind === 'vis') return labels.vis;
+  if (kind === 'rgb') return labels.rgb;
+  if (kind === 'ir') return labels.ir;
+  if (kind === 'hd') return labels.hd;
+  if (kind === 'hybrid') return labels.hybrid;
+  return labels.sandwich;
 }
 
 export function readStoredNumber(key: string, fallback: number): number {

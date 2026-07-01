@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Download, Loader2 } from 'lucide-react';
+import { Download, Loader2, Monitor, Moon, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
   getAvailableExportKindsFromLayers,
@@ -14,6 +14,7 @@ import {
   safeSetLocalStorage,
   type ExportKind,
 } from './dualMapViewerShared';
+import { getTranslator, type Language } from './i18n';
 import { downloadSatellitePack } from './dualMapExport';
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
@@ -26,6 +27,8 @@ import {
 } from './dualMapViewerPanels';
 import { useImageAdjustments } from './useImageAdjustments';
 import { useViewerPanelsState } from './useViewerPanelsState';
+
+type ThemeMode = 'dark' | 'light' | 'auto';
 
 export default function DualMapViewer() {
   const [isExporting, setIsExporting] = useState(false);
@@ -41,6 +44,21 @@ export default function DualMapViewer() {
     const stored = readStoredJson<ActiveLayers>(STORAGE_KEYS.activeLayers, DEFAULT_ACTIVE_LAYERS);
     return sanitizeActiveLayers(stored);
   });
+  const [language, setLanguage] = useState<Language>(() => {
+    const stored = readStoredJson<Language>(STORAGE_KEYS.language, 'fr');
+    return stored === 'en' ? 'en' : 'fr';
+  });
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const stored = readStoredJson<ThemeMode>(STORAGE_KEYS.themeMode, 'auto');
+    return stored === 'dark' || stored === 'light' || stored === 'auto' ? stored : 'auto';
+  });
+  const [resolvedTheme, setResolvedTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      return 'light';
+    }
+    return 'dark';
+  });
+  const t = getTranslator(language);
 
   const {
     adjustmentsRef,
@@ -75,9 +93,37 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.activeLayers, JSON.stringify(activeLayers));
   }, [activeLayers]);
+
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.language, JSON.stringify(language));
+  }, [language]);
+
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.themeMode, JSON.stringify(themeMode));
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (themeMode === 'dark' || themeMode === 'light') {
+      setResolvedTheme(themeMode);
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const syncFromSystem = () => setResolvedTheme(mediaQuery.matches ? 'light' : 'dark');
+    syncFromSystem();
+
+    mediaQuery.addEventListener('change', syncFromSystem);
+    return () => mediaQuery.removeEventListener('change', syncFromSystem);
+  }, [themeMode]);
   
   const [mapOptions, setMapOptions] = useState<MapOptions>(() => {
-    const defaults: MapOptions = { showBorders: false, showCities: false, showFranceDepartments: false };
+    const defaults: MapOptions = {
+      bordersOpacity: 0.4,
+      franceDepartmentsOpacity: 0.9,
+      showBorders: false,
+      showCities: false,
+      showFranceDepartments: false,
+    };
     const stored = readStoredJson<MapOptions>(STORAGE_KEYS.mapOptions, defaults);
     return { ...defaults, ...stored };
   });
@@ -179,35 +225,154 @@ export default function DualMapViewer() {
       });
     } catch (err) {
       console.error('Export failed:', err);
-      alert("L'exportation a échoué. Veuillez vérifier votre connexion réseau.");
+      alert(t('exportFailedAlert'));
     } finally {
       setIsExporting(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
-      <div className="min-h-16 flex items-center justify-between px-3 py-2 sm:px-6 bg-[#111] border-b border-white/10 shadow-sm z-10 shrink-0 gap-3">
+    <div className={`theme-${resolvedTheme} flex flex-col h-screen w-full font-sans overflow-hidden ${
+      resolvedTheme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-[#0a0a0a] text-white'
+    }`}>
+      <div className={`min-h-16 flex items-center justify-between px-3 py-2 sm:px-6 border-b shadow-sm z-10 shrink-0 gap-2 sm:gap-3 ${
+        resolvedTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-[#111] border-white/10'
+      }`}>
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 rounded-full bg-slate-800 border border-white/15 flex items-center justify-center shrink-0">
             <span className="text-base leading-none" aria-hidden="true">🛰️</span>
           </div>
           <div className="flex flex-col min-w-0">
-            <h1 className="text-base sm:text-lg font-medium tracking-tight text-slate-100 whitespace-nowrap">MTG-RGB-HD</h1>
-            <p className="hidden lg:block text-xs text-slate-400 whitespace-nowrap">Visualisation VIS 0.6, RGB et Sandwich(IR)</p>
+            <h1 className={`text-base sm:text-lg font-medium tracking-tight whitespace-nowrap ${
+              resolvedTheme === 'light' ? 'text-slate-900' : 'text-slate-100'
+            }`}>MTG-RGB-HD</h1>
+            <p className={`hidden lg:block text-xs whitespace-nowrap ${
+              resolvedTheme === 'light' ? 'text-slate-600' : 'text-slate-400'
+            }`}>{t('subtitle')}</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 relative shrink-0">
-          <HeaderInfoButton onClick={() => setIsInfoOpen(true)} />
+        <div className="flex items-center justify-end gap-2 sm:gap-3 relative shrink-0 flex-wrap">
+          <div className={`flex items-center gap-1 rounded-lg p-1 border ${
+            resolvedTheme === 'light' ? 'bg-white border-slate-200' : 'bg-[#1b1b1b] border-white/10'
+          }`}>
+            <div className={`relative grid grid-cols-2 rounded-md p-0.5 border ${
+              resolvedTheme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-black/30 border-white/10'
+            }`}>
+              <span
+                className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
+                style={{ left: language === 'fr' ? 2 : 'calc(50% + 0px)' }}
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                onClick={() => setLanguage('fr')}
+                aria-pressed={language === 'fr'}
+                title={t('langFrench')}
+                className={`relative z-10 rounded px-1.5 sm:px-2 py-1 text-[10px] sm:text-[11px] font-medium transition-colors ${
+                  language === 'fr'
+                    ? 'text-white'
+                    : resolvedTheme === 'light'
+                      ? 'text-slate-700 hover:text-slate-900'
+                      : 'text-slate-200 hover:text-white'
+                }`}
+              >
+                FR
+              </button>
+              <button
+                type="button"
+                onClick={() => setLanguage('en')}
+                aria-pressed={language === 'en'}
+                title={t('langEnglish')}
+                className={`relative z-10 rounded px-1.5 sm:px-2 py-1 text-[10px] sm:text-[11px] font-medium transition-colors ${
+                  language === 'en'
+                    ? 'text-white'
+                    : resolvedTheme === 'light'
+                      ? 'text-slate-700 hover:text-slate-900'
+                      : 'text-slate-200 hover:text-white'
+                }`}
+              >
+                EN
+              </button>
+            </div>
+          </div>
+
+          <div className={`flex items-center gap-1 rounded-lg p-1 border ${
+            resolvedTheme === 'light' ? 'bg-white border-slate-200' : 'bg-[#1b1b1b] border-white/10'
+          }`}>
+            <div className={`relative grid grid-cols-3 rounded-md p-0.5 border ${
+              resolvedTheme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-black/30 border-white/10'
+            }`}>
+              <span
+                className="absolute top-0.5 bottom-0.5 w-[calc(33.333%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
+                style={{
+                  left: themeMode === 'dark' ? 2 : themeMode === 'light' ? 'calc(33.333% + 1px)' : 'calc(66.666% + 0px)',
+                }}
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                onClick={() => setThemeMode('dark')}
+                aria-pressed={themeMode === 'dark'}
+                aria-label={t('themeDark')}
+                title={t('themeDark')}
+                className={`relative z-10 rounded p-1 sm:px-2 sm:py-1 text-[11px] font-medium transition-colors ${
+                  themeMode === 'dark'
+                    ? 'text-white'
+                    : resolvedTheme === 'light'
+                      ? 'text-slate-700 hover:text-slate-900'
+                      : 'text-slate-200 hover:text-white'
+                }`}
+              >
+                <Moon className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setThemeMode('light')}
+                aria-pressed={themeMode === 'light'}
+                aria-label={t('themeLight')}
+                title={t('themeLight')}
+                className={`relative z-10 rounded p-1 sm:px-2 sm:py-1 text-[11px] font-medium transition-colors ${
+                  themeMode === 'light'
+                    ? 'text-white'
+                    : resolvedTheme === 'light'
+                      ? 'text-slate-700 hover:text-slate-900'
+                      : 'text-slate-200 hover:text-white'
+                }`}
+              >
+                <Sun className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setThemeMode('auto')}
+                aria-pressed={themeMode === 'auto'}
+                aria-label={t('themeAuto')}
+                title={t('themeAuto')}
+                className={`relative z-10 rounded p-1 sm:px-2 sm:py-1 text-[11px] font-medium transition-colors ${
+                  themeMode === 'auto'
+                    ? 'text-white'
+                    : resolvedTheme === 'light'
+                      ? 'text-slate-700 hover:text-slate-900'
+                      : 'text-slate-200 hover:text-white'
+                }`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <HeaderInfoButton onClick={() => setIsInfoOpen(true)} t={t} theme={resolvedTheme} />
 
           <button
             onClick={openDownloadModal}
             disabled={isExporting}
-            className="flex items-center justify-center gap-2 bg-white text-black hover:bg-slate-200 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
+              resolvedTheme === 'light'
+                ? 'bg-slate-900 text-white hover:bg-slate-700'
+                : 'bg-white text-black hover:bg-slate-200'
+            }`}
           >
             {isExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
-            <span className="hidden sm:inline">{isExporting ? 'Génération...' : 'Télécharger'}</span>
+            <span className="hidden sm:inline">{isExporting ? t('generating') : t('download')}</span>
           </button>
         </div>
       </div>
@@ -221,7 +386,7 @@ export default function DualMapViewer() {
             aria-hidden="true"
           />
 
-          <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} />
+          <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
             <Map2ControlBar
               activeLayers={activeLayers}
@@ -247,6 +412,8 @@ export default function DualMapViewer() {
               rgbSaturation={rgbSaturation}
               sandwichOpacity={sandwichOpacity}
               solarElevation={solarElevation}
+              t={t}
+              theme={resolvedTheme}
               visBrightness={visBrightness}
               visContrast={visContrast}
             />
@@ -257,20 +424,26 @@ export default function DualMapViewer() {
             currentTime={currentTime}
             onLatest={() => handleTimeChange(getLatestAvailableTime())}
             onTimeChange={handleTimeChange}
+            t={t}
+            theme={resolvedTheme}
           />
 
           {isMapLoading && (
-            <div className="absolute inset-0 z-[390] pointer-events-none flex items-end justify-center pb-6">
-              <div className="bg-black/65 backdrop-blur-md border border-white/15 rounded-lg px-4 py-3 text-xs text-slate-100 shadow-2xl w-[280px]">
+            <div className="absolute inset-x-0 top-20 sm:top-24 z-[430] pointer-events-none flex justify-center px-3">
+              <div className={`backdrop-blur-md border rounded-lg px-4 py-3 text-xs shadow-2xl w-[min(92vw,320px)] ${
+                resolvedTheme === 'light'
+                  ? 'bg-white/95 border-slate-300 text-slate-800'
+                  : 'bg-black/65 border-white/15 text-slate-100'
+              }`}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-blue-300" />
-                    <span>Chargement des tuiles</span>
+                    <span>{t('loadingTiles')}</span>
                   </div>
                   <span className="text-blue-200 font-mono tabular-nums">{loadingProgress}%</span>
                 </div>
 
-                <div className="mt-2 h-1.5 w-full rounded bg-white/10 overflow-hidden">
+                <div className={`mt-2 h-1.5 w-full rounded overflow-hidden ${resolvedTheme === 'light' ? 'bg-slate-300' : 'bg-white/10'}`}>
                   <div
                     className="h-full bg-blue-400 transition-[width] duration-150"
                     style={{ width: `${loadingProgress}%` }}
@@ -278,7 +451,7 @@ export default function DualMapViewer() {
                 </div>
 
                 {loadingTileCount > 0 && (
-                  <div className="mt-1 text-[11px] text-slate-300 font-mono">Tuiles en attente: {loadingTileCount}</div>
+                  <div className={`mt-1 text-[11px] font-mono ${resolvedTheme === 'light' ? 'text-slate-600' : 'text-slate-300'}`}>{t('pendingTiles')}: {loadingTileCount}</div>
                 )}
               </div>
             </div>
@@ -286,7 +459,7 @@ export default function DualMapViewer() {
         </div>
       </div>
 
-      <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
+      <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} t={t} theme={resolvedTheme} />
 
       <DownloadModal
         availableExportKinds={availableExportKinds}
@@ -294,6 +467,8 @@ export default function DualMapViewer() {
         isExporting={isExporting}
         isOpen={isDownloadModalOpen}
         onClose={() => setIsDownloadModalOpen(false)}
+        t={t}
+        theme={resolvedTheme}
         onConfirm={() => {
           if (selectedExportKinds.length === 0) return;
           setIsDownloadModalOpen(false);
@@ -306,6 +481,42 @@ export default function DualMapViewer() {
 
       {/* Dynamic stylesheets to apply adjustments in real-time */}
       <style>{`
+        .leaflet-container {
+          background-color: #0a0a0a !important;
+        }
+        .ui-scrollbar {
+          scrollbar-width: thin;
+        }
+        .theme-dark .ui-scrollbar {
+          scrollbar-color: rgba(148, 163, 184, 0.55) rgba(255, 255, 255, 0.06);
+        }
+        .theme-light .ui-scrollbar {
+          scrollbar-color: rgba(100, 116, 139, 0.65) rgba(148, 163, 184, 0.2);
+        }
+        .ui-scrollbar::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+        .ui-scrollbar::-webkit-scrollbar-track {
+          border-radius: 999px;
+        }
+        .theme-dark .ui-scrollbar::-webkit-scrollbar-track {
+          background: rgba(255, 255, 255, 0.06);
+        }
+        .theme-light .ui-scrollbar::-webkit-scrollbar-track {
+          background: rgba(148, 163, 184, 0.2);
+        }
+        .ui-scrollbar::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          border: 2px solid transparent;
+          background-clip: content-box;
+        }
+        .theme-dark .ui-scrollbar::-webkit-scrollbar-thumb {
+          background-color: rgba(148, 163, 184, 0.55);
+        }
+        .theme-light .ui-scrollbar::-webkit-scrollbar-thumb {
+          background-color: rgba(100, 116, 139, 0.65);
+        }
         .city-label {
           color: rgba(255, 255, 255, 0.88);
           text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
