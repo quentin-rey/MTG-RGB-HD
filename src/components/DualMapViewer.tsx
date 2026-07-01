@@ -145,6 +145,7 @@ export default function DualMapViewer() {
     loadingProgress,
     loadingTileCount,
     map1BordersRef,
+    map1DepartmentsRef,
     map1Ref,
     map2Instance,
     map2Ref,
@@ -219,7 +220,9 @@ export default function DualMapViewer() {
         autoReduceVisAtNight,
         exportSolarElevation: getSolarElevation(new Date(currentTime + 'Z'), exportCenter.lat, exportCenter.lng),
         mapOptions,
+        language,
         map1BordersLayer: map1BordersRef.current,
+        map1DepartmentsLayer: map1DepartmentsRef.current,
         cityLoadPromise: cityLoadPromiseRef.current,
         getVisibleCityFeatures,
       });

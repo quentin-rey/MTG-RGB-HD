@@ -12,6 +12,7 @@ import {
   type MapOptions,
   WMS_URL_PROXY,
 } from './dualMapViewerShared';
+import type { Language } from './i18n';
 
 type DownloadSatellitePackOptions = {
   requestedKinds: ExportKind[];
@@ -28,63 +29,171 @@ type DownloadSatellitePackOptions = {
   autoReduceVisAtNight: boolean;
   exportSolarElevation: number;
   mapOptions: MapOptions;
+  language: Language;
   map1BordersLayer: L.GeoJSON | null;
+  map1DepartmentsLayer: L.GeoJSON | null;
   cityLoadPromise: Promise<void> | null;
   getVisibleCityFeatures: (bounds: L.LatLngBounds, zoom: number) => CityFeature[];
 };
 
-function applyWatermark(context: CanvasRenderingContext2D, width: number, height: number) {
+type ExportOverlayLocale = {
+  watermarkText: string;
+  layerLabelSingle: string;
+  layerLabelPlural: string;
+  dateUtcLabel: string;
+};
+
+function getExportOverlayLocale(language: Language): ExportOverlayLocale {
+  if (language === 'en') {
+    return {
+      watermarkText: 'Source: EUMETSAT / MTG | MTG-RGB-HD by Quentin Rey',
+      layerLabelSingle: 'LAYER',
+      layerLabelPlural: 'LAYERS',
+      dateUtcLabel: 'UTC DATE',
+    };
+  }
+
+  return {
+    watermarkText: 'Sources: EUMETSAT / MTG | MTG-RGB-HD par Quentin Rey',
+    layerLabelSingle: 'COUCHE',
+    layerLabelPlural: 'COUCHES',
+    dateUtcLabel: 'DATE UTC',
+  };
+}
+
+function applyWatermark(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  locale: ExportOverlayLocale,
+) {
+  const text = locale.watermarkText;
+  const horizontalPadding = 12;
+  const badgeHeight = 28;
+
   context.save();
-  context.fillStyle = 'rgba(0, 0, 0, 0.5)';
-  context.fillRect(width - 450, height - 30, 450, 30);
-  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
-  context.font = '12px "JetBrains Mono", monospace, sans-serif';
+  context.font = '600 11px "JetBrains Mono", monospace, sans-serif';
+  const badgeWidth = Math.ceil(context.measureText(text).width + horizontalPadding * 2);
+  const left = width - badgeWidth - 10;
+  const top = height - badgeHeight - 10;
+
+  drawGlassPanel(context, left, top, badgeWidth, badgeHeight, 0);
+
+  context.fillStyle = 'rgba(245, 250, 255, 0.96)';
   context.textAlign = 'right';
   context.textBaseline = 'middle';
-  context.fillText('Sources: EUMETSAT / MTG | MTG-RGB-HD par Quentin Rey', width - 10, height - 15);
+  context.fillText(text, width - 10 - horizontalPadding, top + badgeHeight / 2 + 0.5);
   context.restore();
 }
 
-function applyLayerTypeBadge(context: CanvasRenderingContext2D, width: number, layerType: string) {
-  const text = `Couche exportee: ${layerType}`;
+function drawRoundedRectPath(
+  context: CanvasRenderingContext2D,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const maxRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(left + maxRadius, top);
+  context.lineTo(left + width - maxRadius, top);
+  context.quadraticCurveTo(left + width, top, left + width, top + maxRadius);
+  context.lineTo(left + width, top + height - maxRadius);
+  context.quadraticCurveTo(left + width, top + height, left + width - maxRadius, top + height);
+  context.lineTo(left + maxRadius, top + height);
+  context.quadraticCurveTo(left, top + height, left, top + height - maxRadius);
+  context.lineTo(left, top + maxRadius);
+  context.quadraticCurveTo(left, top, left + maxRadius, top);
+  context.closePath();
+}
+
+function drawGlassPanel(
+  context: CanvasRenderingContext2D,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const sourceCanvas = context.canvas as HTMLCanvasElement;
+
+  context.save();
+  drawRoundedRectPath(context, left, top, width, height, radius);
+  context.clip();
+
+  context.filter = 'blur(7px) saturate(105%)';
+  context.drawImage(sourceCanvas, left, top, width, height, left, top, width, height);
+  context.filter = 'none';
+
+  const tintGradient = context.createLinearGradient(0, top, 0, top + height);
+  tintGradient.addColorStop(0, 'rgba(20, 30, 42, 0.42)');
+  tintGradient.addColorStop(1, 'rgba(12, 20, 30, 0.56)');
+  context.fillStyle = tintGradient;
+  context.fillRect(left, top, width, height);
+
+  context.restore();
+
+  drawRoundedRectPath(context, left + 0.5, top + 0.5, width - 1, height - 1, radius - 0.5);
+  context.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+  context.stroke();
+
+  drawRoundedRectPath(context, left + 1.5, top + 1.5, width - 3, height - 3, Math.max(0, radius - 1.5));
+  context.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  context.stroke();
+}
+
+function drawInfoBadge(
+  context: CanvasRenderingContext2D,
+  left: number,
+  top: number,
+  label: string,
+  value: string,
+) {
+  const horizontalPadding = 11;
+  const labelLineHeight = 11;
+  const valueLineHeight = 16;
+  const verticalPaddingTop = 7;
+  const verticalGap = 4;
+  const verticalPaddingBottom = 8;
+  const height = verticalPaddingTop + labelLineHeight + verticalGap + valueLineHeight + verticalPaddingBottom;
+
+  context.save();
+  context.font = '600 10px "JetBrains Mono", monospace, sans-serif';
+  const labelWidth = context.measureText(label).width;
+  context.font = '700 14px "JetBrains Mono", monospace, sans-serif';
+  const valueWidth = context.measureText(value).width;
+  const width = Math.ceil(Math.max(labelWidth, valueWidth) + horizontalPadding * 2 + 2);
+
+  drawGlassPanel(context, left, top, width, height, 0);
+
+  context.textAlign = 'left';
+  context.textBaseline = 'top';
+  context.fillStyle = 'rgba(220, 238, 252, 0.9)';
+  context.font = '600 10px "JetBrains Mono", monospace, sans-serif';
+  context.fillText(label, left + horizontalPadding, top + verticalPaddingTop);
+
+  context.fillStyle = 'rgba(250, 252, 255, 0.98)';
+  context.font = '700 14px "JetBrains Mono", monospace, sans-serif';
+  context.fillText(value, left + horizontalPadding, top + verticalPaddingTop + labelLineHeight + verticalGap);
+  context.restore();
+
+  return { width, height };
+}
+
+function applyTopInfoBadges(
+  context: CanvasRenderingContext2D,
+  utcLabel: string,
+  layerType: string,
+  locale: ExportOverlayLocale,
+) {
   const left = 10;
   const top = 10;
-  const height = 34;
-  const horizontalPadding = 8;
+  const gap = 8;
+  const layerLabel = layerType.includes('+') ? locale.layerLabelPlural : locale.layerLabelSingle;
 
-  context.save();
-  context.font = 'bold 13px "JetBrains Mono", monospace, sans-serif';
-  const boxWidth = Math.max(220, Math.ceil(context.measureText(text).width + horizontalPadding * 2 + 4));
-  context.fillStyle = 'rgba(0, 0, 0, 0.62)';
-  context.fillRect(left, top, boxWidth, height);
-  context.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-  context.strokeRect(left, top, boxWidth, height);
-  context.fillStyle = 'rgba(255, 255, 255, 0.95)';
-  context.textAlign = 'left';
-  context.textBaseline = 'middle';
-  context.fillText(text, left + horizontalPadding, top + height / 2);
-  context.restore();
-}
-
-function applyTimestampBadge(context: CanvasRenderingContext2D, utcLabel: string) {
-  const left = 10;
-  const top = 50;
-  const height = 28;
-  const horizontalPadding = 8;
-  const text = `Date UTC: ${utcLabel}`;
-
-  context.save();
-  context.font = '12px "JetBrains Mono", monospace, sans-serif';
-  const boxWidth = Math.max(265, Math.ceil(context.measureText(text).width + horizontalPadding * 2 + 4));
-  context.fillStyle = 'rgba(0, 0, 0, 0.62)';
-  context.fillRect(left, top, boxWidth, height);
-  context.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-  context.strokeRect(left, top, boxWidth, height);
-  context.fillStyle = 'rgba(255, 255, 255, 0.95)';
-  context.textAlign = 'left';
-  context.textBaseline = 'middle';
-  context.fillText(text, left + horizontalPadding, top + height / 2);
-  context.restore();
+  const layerBadge = drawInfoBadge(context, left, top, layerLabel, layerType);
+  drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel);
 }
 
 function buildWmsUrl(
@@ -124,7 +233,9 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
     autoReduceVisAtNight,
     exportSolarElevation,
     mapOptions,
+    language,
     map1BordersLayer,
+    map1DepartmentsLayer,
     cityLoadPromise,
     getVisibleCityFeatures,
   } = options;
@@ -165,6 +276,7 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
     ? exportHybridIrOpacity * (1 - rgbToIrTransition)
     : 0;
   const exportUtcLabel = `${currentTime.replace('T', ' ')} UTC`;
+  const exportOverlayLocale = getExportOverlayLocale(language);
   const selectedKinds = new Set(requestedKinds);
 
   const needsVis = selectedKinds.has('vis') || selectedKinds.has('hd') || selectedKinds.has('sandwich') || selectedKinds.has('hybrid');
@@ -359,14 +471,7 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
   })() : null;
 
   const drawOverlays = async (context: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
-    if (mapOptions.showBorders && map1BordersLayer) {
-      const data = map1BordersLayer.toGeoJSON() as any;
-      const bordersOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
-      context.save();
-      context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
-      context.lineWidth = Math.max(1, Math.round(canvasWidth / rect.width));
-      context.beginPath();
-
+    const drawGeoJsonFeatures = (geoJsonData: any, strokeStyle: string, lineWidth: number) => {
       const drawLineString = (coords: any[]) => {
         coords.forEach((coord, index) => {
           const projected = L.CRS.EPSG3857.project(L.latLng(coord[1], coord[0]));
@@ -379,7 +484,7 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
         });
       };
 
-      data.features?.forEach((feature: any) => {
+      geoJsonData.features?.forEach((feature: any) => {
         if (feature.geometry.type === 'Polygon') {
           feature.geometry.coordinates.forEach(drawLineString);
         } else if (feature.geometry.type === 'MultiPolygon') {
@@ -392,6 +497,27 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
       });
 
       context.stroke();
+    };
+
+    if (mapOptions.showBorders && map1BordersLayer) {
+      const data = map1BordersLayer.toGeoJSON() as any;
+      const bordersOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
+      context.save();
+      context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
+      context.lineWidth = Math.max(1, Math.round(canvasWidth / rect.width));
+      context.beginPath();
+      drawGeoJsonFeatures(data, `rgba(255, 255, 255, ${bordersOpacity})`, Math.max(1, Math.round(canvasWidth / rect.width)));
+      context.restore();
+    }
+
+    if (mapOptions.showFranceDepartments && map1DepartmentsLayer) {
+      const data = map1DepartmentsLayer.toGeoJSON() as any;
+      const departmentsOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
+      context.save();
+      context.strokeStyle = `rgba(200, 220, 255, ${departmentsOpacity})`;
+      context.lineWidth = Math.max(0.5, Math.round(canvasWidth / rect.width) * 0.6);
+      context.beginPath();
+      drawGeoJsonFeatures(data, `rgba(200, 220, 255, ${departmentsOpacity})`, Math.max(0.5, Math.round(canvasWidth / rect.width) * 0.6));
       context.restore();
     }
 
@@ -443,9 +569,8 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
 
     tempCtx.drawImage(canvasObj, 0, 0);
     tempCtx.drawImage(overlayCanvas, 0, 0);
-    applyLayerTypeBadge(tempCtx, width, layerType);
-    applyTimestampBadge(tempCtx, exportUtcLabel);
-    applyWatermark(tempCtx, width, height);
+    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale);
+    applyWatermark(tempCtx, width, height, exportOverlayLocale);
 
     return new Promise((resolve, reject) => {
       tempCanvas.toBlob((blob) => {

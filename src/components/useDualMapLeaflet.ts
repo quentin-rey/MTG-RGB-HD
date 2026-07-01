@@ -810,11 +810,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     isRgbIrMode,
     isCloudOnlyIrMode,
     rgbToIrTransition,
-    effectiveCloudOnlyIrOpacity,
     hybridVisMaskWeight,
     isIrOverlayEnabled,
     isVisOverlayEnabled,
-    sandwichOpacity,
   ]);
 
   useEffect(() => {
@@ -983,6 +981,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     getVisibleCityFeatures,
     isNightIrFallbackActive,
     map1BordersRef,
+    map1DepartmentsRef,
     map1Ref,
     map2Instance,
     map2Ref,

@@ -570,7 +570,7 @@ export function InfoModal(props: InfoModalProps) {
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-          Version 1.3.1
+          Version 1.4.0
         </div>
       </div>
     </div>
