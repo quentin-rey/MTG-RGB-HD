@@ -1,4 +1,4 @@
-import { useState, type React } from 'react';
+import { useRef, useState, type React } from 'react';
 import { Clock, Github, Info, Sliders, X } from 'lucide-react';
 
 import {
@@ -570,7 +570,7 @@ export function InfoModal(props: InfoModalProps) {
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-          Version 1.4.0
+          Version 1.4.1
         </div>
       </div>
     </div>
@@ -590,6 +590,394 @@ type DownloadModalProps = {
   selectedExports: Record<ExportKind, boolean>;
   selectedExportKinds: ExportKind[];
 };
+
+type AnimationModalProps = {
+  animationModalRef: React.RefObject<HTMLDivElement | null>;
+  customDate: string;
+  customEnd: string;
+  customEndStep: number;
+  customLatestDate: string;
+  customMaxStep: number;
+  customStart: string;
+  customStartStep: number;
+  estimatedFrameCount: number;
+  fps: number;
+  gifColorCount: 64 | 128 | 256;
+  gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
+  gifFinalPauseMs: number;
+  gifMaxDimension: 960 | 1280 | 1600;
+  gifPaletteMode: 'per-frame' | 'global';
+  gifProgress: number;
+  isExportingGif: boolean;
+  isOpen: boolean;
+  onClose: () => void;
+  onColorCountChange: (value: 64 | 128 | 256) => void;
+  onCustomDateChange: (value: string) => void;
+  onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
+  onFinalPauseChange: (value: number) => void;
+  onCustomEndStepChange: (value: number) => void;
+  onCustomStartStepChange: (value: number) => void;
+  onExportGif: () => void;
+  onFpsChange: (value: number) => void;
+  onPaletteModeChange: (value: 'per-frame' | 'global') => void;
+  onPresetChange: (value: '3h' | '6h' | '12h' | 'custom') => void;
+  onResolutionChange: (value: 960 | 1280 | 1600) => void;
+  preset: '3h' | '6h' | '12h' | 'custom';
+  rangeError: string | null;
+  t: Translator;
+  theme: UiTheme;
+};
+
+export function AnimationModal(props: AnimationModalProps) {
+  const {
+    animationModalRef,
+    customDate,
+    customEnd,
+    customEndStep,
+    customLatestDate,
+    customMaxStep,
+    customStart,
+    customStartStep,
+    estimatedFrameCount,
+    fps,
+    gifColorCount,
+    gifDitherLevel,
+    gifFinalPauseMs,
+    gifMaxDimension,
+    gifPaletteMode,
+    gifProgress,
+    isExportingGif,
+    isOpen,
+    onClose,
+    onColorCountChange,
+    onCustomDateChange,
+    onDitherLevelChange,
+    onFinalPauseChange,
+    onCustomEndStepChange,
+    onCustomStartStepChange,
+    onExportGif,
+    onFpsChange,
+    onPaletteModeChange,
+    onPresetChange,
+    onResolutionChange,
+    preset,
+    rangeError,
+    t,
+    theme,
+  } = props;
+  const isLight = theme === 'light';
+  const sliderMin = 0;
+  const sliderMax = Math.max(0, customMaxStep);
+  const rangeSliderRef = useRef<HTMLDivElement | null>(null);
+  const startStep = Math.max(sliderMin, Math.min(sliderMax, customStartStep));
+  const endStep = Math.max(sliderMin, Math.min(sliderMax, customEndStep));
+  const startRatio = sliderMax === 0 ? 0 : startStep / sliderMax;
+  const endRatio = sliderMax === 0 ? 0 : endStep / sliderMax;
+
+  const stepToTime = (step: number): string => {
+    const safeStep = Math.max(sliderMin, Math.min(sliderMax, Math.round(step)));
+    const totalMinutes = safeStep * 10;
+    const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+    const mm = String(totalMinutes % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const finalPauseLabel = `${(gifFinalPauseMs / 1000).toFixed(1)}s`;
+
+  const getStepFromClientX = (clientX: number): number => {
+    if (!rangeSliderRef.current || sliderMax <= sliderMin) return sliderMin;
+    const rect = rangeSliderRef.current.getBoundingClientRect();
+    const ratio = (clientX - rect.left) / Math.max(1, rect.width);
+    const clamped = Math.max(0, Math.min(1, ratio));
+    return Math.round(sliderMin + clamped * (sliderMax - sliderMin));
+  };
+
+  const startDrag = (handle: 'start' | 'end', pointerId: number) => {
+    const onMove = (event: PointerEvent) => {
+      const nextStep = getStepFromClientX(event.clientX);
+      if (handle === 'start') onCustomStartStepChange(nextStep);
+      else onCustomEndStepChange(nextStep);
+    };
+
+    const onUp = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
+  const handleTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const nextStep = getStepFromClientX(event.clientX);
+    const useStart = Math.abs(nextStep - startStep) <= Math.abs(nextStep - endStep);
+    if (useStart) onCustomStartStepChange(nextStep);
+    else onCustomEndStepChange(nextStep);
+    startDrag(useStart ? 'start' : 'end', event.pointerId);
+  };
+
+  const handleKnobPointerDown = (handle: 'start' | 'end') => (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startDrag(handle, event.pointerId);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
+      isLight ? 'bg-slate-900/35' : 'bg-black/55'
+    }`}>
+      <div ref={animationModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-xl w-full max-h-[85vh] overflow-y-auto ${
+        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+      }`}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('animationTitle')}</h3>
+          <button
+            onClick={onClose}
+            className={`p-1 rounded-md transition-colors ${
+              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+            }`}
+            aria-label={t('close')}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <p className={`text-sm mb-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>{t('animationDescription')}</p>
+
+        <div className="space-y-4">
+          <div>
+            <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationPreset')}</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {([
+                ['3h', t('animationLast3h')],
+                ['6h', t('animationLast6h')],
+                ['12h', t('animationLast12h')],
+                ['custom', t('animationCustom')],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => onPresetChange(value)}
+                  className={`px-2 py-1.5 rounded border text-xs transition-colors ${
+                    preset === value
+                      ? 'bg-blue-500 text-white border-blue-500'
+                      : isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                        : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {preset === 'custom' && (
+            <div className="space-y-3">
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationCustomDate')}</label>
+                <input
+                  type="date"
+                  max={customLatestDate}
+                  value={customDate}
+                  onChange={(event) => onCustomDateChange(event.target.value)}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 cursor-pointer ${
+                    isLight
+                      ? 'bg-slate-100 border-slate-300 text-slate-900'
+                      : 'bg-[#222] border-white/10 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert'
+                  }`}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className={`rounded-md px-3 py-2 ${isLight ? 'bg-slate-100 border border-slate-300 text-slate-700' : 'bg-[#222] border border-white/10 text-slate-200'}`}>
+                  <div className="text-[11px] opacity-75 mb-0.5">{t('animationStart')}</div>
+                  <div className="font-mono text-xs">{customStart.replace('T', ' ')} UTC</div>
+                </div>
+                <div className={`rounded-md px-3 py-2 ${isLight ? 'bg-slate-100 border border-slate-300 text-slate-700' : 'bg-[#222] border border-white/10 text-slate-200'}`}>
+                  <div className="text-[11px] opacity-75 mb-0.5">{t('animationEnd')}</div>
+                  <div className="font-mono text-xs">{customEnd.replace('T', ' ')} UTC</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationCustomWindow')}</span>
+                  <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
+                </div>
+                <div
+                  ref={rangeSliderRef}
+                  onPointerDown={handleTrackPointerDown}
+                  className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${isLight ? 'bg-slate-100 border border-slate-300' : 'bg-[#222] border border-white/10'}`}
+                >
+                  <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-blue-500"
+                    style={{
+                      left: `calc(12px + (100% - 24px) * ${startRatio})`,
+                      width: `calc((100% - 24px) * ${Math.max(0, endRatio - startRatio)})`,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={t('animationStart')}
+                    onPointerDown={handleKnobPointerDown('start')}
+                    className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${isLight ? 'bg-white border-blue-600' : 'bg-slate-100 border-blue-500'}`}
+                    style={{ left: `calc(12px + (100% - 24px) * ${startRatio} - 8px)` }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={t('animationEnd')}
+                    onPointerDown={handleKnobPointerDown('end')}
+                    className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${isLight ? 'bg-white border-blue-600' : 'bg-slate-100 border-blue-500'}`}
+                    style={{ left: `calc(12px + (100% - 24px) * ${endRatio} - 8px)` }}
+                  />
+                </div>
+
+                <div className={`mt-2 flex justify-between text-[11px] font-mono ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+                  <span>{t('animationWindowStart')}: 00:00</span>
+                  <span>{t('animationWindowEnd')}: {stepToTime(sliderMax)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationFps')}</span>
+              <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{fps}</span>
+            </div>
+            <input
+              type="range"
+              min="4"
+              max="12"
+              step="1"
+              value={fps}
+              onChange={(event) => onFpsChange(parseInt(event.target.value, 10))}
+              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifResolution')}</label>
+              <select
+                value={gifMaxDimension}
+                onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
+                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                }`}
+              >
+                <option value={960}>{t('animationResolution960')}</option>
+                <option value={1280}>{t('animationResolution1280')}</option>
+                <option value={1600}>{t('animationResolution1600')}</option>
+              </select>
+            </div>
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifColorCount')}</label>
+              <select
+                value={gifColorCount}
+                onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
+                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                }`}
+              >
+                <option value={64}>64</option>
+                <option value={128}>128</option>
+                <option value={256}>256</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifPaletteMode')}</label>
+              <select
+                value={gifPaletteMode}
+                onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
+                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                }`}
+              >
+                <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
+                <option value="global">{t('animationPaletteModeGlobal')}</option>
+              </select>
+            </div>
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifDither')}</label>
+              <select
+                value={gifDitherLevel}
+                onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
+                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                }`}
+              >
+                <option value="none">{t('animationDitherNone')}</option>
+                <option value="low">{t('animationDitherLow')}</option>
+                <option value="medium">{t('animationDitherMedium')}</option>
+                <option value="high">{t('animationDitherHigh')}</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifFinalPause')}</label>
+            <div className="flex justify-between text-xs mb-1">
+              <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationGifFinalPause')}</span>
+              <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{finalPauseLabel}</span>
+            </div>
+            <input
+              type="range"
+              min={100}
+              max={2000}
+              step={100}
+              value={gifFinalPauseMs}
+              onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
+              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+            />
+            <div className={`mt-1 flex justify-between text-[11px] font-mono ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+              <span>0.1s</span>
+              <span>1.0s</span>
+              <span>2.0s</span>
+            </div>
+          </div>
+
+          <div className={`text-xs ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+            {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
+          </div>
+
+          {rangeError && (
+            <p className={`text-xs ${isLight ? 'text-rose-600' : 'text-rose-300'}`}>{rangeError}</p>
+          )}
+
+          {estimatedFrameCount === 0 && !rangeError ? (
+            <p className={`text-xs ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationNoFrames')}</p>
+          ) : null}
+
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={onExportGif}
+              disabled={isExportingGif || estimatedFrameCount === 0}
+              className={`px-3 py-2 text-sm rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                isLight
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-blue-500 text-white hover:bg-blue-400'
+              }`}
+            >
+              {isExportingGif ? `${t('animationExportingGif')} ${gifProgress}%` : t('animationExportGif')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function DownloadModal(props: DownloadModalProps) {
   const {

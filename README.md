@@ -45,6 +45,14 @@ Enhance your view with map overlays:
 
 - **ZIP archive packaging** with smart preselection based on active layer
   combination
+- **GIF animation export** with advanced controls:
+  - Custom UTC day selection with bounded start/end range on a single timeline
+  - Fixed 10-minute sampling (no frame skipping)
+  - Up to **73 frames** (full 12-hour window)
+  - GIF color count (64 / 128 / 256)
+  - Palette mode: per-frame or global palette
+  - Dithering levels: none / low / medium / high
+  - Export progress integrated in the export button
 - **Multiple export formats**:
   - VIS 0.6 µm single layer
   - RGB True Color single layer

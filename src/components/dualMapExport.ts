@@ -1,4 +1,5 @@
 import L from 'leaflet';
+import { applyPalette, GIFEncoder, nearestColorIndex, quantize } from 'gifenc';
 
 import {
   getDaylightVisFactor,
@@ -35,6 +36,104 @@ type DownloadSatellitePackOptions = {
   cityLoadPromise: Promise<void> | null;
   getVisibleCityFeatures: (bounds: L.LatLngBounds, zoom: number) => CityFeature[];
 };
+
+type RenderSatelliteFramesOptions = Omit<DownloadSatellitePackOptions, 'currentTime'> & {
+  currentTime: string;
+  maxDimension?: number;
+};
+
+export type GifPaletteMode = 'per-frame' | 'global';
+export type GifDitherLevel = 'none' | 'low' | 'medium' | 'high';
+export type GifFinalPauseMs = number;
+
+type ExportAnimationGifOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime'> & {
+  frameTimes: string[];
+  fps: number;
+  kind: ExportKind;
+  colorCount?: number;
+  paletteMode?: GifPaletteMode;
+  ditherLevel?: GifDitherLevel;
+  finalPauseMs?: GifFinalPauseMs;
+  maxDimension?: number;
+  onProgress?: (progress: number) => void;
+};
+
+function sampleRgbaPixels(rgba: Uint8ClampedArray, targetPixelCount: number): Uint8Array {
+  const pixelCount = Math.max(1, Math.floor(rgba.length / 4));
+  const safeTarget = Math.max(1, Math.floor(targetPixelCount));
+  const step = Math.max(1, Math.floor(pixelCount / safeTarget));
+  const sampled: number[] = [];
+
+  for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += step) {
+    const offset = pixelIndex * 4;
+    sampled.push(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]);
+  }
+
+  return Uint8Array.from(sampled);
+}
+
+function applyPaletteWithDithering(
+  rgba: Uint8ClampedArray,
+  palette: number[][],
+  width: number,
+  height: number,
+  ditherLevel: GifDitherLevel,
+): Uint8Array {
+  const ditherStrength = ditherLevel === 'low'
+    ? 0.35
+    : ditherLevel === 'medium'
+      ? 0.6
+      : ditherLevel === 'high'
+        ? 0.85
+        : 0;
+
+  if (ditherStrength <= 0) {
+    return applyPalette(rgba, palette, 'rgb565');
+  }
+
+  const pixelCount = width * height;
+  const working = new Float32Array(pixelCount * 3);
+  const indexed = new Uint8Array(pixelCount);
+
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+    working[j] = rgba[i];
+    working[j + 1] = rgba[i + 1];
+    working[j + 2] = rgba[i + 2];
+  }
+
+  const diffuse = (x: number, y: number, er: number, eg: number, eb: number, weight: number) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const idx = (y * width + x) * 3;
+    working[idx] += er * weight;
+    working[idx + 1] += eg * weight;
+    working[idx + 2] += eb * weight;
+  };
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = y * width + x;
+      const idx3 = idx * 3;
+      const r = Math.max(0, Math.min(255, working[idx3]));
+      const g = Math.max(0, Math.min(255, working[idx3 + 1]));
+      const b = Math.max(0, Math.min(255, working[idx3 + 2]));
+
+      const paletteIndex = nearestColorIndex(palette, [r, g, b]);
+      indexed[idx] = paletteIndex;
+
+      const selected = palette[paletteIndex] ?? [r, g, b];
+      const er = (r - selected[0]) * ditherStrength;
+      const eg = (g - selected[1]) * ditherStrength;
+      const eb = (b - selected[2]) * ditherStrength;
+
+      diffuse(x + 1, y, er, eg, eb, 7 / 16);
+      diffuse(x - 1, y + 1, er, eg, eb, 3 / 16);
+      diffuse(x, y + 1, er, eg, eb, 5 / 16);
+      diffuse(x + 1, y + 1, er, eg, eb, 1 / 16);
+    }
+  }
+
+  return indexed;
+}
 
 type ExportOverlayLocale = {
   watermarkText: string;
@@ -217,7 +316,15 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-export async function downloadSatellitePack(options: DownloadSatellitePackOptions): Promise<void> {
+async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Promise<Array<{
+  descriptor: {
+    kind: ExportKind;
+    badge: string;
+    fileBaseName: string;
+    sourceCanvas: HTMLCanvasElement;
+  };
+  blob: Blob;
+}>> {
   const {
     requestedKinds,
     map,
@@ -240,20 +347,19 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
     getVisibleCityFeatures,
   } = options;
 
-  if (requestedKinds.length === 0) return;
-
-  const [{ default: JSZip }, { saveAs }] = await Promise.all([
-    import('jszip'),
-    import('file-saver'),
-  ]);
+  if (requestedKinds.length === 0) return [];
 
   const exportBounds = map.getBounds();
   const ne = L.CRS.EPSG3857.project(exportBounds.getNorthEast());
   const sw = L.CRS.EPSG3857.project(exportBounds.getSouthWest());
   const bbox = `${sw.x},${sw.y},${ne.x},${ne.y}`;
   const rect = mapContainer.getBoundingClientRect();
-  const width = Math.min(Math.round(rect.width), 4096);
-  const height = Math.min(Math.round(rect.height), 4096);
+  const rawWidth = Math.max(64, Math.round(rect.width));
+  const rawHeight = Math.max(64, Math.round(rect.height));
+  const maxDimension = Math.max(64, Math.min(options.maxDimension ?? 4096, 4096));
+  const scale = Math.min(1, maxDimension / Math.max(rawWidth, rawHeight));
+  const width = Math.max(64, Math.round(rawWidth * scale));
+  const height = Math.max(64, Math.round(rawHeight * scale));
   const isoTime = new Date(currentTime + 'Z').toISOString();
   const visNightFactor = autoReduceVisAtNight && activeLayers.vis && activeLayers.ir
     ? getDaylightVisFactor(exportSolarElevation)
@@ -621,7 +727,25 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
     })),
   );
 
-  const safeTimeStr = currentTime.replace('T', '_').replace(/:/g, '-');
+  return generatedFiles;
+}
+
+export async function downloadSatellitePack(options: DownloadSatellitePackOptions): Promise<void> {
+  const [{ default: JSZip }, { saveAs }] = await Promise.all([
+    import('jszip'),
+    import('file-saver'),
+  ]);
+
+  const generatedFiles = await renderSatelliteFrames({
+    ...options,
+    maxDimension: 4096,
+  });
+
+  if (generatedFiles.length === 0) {
+    return;
+  }
+
+  const safeTimeStr = options.currentTime.replace('T', '_').replace(/:/g, '-');
   const zip = new JSZip();
   generatedFiles.forEach(({ descriptor, blob }, index) => {
     zip.file(`${index + 1}_${descriptor.fileBaseName}_${safeTimeStr}.png`, blob);
@@ -629,4 +753,131 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
 
   const zipBlob = await zip.generateAsync({ type: 'blob' });
   saveAs(zipBlob, `MTG_SATELLITE_PACK_${safeTimeStr}.zip`);
+}
+
+export async function exportAnimationGif(options: ExportAnimationGifOptions): Promise<Blob> {
+  const {
+    frameTimes,
+    fps,
+    kind,
+    onProgress,
+    colorCount = 128,
+    paletteMode = 'per-frame',
+    ditherLevel = 'none',
+    finalPauseMs = 0,
+    maxDimension = 1280,
+    ...shared
+  } = options;
+
+  if (frameTimes.length === 0) {
+    throw new Error('No frame times provided for GIF export');
+  }
+
+  const frameDelay = Math.max(40, Math.round(1000 / Math.max(1, fps)));
+  const safeFinalPauseMs = Math.max(100, Math.min(2000, Math.round(finalPauseMs / 100) * 100));
+  const gif = GIFEncoder();
+  const scratchCanvas = document.createElement('canvas');
+  const scratchCtx = scratchCanvas.getContext('2d');
+  if (!scratchCtx) {
+    throw new Error('Cannot create GIF rendering context');
+  }
+
+  let targetWidth = 0;
+  let targetHeight = 0;
+  const frameBlobs: Blob[] = [];
+
+  for (let index = 0; index < frameTimes.length; index += 1) {
+    const time = frameTimes[index];
+    const frame = await renderSatelliteFrames({
+      ...shared,
+      currentTime: time,
+      requestedKinds: [kind],
+      maxDimension,
+    });
+
+    if (frame.length === 0) {
+      throw new Error(`No render output for frame at ${time}`);
+    }
+
+    frameBlobs.push(frame[0].blob);
+
+    if (onProgress) {
+      onProgress(Math.round(((index + 1) / frameTimes.length) * 45));
+    }
+  }
+
+  if (frameBlobs.length === 0) {
+    throw new Error('No rendered frames available for GIF export');
+  }
+
+  const safeColorCount = Math.max(16, Math.min(256, Math.round(colorCount)));
+  let globalPalette: number[][] | null = null;
+
+  const firstFrameBitmap = await createImageBitmap(frameBlobs[0]);
+  targetWidth = firstFrameBitmap.width;
+  targetHeight = firstFrameBitmap.height;
+  scratchCanvas.width = targetWidth;
+  scratchCanvas.height = targetHeight;
+  firstFrameBitmap.close();
+
+  if (paletteMode === 'global') {
+    const sampledChunks: Uint8Array[] = [];
+    const maxSampledPixels = 240000;
+    const targetPixelsPerFrame = Math.max(4000, Math.round(maxSampledPixels / frameBlobs.length));
+
+    for (let index = 0; index < frameBlobs.length; index += 1) {
+      const frameBitmap = await createImageBitmap(frameBlobs[index]);
+      scratchCtx.clearRect(0, 0, targetWidth, targetHeight);
+      scratchCtx.drawImage(frameBitmap, 0, 0, targetWidth, targetHeight);
+      const rgba = scratchCtx.getImageData(0, 0, targetWidth, targetHeight).data;
+      sampledChunks.push(sampleRgbaPixels(rgba, targetPixelsPerFrame));
+      frameBitmap.close();
+
+      if (onProgress) {
+        const samplingProgress = Math.round(((index + 1) / frameBlobs.length) * 15);
+        onProgress(45 + samplingProgress);
+      }
+    }
+
+    const sampledLength = sampledChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const sampledData = new Uint8Array(sampledLength);
+    let cursor = 0;
+    sampledChunks.forEach((chunk) => {
+      sampledData.set(chunk, cursor);
+      cursor += chunk.length;
+    });
+
+    globalPalette = quantize(sampledData, safeColorCount, { format: 'rgb565' });
+  }
+
+  for (let index = 0; index < frameBlobs.length; index += 1) {
+    const frameBitmap = await createImageBitmap(frameBlobs[index]);
+
+    if (frameBitmap.width !== targetWidth || frameBitmap.height !== targetHeight) {
+      frameBitmap.close();
+      throw new Error('Inconsistent frame size during GIF export');
+    }
+
+    scratchCtx.clearRect(0, 0, targetWidth, targetHeight);
+    scratchCtx.drawImage(frameBitmap, 0, 0, targetWidth, targetHeight);
+    const rgba = scratchCtx.getImageData(0, 0, targetWidth, targetHeight).data;
+    const palette = globalPalette ?? quantize(rgba, safeColorCount, { format: 'rgb565' });
+    const indexedPixels = applyPaletteWithDithering(rgba, palette, targetWidth, targetHeight, ditherLevel);
+
+    gif.writeFrame(indexedPixels, targetWidth, targetHeight, {
+      palette: globalPalette ? (index === 0 ? palette : undefined) : palette,
+      delay: index === frameBlobs.length - 1 ? frameDelay + safeFinalPauseMs : frameDelay,
+      repeat: index === 0 ? 0 : undefined,
+    });
+
+    frameBitmap.close();
+
+    if (onProgress) {
+      const encodeProgress = Math.round(((index + 1) / frameBlobs.length) * 40);
+      onProgress(60 + encodeProgress);
+    }
+  }
+
+  gif.finish();
+  return new Blob([gif.bytesView()], { type: 'image/gif' });
 }

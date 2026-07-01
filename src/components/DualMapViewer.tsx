@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Download, Loader2, Monitor, Moon, Sun } from 'lucide-react';
+import { Download, Film, Loader2, Monitor, Moon, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
   getAvailableExportKindsFromLayers,
@@ -15,9 +15,16 @@ import {
   type ExportKind,
 } from './dualMapViewerShared';
 import { getTranslator, type Language } from './i18n';
-import { downloadSatellitePack } from './dualMapExport';
+import {
+  downloadSatellitePack,
+  exportAnimationGif,
+  type GifDitherLevel,
+  type GifFinalPauseMs,
+  type GifPaletteMode,
+} from './dualMapExport';
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
+  AnimationModal,
   DownloadModal,
   HeaderInfoButton,
   InfoModal,
@@ -29,6 +36,101 @@ import { useImageAdjustments } from './useImageAdjustments';
 import { useViewerPanelsState } from './useViewerPanelsState';
 
 type ThemeMode = 'dark' | 'light' | 'auto';
+type AnimationPreset = '3h' | '6h' | '12h' | 'custom';
+
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+const MAX_ANIMATION_EXPORT_FRAMES = 73;
+const MAX_CUSTOM_RANGE_MS = 12 * 60 * 60 * 1000;
+const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
+const DAY_MAX_STEP = (24 * 60) / 10 - 1;
+const CUSTOM_MIN_RANGE_STEPS = MIN_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
+const CUSTOM_MAX_RANGE_STEPS = MAX_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
+
+function toUtcInputValue(date: Date): string {
+  return date.toISOString().slice(0, 16);
+}
+
+function parseUtcInputValue(value: string): Date | null {
+  if (!value) return null;
+  const date = new Date(`${value}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function roundDownToTenMinutes(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / TEN_MINUTES_MS) * TEN_MINUTES_MS);
+}
+
+function roundUpToTenMinutes(date: Date): Date {
+  return new Date(Math.ceil(date.getTime() / TEN_MINUTES_MS) * TEN_MINUTES_MS);
+}
+
+function toTimePartFromStep(step: number): string {
+  const safeStep = Math.max(0, Math.min(DAY_MAX_STEP, Math.round(step)));
+  const totalMinutes = safeStep * 10;
+  const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+  const mm = String(totalMinutes % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function getStepFromUtcValue(utcValue: string): number {
+  const parsed = parseUtcInputValue(utcValue);
+  if (!parsed) return 0;
+  return Math.max(0, Math.min(DAY_MAX_STEP, Math.floor((parsed.getUTCHours() * 60 + parsed.getUTCMinutes()) / 10)));
+}
+
+function getLatestAllowedStepForDate(datePart: string, latestUtcValue: string): number {
+  const latestDatePart = latestUtcValue.split('T')[0];
+  if (datePart < latestDatePart) {
+    return DAY_MAX_STEP;
+  }
+  if (datePart > latestDatePart) {
+    return 0;
+  }
+  return getStepFromUtcValue(latestUtcValue);
+}
+
+function normalizeCustomDaySteps(startStep: number, endStep: number, dayMaxStep: number): { start: number; end: number } {
+  const safeDayMax = Math.max(0, Math.min(DAY_MAX_STEP, dayMaxStep));
+  let start = Math.max(0, Math.min(safeDayMax, Math.round(startStep)));
+  let end = Math.max(0, Math.min(safeDayMax, Math.round(endStep)));
+
+  if (end < start) {
+    const tmp = start;
+    start = end;
+    end = tmp;
+  }
+
+  const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, safeDayMax));
+  const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, safeDayMax));
+  let span = end - start;
+
+  if (span < minSpan) {
+    end = Math.min(safeDayMax, start + minSpan);
+    span = end - start;
+    if (span < minSpan) {
+      start = Math.max(0, end - minSpan);
+    }
+  }
+
+  if (end - start > maxSpan) {
+    end = start + maxSpan;
+    if (end > safeDayMax) {
+      end = safeDayMax;
+      start = Math.max(0, end - maxSpan);
+    }
+  }
+
+  return { start, end };
+}
+
+function getAnimationExportKind(layers: ActiveLayers): ExportKind {
+  if (layers.rgb && layers.vis && layers.ir) return 'hybrid';
+  if (layers.rgb && layers.vis) return 'hd';
+  if (layers.vis && layers.ir) return 'sandwich';
+  if (layers.rgb) return 'rgb';
+  if (layers.vis) return 'vis';
+  return 'ir';
+}
 
 export default function DualMapViewer() {
   const [isExporting, setIsExporting] = useState(false);
@@ -62,12 +164,15 @@ export default function DualMapViewer() {
 
   const {
     adjustmentsRef,
+    animationModalRef,
     downloadModalRef,
     infoRef,
     isAdjustmentsOpen,
+    isAnimationModalOpen,
     isDownloadModalOpen,
     isInfoOpen,
     setIsAdjustmentsOpen,
+    setIsAnimationModalOpen,
     setIsDownloadModalOpen,
     setIsInfoOpen,
   } = useViewerPanelsState();
@@ -134,6 +239,61 @@ export default function DualMapViewer() {
 
   // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer)
   const [currentTime, setCurrentTime] = useState(() => getLatestAvailableTime());
+  const [animationPreset, setAnimationPreset] = useState<AnimationPreset>('3h');
+  const [animationFps, setAnimationFps] = useState(6);
+  const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(1280);
+  const [gifColorCount, setGifColorCount] = useState<64 | 128 | 256>(128);
+  const [gifPaletteMode, setGifPaletteMode] = useState<GifPaletteMode>('per-frame');
+  const [gifDitherLevel, setGifDitherLevel] = useState<GifDitherLevel>('none');
+  const [gifFinalPauseMs, setGifFinalPauseMs] = useState<GifFinalPauseMs>(100);
+  const [isGifExporting, setIsGifExporting] = useState(false);
+  const [gifExportProgress, setGifExportProgress] = useState(0);
+  const [animationRangeError, setAnimationRangeError] = useState<string | null>(null);
+  const latestAvailableTime = getLatestAvailableTime();
+  const latestAvailableDatePart = latestAvailableTime.split('T')[0];
+  const [customAnimationDate, setCustomAnimationDate] = useState(() => currentTime.split('T')[0]);
+  const [customStartStep, setCustomStartStep] = useState(() => {
+    const latestStep = getStepFromUtcValue(getLatestAvailableTime());
+    return Math.max(0, latestStep - 18);
+  });
+  const [customEndStep, setCustomEndStep] = useState(() => getStepFromUtcValue(getLatestAvailableTime()));
+
+  const customDayMaxStep = getLatestAllowedStepForDate(customAnimationDate, latestAvailableTime);
+  const customAnimationStart = `${customAnimationDate}T${toTimePartFromStep(customStartStep)}`;
+  const customAnimationEnd = `${customAnimationDate}T${toTimePartFromStep(customEndStep)}`;
+
+  useEffect(() => {
+    const normalized = normalizeCustomDaySteps(customStartStep, customEndStep, customDayMaxStep);
+    if (normalized.start !== customStartStep) {
+      setCustomStartStep(normalized.start);
+    }
+    if (normalized.end !== customEndStep) {
+      setCustomEndStep(normalized.end);
+    }
+  }, [customAnimationDate, customDayMaxStep, customEndStep, customStartStep]);
+
+  const handleCustomDateChange = (nextDate: string) => {
+    const safeDate = nextDate > latestAvailableDatePart ? latestAvailableDatePart : nextDate;
+    setCustomAnimationDate(safeDate);
+  };
+
+  const handleCustomStartStepChange = (step: number) => {
+    const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, customDayMaxStep));
+    const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, customDayMaxStep));
+    const minStart = Math.max(0, customEndStep - maxSpan);
+    const maxStart = Math.max(0, customEndStep - minSpan);
+    const clamped = Math.max(minStart, Math.min(maxStart, Math.round(step)));
+    setCustomStartStep(clamped);
+  };
+
+  const handleCustomEndStepChange = (step: number) => {
+    const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, customDayMaxStep));
+    const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, customDayMaxStep));
+    const minEnd = Math.min(customDayMaxStep, customStartStep + minSpan);
+    const maxEnd = Math.min(customDayMaxStep, customStartStep + maxSpan);
+    const clamped = Math.max(minEnd, Math.min(maxEnd, Math.round(step)));
+    setCustomEndStep(clamped);
+  };
 
   const {
     cityLoadPromiseRef,
@@ -183,6 +343,177 @@ export default function DualMapViewer() {
       setCurrentTime(newTimeStr);
     }
   };
+
+  const handleAnimationPresetChange = (value: AnimationPreset) => {
+    setAnimationPreset(value);
+    if (value !== 'custom') return;
+
+    const base = parseUtcInputValue(currentTime) ?? parseUtcInputValue(getLatestAvailableTime()) ?? new Date();
+    const datePart = base.toISOString().slice(0, 10);
+    const baseStep = getStepFromUtcValue(toUtcInputValue(base));
+    const nextEnd = Math.max(0, Math.min(getLatestAllowedStepForDate(datePart, latestAvailableTime), baseStep));
+    const nextStart = Math.max(0, nextEnd - 18);
+    const normalized = normalizeCustomDaySteps(nextStart, nextEnd, getLatestAllowedStepForDate(datePart, latestAvailableTime));
+
+    setCustomAnimationDate(datePart);
+    setCustomStartStep(normalized.start);
+    setCustomEndStep(normalized.end);
+  };
+
+  const buildAnimationFrameTimes = (): string[] => {
+    const latestAvailable = parseUtcInputValue(getLatestAvailableTime());
+    if (!latestAvailable) {
+      throw new Error('No latest time available');
+    }
+
+    let startDate: Date;
+    let endDate: Date;
+    if (animationPreset === 'custom') {
+      const parsedStart = parseUtcInputValue(customAnimationStart);
+      const parsedEnd = parseUtcInputValue(customAnimationEnd);
+      if (!parsedStart || !parsedEnd) {
+        throw new Error('animation-range-invalid');
+      }
+      if (parsedEnd > latestAvailable) {
+        throw new Error('animation-custom-future-end');
+      }
+      const customDuration = parsedEnd.getTime() - parsedStart.getTime();
+      if (customDuration < MIN_CUSTOM_RANGE_MS) {
+        throw new Error('animation-custom-too-short');
+      }
+      if (customDuration > MAX_CUSTOM_RANGE_MS) {
+        throw new Error('animation-custom-too-long');
+      }
+      startDate = parsedStart;
+      endDate = parsedEnd;
+    } else {
+      const durationHours = animationPreset === '3h' ? 3 : animationPreset === '6h' ? 6 : 12;
+      endDate = latestAvailable;
+      startDate = new Date(endDate.getTime() - durationHours * 60 * 60 * 1000);
+    }
+
+    if (startDate > endDate) {
+      throw new Error('animation-range-invalid');
+    }
+
+    const clampedEnd = new Date(Math.min(endDate.getTime(), latestAvailable.getTime()));
+    const roundedStart = roundUpToTenMinutes(startDate);
+    const roundedEnd = roundDownToTenMinutes(clampedEnd);
+    if (roundedStart > roundedEnd) {
+      throw new Error('animation-range-invalid');
+    }
+
+    const frames: string[] = [];
+    for (let ts = roundedStart.getTime(); ts <= roundedEnd.getTime(); ts += TEN_MINUTES_MS) {
+      frames.push(toUtcInputValue(new Date(ts)));
+      if (frames.length > MAX_ANIMATION_EXPORT_FRAMES) {
+        throw new Error('animation-max-export-frames');
+      }
+    }
+
+    if (frames.length < 2) {
+      throw new Error('animation-export-too-few-frames');
+    }
+
+    return frames;
+  };
+
+  const exportGif = async () => {
+    if (!map2Instance.current || !map2Ref.current || isGifExporting) return;
+
+    let frames: string[] = [];
+    try {
+      frames = buildAnimationFrameTimes();
+    } catch {
+      frames = [];
+    }
+
+    if (frames.length === 0) {
+      try {
+        buildAnimationFrameTimes();
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        const message =
+          code === 'animation-max-export-frames'
+            ? t('animationMaxExportFramesError')
+            : code === 'animation-export-too-few-frames'
+              ? t('animationExportTooFewFramesError')
+              : code === 'animation-custom-future-end'
+                ? t('animationCustomFutureEndError')
+                : code === 'animation-custom-too-short'
+                  ? t('animationCustomTooShortError')
+                  : code === 'animation-custom-too-long'
+                    ? t('animationCustomTooLongError')
+                    : t('animationRangeError');
+        setAnimationRangeError(message);
+      }
+      return;
+    }
+
+    setAnimationRangeError(null);
+    setIsGifExporting(true);
+    setGifExportProgress(0);
+
+    try {
+      const { saveAs } = await import('file-saver');
+      const exportKind = getAnimationExportKind(activeLayers);
+      const gifBlob = await exportAnimationGif({
+        frameTimes: frames,
+        fps: animationFps,
+        kind: exportKind,
+        maxDimension: gifMaxDimension,
+        colorCount: gifColorCount,
+        paletteMode: gifPaletteMode,
+        ditherLevel: gifDitherLevel,
+        finalPauseMs: gifFinalPauseMs,
+        map: map2Instance.current,
+        mapContainer: map2Ref.current,
+        activeLayers,
+        irStyle,
+        visBrightness,
+        visContrast,
+        rgbSaturation,
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        exportSolarElevation: solarElevation,
+        mapOptions,
+        language,
+        map1BordersLayer: map1BordersRef.current,
+        map1DepartmentsLayer: map1DepartmentsRef.current,
+        cityLoadPromise: cityLoadPromiseRef.current,
+        getVisibleCityFeatures,
+        onProgress: setGifExportProgress,
+      });
+
+      const safeStart = frames[0].replace('T', '_').replace(/:/g, '-');
+      const safeEnd = frames[frames.length - 1].replace('T', '_').replace(/:/g, '-');
+      saveAs(gifBlob, `MTG_ANIMATION_${safeStart}_to_${safeEnd}.gif`);
+    } catch (error) {
+      console.error('GIF export failed:', error);
+      alert(t('animationExportFailed'));
+    } finally {
+      setIsGifExporting(false);
+    }
+  };
+
+  const getAnimationRangeError = (): string | null => {
+    try {
+      buildAnimationFrameTimes();
+      return null;
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      if (code === 'animation-max-export-frames') return t('animationMaxExportFramesError');
+      if (code === 'animation-export-too-few-frames') return t('animationExportTooFewFramesError');
+      if (code === 'animation-custom-future-end') return t('animationCustomFutureEndError');
+      if (code === 'animation-custom-too-short') return t('animationCustomTooShortError');
+      if (code === 'animation-custom-too-long') return t('animationCustomTooLongError');
+      return t('animationRangeError');
+    }
+  };
+
+  const computedAnimationRangeError = getAnimationRangeError();
+  const animationEstimatedFrameCount = computedAnimationRangeError ? 0 : buildAnimationFrameTimes().length;
 
   const openDownloadModal = () => {
     const nextSelection: Record<ExportKind, boolean> = {
@@ -366,6 +697,18 @@ export default function DualMapViewer() {
           <HeaderInfoButton onClick={() => setIsInfoOpen(true)} t={t} theme={resolvedTheme} />
 
           <button
+            onClick={() => setIsAnimationModalOpen(true)}
+            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
+              resolvedTheme === 'light'
+                ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
+                : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
+            }`}
+          >
+            <Film className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">{t('animation')}</span>
+          </button>
+
+          <button
             onClick={openDownloadModal}
             disabled={isExporting}
             className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
@@ -463,6 +806,45 @@ export default function DualMapViewer() {
       </div>
 
       <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} t={t} theme={resolvedTheme} />
+
+      <AnimationModal
+        animationModalRef={animationModalRef}
+        customDate={customAnimationDate}
+        customEnd={customAnimationEnd}
+        customEndStep={customEndStep}
+        customLatestDate={latestAvailableDatePart}
+        customMaxStep={customDayMaxStep}
+        customStart={customAnimationStart}
+        customStartStep={customStartStep}
+        estimatedFrameCount={animationEstimatedFrameCount}
+        fps={animationFps}
+        gifColorCount={gifColorCount}
+        gifDitherLevel={gifDitherLevel}
+        gifFinalPauseMs={gifFinalPauseMs}
+        gifMaxDimension={gifMaxDimension}
+        gifPaletteMode={gifPaletteMode}
+        gifProgress={gifExportProgress}
+        isExportingGif={isGifExporting}
+        isOpen={isAnimationModalOpen}
+        onClose={() => {
+          setIsAnimationModalOpen(false);
+        }}
+        onColorCountChange={setGifColorCount}
+        onDitherLevelChange={setGifDitherLevel}
+        onFinalPauseChange={setGifFinalPauseMs}
+        onCustomDateChange={handleCustomDateChange}
+        onCustomEndStepChange={handleCustomEndStepChange}
+        onCustomStartStepChange={handleCustomStartStepChange}
+        onExportGif={() => { void exportGif(); }}
+        onFpsChange={setAnimationFps}
+        onPaletteModeChange={setGifPaletteMode}
+        onPresetChange={handleAnimationPresetChange}
+        onResolutionChange={setGifMaxDimension}
+        preset={animationPreset}
+        rangeError={computedAnimationRangeError ?? animationRangeError}
+        t={t}
+        theme={resolvedTheme}
+      />
 
       <DownloadModal
         availableExportKinds={availableExportKinds}
