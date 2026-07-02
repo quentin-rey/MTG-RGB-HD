@@ -380,37 +380,41 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
               </label>
             </div>
 
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visContrastClouds')}</span>
-                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visContrast.toFixed(2)}x</span>
+            {activeLayers.vis && (
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visContrastClouds')}</span>
+                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visContrast.toFixed(2)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.6"
+                  max="2.0"
+                  step="0.05"
+                  value={visContrast}
+                  onChange={(e) => onVisContrastChange(parseFloat(e.target.value))}
+                  className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                />
               </div>
-              <input
-                type="range"
-                min="0.6"
-                max="2.0"
-                step="0.05"
-                value={visContrast}
-                onChange={(e) => onVisContrastChange(parseFloat(e.target.value))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-              />
-            </div>
+            )}
 
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visBrightnessClouds')}</span>
-                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visBrightness.toFixed(2)}x</span>
+            {activeLayers.vis && (
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visBrightnessClouds')}</span>
+                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visBrightness.toFixed(2)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.6"
+                  max="1.8"
+                  step="0.05"
+                  value={visBrightness}
+                  onChange={(e) => onVisBrightnessChange(parseFloat(e.target.value))}
+                  className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                />
               </div>
-              <input
-                type="range"
-                min="0.6"
-                max="1.8"
-                step="0.05"
-                value={visBrightness}
-                onChange={(e) => onVisBrightnessChange(parseFloat(e.target.value))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-              />
-            </div>
+            )}
 
             {activeLayers.rgb && (
               <div className={`pt-2 space-y-3 ${themedClass(isLight, 'border-t border-slate-200', 'border-t border-white/5')}`}>
