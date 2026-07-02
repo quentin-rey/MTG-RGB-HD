@@ -676,7 +676,15 @@ export default function DualMapViewer() {
   const hdPreviewVisContrastBoost = 1 + hdContrastWeight * 0.24;
   const rgbLayerEffectiveSaturation = rgbSaturation * rgbLegacyFusionSaturationBoost * hdPreviewBoost;
   const rgbLayerEffectiveBrightness = rgbVisNightBrightness * rgbLegacyFusionBrightnessBoost * hdPreviewVisBrightnessBoost;
-  const rgbLayerEffectiveSaturationWithHd = Math.max(0.4, rgbLayerEffectiveSaturation * hdSaturationFactor);
+  // Upper-bounded like visHdLegacyBrightness/visHdLegacyContrast below: rgbSaturation alone goes up to
+  // 2.0, and rgbLegacyFusionSaturationBoost (1.45x, always applied in RGB+VIS-only mode) stacks on top of
+  // it unbounded, so without a ceiling this can exceed ~1.9 even with HD disabled. That range renders fine
+  // in Chromium but washes out to a flat yellow-olive with no visible clouds in Safari/WebKit (its filter
+  // pipeline color-manages saturate() against the display's gamut, e.g. wide-gamut P3 Macs, and clips
+  // harder than Chromium at extreme values) — confirmed by a user report that only reproduced on Safari
+  // and only past this range. 1.8 sits above the default (~1.67 with default rgbSaturation) so the slider
+  // still has room to move, but keeps it out of the confirmed-bad zone.
+  const rgbLayerEffectiveSaturationWithHd = Math.min(1.8, Math.max(0.4, rgbLayerEffectiveSaturation * hdSaturationFactor));
   const visHdLegacyBrightness = Math.min(2, visBrightness * 1.2 * hdPreviewVisBrightnessBoost);
   const visHdLegacyContrast = Math.min(2.4, visContrast * 1.2 * hdPreviewVisContrastBoost);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
