@@ -6,12 +6,14 @@ export function useViewerPanelsState() {
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
 
   const adjustmentsRef = useRef<HTMLDivElement>(null);
   const animationModalRef = useRef<HTMLDivElement>(null);
   const downloadModalRef = useRef<HTMLDivElement>(null);
   const helpRef = useRef<HTMLDivElement>(null);
   const infoRef = useRef<HTMLDivElement>(null);
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -32,6 +34,9 @@ export function useViewerPanelsState() {
       if (animationModalRef.current && !animationModalRef.current.contains(target)) {
         setIsAnimationModalOpen(false);
       }
+      if (overflowMenuRef.current && !overflowMenuRef.current.contains(target)) {
+        setIsOverflowMenuOpen(false);
+      }
     };
 
     const handleEsc = (event: KeyboardEvent) => {
@@ -41,10 +46,11 @@ export function useViewerPanelsState() {
         setIsAnimationModalOpen(false);
         setIsDownloadModalOpen(false);
         setIsHelpOpen(false);
+        setIsOverflowMenuOpen(false);
       }
     };
 
-    if (isInfoOpen || isAdjustmentsOpen || isDownloadModalOpen || isAnimationModalOpen || isHelpOpen) {
+    if (isInfoOpen || isAdjustmentsOpen || isDownloadModalOpen || isAnimationModalOpen || isHelpOpen || isOverflowMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleEsc);
     }
@@ -53,7 +59,7 @@ export function useViewerPanelsState() {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [isInfoOpen, isAdjustmentsOpen, isDownloadModalOpen, isAnimationModalOpen, isHelpOpen]);
+  }, [isInfoOpen, isAdjustmentsOpen, isDownloadModalOpen, isAnimationModalOpen, isHelpOpen, isOverflowMenuOpen]);
 
   return {
     adjustmentsRef,
@@ -66,10 +72,13 @@ export function useViewerPanelsState() {
     isDownloadModalOpen,
     isHelpOpen,
     isInfoOpen,
+    isOverflowMenuOpen,
+    overflowMenuRef,
     setIsAdjustmentsOpen,
     setIsAnimationModalOpen,
     setIsDownloadModalOpen,
     setIsHelpOpen,
     setIsInfoOpen,
+    setIsOverflowMenuOpen,
   };
 }

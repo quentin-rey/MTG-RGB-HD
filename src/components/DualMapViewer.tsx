@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Download, Film, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
+import { Check, Download, Film, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
   getAvailableExportKindsFromLayers,
+  getHdEnhancementProfile,
   getLatestAvailableTime,
   getSolarElevation,
   IR_STYLES,
@@ -14,6 +15,7 @@ import {
   type MapOptions,
   readStoredJson,
   safeSetLocalStorage,
+  themedClass,
   type ExportKind,
   type MapViewState,
 } from './dualMapViewerShared';
@@ -30,6 +32,8 @@ import {
   AnimationModal,
   DownloadModal,
   HeaderInfoButton,
+  HeaderOverflowButton,
+  HeaderOverflowMenu,
   HelpModal,
   InfoModal,
   Map2ControlBar,
@@ -38,9 +42,92 @@ import {
 } from './dualMapViewerPanels';
 import { useImageAdjustments } from './useImageAdjustments';
 import { useViewerPanelsState } from './useViewerPanelsState';
+import { readShareSnapshotFromUrl, type AnimationPreset, type ShareSnapshot, type ThemeMode } from './shareSnapshot';
+import { useShareLink } from './useShareLink';
 
-type ThemeMode = 'dark' | 'light' | 'auto';
-type AnimationPreset = '3h' | '6h' | '12h' | 'custom';
+// Static CSS referencing custom properties set on the root element's `style` attribute
+// (see the render below). Keeping this string identity-stable across renders means React
+// skips re-parsing the whole stylesheet every time a slider changes a filter value.
+const DYNAMIC_TILE_STYLES = `
+  .leaflet-container {
+    background-color: #0a0a0a !important;
+  }
+  .ui-scrollbar {
+    scrollbar-width: thin;
+  }
+  .theme-dark .ui-scrollbar {
+    scrollbar-color: rgba(148, 163, 184, 0.55) rgba(255, 255, 255, 0.06);
+  }
+  .theme-light .ui-scrollbar {
+    scrollbar-color: rgba(100, 116, 139, 0.65) rgba(148, 163, 184, 0.2);
+  }
+  .ui-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .ui-scrollbar::-webkit-scrollbar-track {
+    border-radius: 999px;
+  }
+  .theme-dark .ui-scrollbar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .theme-light .ui-scrollbar::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.2);
+  }
+  .ui-scrollbar::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .theme-dark .ui-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.55);
+  }
+  .theme-light .ui-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.65);
+  }
+  .city-label {
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
+    white-space: nowrap;
+    pointer-events: none;
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    font-weight: 500;
+    transform: translate(4px, -2px);
+  }
+  .city-label-sm { font-size: 10px; opacity: 0.82; }
+  .city-label-md { font-size: 11px; opacity: 0.88; }
+  .city-label-lg { font-size: 12px; opacity: 0.95; }
+  .vis-layer-tiles {
+    filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
+  }
+  .rgb-layer-tiles {
+    filter: saturate(var(--mtg-rgb-saturation)) brightness(var(--mtg-rgb-brightness));
+  }
+  .ir-overlay-layer-tiles {
+    mix-blend-mode: color;
+    filter: saturate(1.2) contrast(1.08);
+  }
+  .ir-cloud-only-layer-tiles {
+    mix-blend-mode: color;
+    filter: saturate(1.2) contrast(1.08);
+  }
+  .vis-overlay-layer-tiles {
+    mix-blend-mode: soft-light;
+    filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
+  }
+  .vis-overlay-layer-tiles-rgb-hd {
+    mix-blend-mode: luminosity;
+    filter: brightness(var(--mtg-vis-hd-legacy-brightness)) contrast(var(--mtg-vis-hd-legacy-contrast));
+  }
+  .vis-overlay-layer-tiles-on-ir {
+    mix-blend-mode: screen;
+    filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast)) saturate(1.05);
+  }
+  .vis-overlay-layer-tiles-hybrid {
+    mix-blend-mode: luminosity;
+    filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
+  }
+`;
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 const MAX_ANIMATION_EXPORT_FRAMES = 73;
@@ -49,81 +136,6 @@ const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
 const CUSTOM_MIN_RANGE_STEPS = MIN_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
 const CUSTOM_MAX_RANGE_STEPS = MAX_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
-
-type ShareSnapshot = {
-  activeLayers: ActiveLayers;
-  animationFps: number;
-  animationPreset: AnimationPreset;
-  autoReduceVisAtNight: boolean;
-  customAnimationDate: string;
-  customEndStep: number;
-  customStartStep: number;
-  currentTime: string;
-  gifColorCount: 64 | 128 | 256;
-  gifDitherLevel: GifDitherLevel;
-  gifFinalPauseMs: GifFinalPauseMs;
-  gifMaxDimension: 960 | 1280 | 1600;
-  gifPaletteMode: GifPaletteMode;
-  hdEnhanceEnabled: boolean;
-  hdEnhanceHighlightProtection: number;
-  hdEnhanceLocalContrast: number;
-  hdEnhanceNoiseReduction: number;
-  hdEnhancePreset: HdEnhancementPreset;
-  hdEnhanceRadius: number;
-  hdEnhanceSaturationAdjust: number;
-  hdEnhanceShadowProtection: number;
-  hdEnhanceSharpen: number;
-  hdEnhanceStrength: number;
-  irStyle: string;
-  language: Language;
-  mapOptions: MapOptions;
-  mapView: MapViewState;
-  rgbHdOpacity: number;
-  rgbSaturation: number;
-  sandwichOpacity: number;
-  themeMode: ThemeMode;
-  visBrightness: number;
-  visContrast: number;
-};
-
-function encodeShareSnapshot(snapshot: ShareSnapshot): string {
-  const json = JSON.stringify(snapshot);
-  const bytes = new TextEncoder().encode(json);
-  let binary = '';
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function decodeShareSnapshot(raw: string): Partial<ShareSnapshot> | null {
-  try {
-    const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    const json = new TextDecoder().decode(bytes);
-    return JSON.parse(json) as Partial<ShareSnapshot>;
-  } catch {
-    return null;
-  }
-}
-function readShareSnapshotFromUrl(): Partial<ShareSnapshot> | null {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const raw = params.get('view');
-    if (!raw) return null;
-    const compactPayload = decodeShareSnapshot(raw);
-    if (compactPayload) return compactPayload;
-
-    // Backward compatibility with previous raw JSON links.
-    return JSON.parse(raw) as Partial<ShareSnapshot>;
-  } catch {
-    return null;
-  }
-}
 
 function clampMapView(input: MapViewState | null | undefined): MapViewState | null {
   if (!input) return null;
@@ -282,7 +294,7 @@ export default function DualMapViewer() {
   const initialMapView = clampMapView(sharedSnapshot?.mapView ?? rememberedMapView);
   const [mapViewState, setMapViewState] = useState<MapViewState | null>(initialMapView);
   const [isExporting, setIsExporting] = useState(false);
-    const [shareToastMessage, setShareToastMessage] = useState<string | null>(null);
+  const [justCopiedShareLink, setJustCopiedShareLink] = useState(false);
   const [selectedExports, setSelectedExports] = useState<Record<ExportKind, boolean>>({
     vis: true,
     rgb: true,
@@ -330,12 +342,17 @@ export default function DualMapViewer() {
     isDownloadModalOpen,
     isHelpOpen,
     isInfoOpen,
+    isOverflowMenuOpen,
+    overflowMenuRef,
     setIsAdjustmentsOpen,
     setIsAnimationModalOpen,
     setIsDownloadModalOpen,
     setIsHelpOpen,
     setIsInfoOpen,
+    setIsOverflowMenuOpen,
   } = useViewerPanelsState();
+
+  const { shareToastMessage, setShareToastMessage, copyShareLink } = useShareLink();
 
   const {
     autoReduceVisAtNight,
@@ -433,8 +450,9 @@ export default function DualMapViewer() {
     ) {
       setHdEnhancePreset(sharedSnapshot.hdEnhancePreset);
     }
-    if (typeof sharedSnapshot.irStyle === 'string' && IR_STYLES.some((style) => style.id === sharedSnapshot.irStyle)) {
-      setIrStyle(sharedSnapshot.irStyle);
+    const matchedIrStyle = IR_STYLES.find((style) => style.id === sharedSnapshot.irStyle);
+    if (matchedIrStyle) {
+      setIrStyle(matchedIrStyle.id);
     }
   }, [
     setAutoReduceVisAtNight,
@@ -483,12 +501,6 @@ export default function DualMapViewer() {
     return () => mediaQuery.removeEventListener('change', syncFromSystem);
   }, [themeMode]);
 
-  useEffect(() => {
-    if (!shareToastMessage) return;
-    const timeout = window.setTimeout(() => setShareToastMessage(null), 2200);
-    return () => window.clearTimeout(timeout);
-  }, [shareToastMessage]);
-  
   const [mapOptions, setMapOptions] = useState<MapOptions>(() => {
     const defaults: MapOptions = {
       bordersOpacity: 0.4,
@@ -629,13 +641,7 @@ export default function DualMapViewer() {
     : 1;
   const rgbLegacyFusionSaturationBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.45 : 1;
   const rgbLegacyFusionBrightnessBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.12 : 1;
-  const hdPresetProfile = hdEnhancePreset === 'natural'
-    ? { sharpen: 0.8, contrast: 0.85, saturation: 0.8 }
-    : hdEnhancePreset === 'punchy'
-      ? { sharpen: 1.2, contrast: 1.25, saturation: 1.15 }
-      : hdEnhancePreset === 'analyze'
-        ? { sharpen: 1.35, contrast: 1.35, saturation: 0.9 }
-        : { sharpen: 1, contrast: 1, saturation: 1 };
+  const hdPresetProfile = getHdEnhancementProfile(hdEnhancePreset);
 
   const applyHdSliderChange = (apply: () => void) => {
     apply();
@@ -771,35 +777,23 @@ export default function DualMapViewer() {
     return frames;
   };
 
+  const mapAnimationErrorCode = (code: string): string => {
+    if (code === 'animation-max-export-frames') return t('animationMaxExportFramesError');
+    if (code === 'animation-export-too-few-frames') return t('animationExportTooFewFramesError');
+    if (code === 'animation-custom-future-end') return t('animationCustomFutureEndError');
+    if (code === 'animation-custom-too-short') return t('animationCustomTooShortError');
+    if (code === 'animation-custom-too-long') return t('animationCustomTooLongError');
+    return t('animationRangeError');
+  };
+
   const exportGif = async () => {
     if (!map2Instance.current || !map2Ref.current || isGifExporting) return;
 
     let frames: string[] = [];
     try {
       frames = buildAnimationFrameTimes();
-    } catch {
-      frames = [];
-    }
-
-    if (frames.length === 0) {
-      try {
-        buildAnimationFrameTimes();
-      } catch (error) {
-        const code = error instanceof Error ? error.message : '';
-        const message =
-          code === 'animation-max-export-frames'
-            ? t('animationMaxExportFramesError')
-            : code === 'animation-export-too-few-frames'
-              ? t('animationExportTooFewFramesError')
-              : code === 'animation-custom-future-end'
-                ? t('animationCustomFutureEndError')
-                : code === 'animation-custom-too-short'
-                  ? t('animationCustomTooShortError')
-                  : code === 'animation-custom-too-long'
-                    ? t('animationCustomTooLongError')
-                    : t('animationRangeError');
-        setAnimationRangeError(message);
-      }
+    } catch (error) {
+      setAnimationRangeError(mapAnimationErrorCode(error instanceof Error ? error.message : ''));
       return;
     }
 
@@ -860,23 +854,15 @@ export default function DualMapViewer() {
     }
   };
 
-  const getAnimationRangeError = (): string | null => {
-    try {
-      buildAnimationFrameTimes();
-      return null;
-    } catch (error) {
-      const code = error instanceof Error ? error.message : '';
-      if (code === 'animation-max-export-frames') return t('animationMaxExportFramesError');
-      if (code === 'animation-export-too-few-frames') return t('animationExportTooFewFramesError');
-      if (code === 'animation-custom-future-end') return t('animationCustomFutureEndError');
-      if (code === 'animation-custom-too-short') return t('animationCustomTooShortError');
-      if (code === 'animation-custom-too-long') return t('animationCustomTooLongError');
-      return t('animationRangeError');
-    }
-  };
-
-  const computedAnimationRangeError = getAnimationRangeError();
-  const animationEstimatedFrameCount = computedAnimationRangeError ? 0 : buildAnimationFrameTimes().length;
+  // Computed once per render (buildAnimationFrameTimes previously ran twice per render:
+  // once to check for an error, once more to get the frame count).
+  let computedAnimationRangeError: string | null = null;
+  let animationEstimatedFrameCount = 0;
+  try {
+    animationEstimatedFrameCount = buildAnimationFrameTimes().length;
+  } catch (error) {
+    computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
+  }
 
   const openDownloadModal = () => {
     const nextSelection: Record<ExportKind, boolean> = {
@@ -939,7 +925,7 @@ export default function DualMapViewer() {
   };
 
   const shareCurrentView = async () => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return false;
 
     const map = map2Instance.current;
     const liveCenter = map?.getCenter();
@@ -952,7 +938,7 @@ export default function DualMapViewer() {
 
     if (!shareMapView) {
       setShareToastMessage(t('shareUnavailable'));
-      return;
+      return false;
     }
 
     const snapshot: ShareSnapshot = {
@@ -991,15 +977,14 @@ export default function DualMapViewer() {
       visContrast,
     };
 
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set('view', encodeShareSnapshot(snapshot));
-    const shareUrl = nextUrl.toString();
+    return copyShareLink(snapshot, { copied: t('shareCopied'), failed: t('shareCopyFailed') });
+  };
 
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setShareToastMessage(t('shareCopied'));
-    } catch {
-      setShareToastMessage(t('shareCopyFailed'));
+  const shareCurrentViewWithFeedback = async () => {
+    const copied = await shareCurrentView();
+    if (copied) {
+      setJustCopiedShareLink(true);
+      window.setTimeout(() => setJustCopiedShareLink(false), 1600);
     }
   };
 
@@ -1015,7 +1000,7 @@ export default function DualMapViewer() {
 
       if (event.shiftKey && lowerKey === 's') {
         event.preventDefault();
-        void shareCurrentView();
+        void shareCurrentViewWithFeedback();
         return;
       }
 
@@ -1071,15 +1056,27 @@ export default function DualMapViewer() {
     setIsAnimationModalOpen,
     setIsHelpOpen,
     setIsInfoOpen,
-    shareCurrentView,
+    shareCurrentViewWithFeedback,
   ]);
 
+  const dynamicTileStyleVars = {
+    '--mtg-vis-brightness': visBrightness,
+    '--mtg-vis-contrast': visContrast,
+    '--mtg-rgb-saturation': rgbLayerEffectiveSaturationWithHd,
+    '--mtg-rgb-brightness': rgbLayerEffectiveBrightness,
+    '--mtg-vis-hd-legacy-brightness': visHdLegacyBrightness,
+    '--mtg-vis-hd-legacy-contrast': visHdLegacyContrast,
+  } as React.CSSProperties;
+
   return (
-    <div className={`theme-${resolvedTheme} flex flex-col h-screen w-full font-sans overflow-hidden ${
-      resolvedTheme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-[#0a0a0a] text-white'
-    }`}>
-      <div className={`min-h-16 flex items-center justify-between px-3 py-2 sm:px-6 border-b shadow-sm z-10 shrink-0 gap-2 sm:gap-3 ${
-        resolvedTheme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-[#111] border-white/10'
+    <div
+      className={`theme-${resolvedTheme} flex flex-col h-dvh w-full font-sans overflow-hidden ${
+        themedClass(resolvedTheme === 'light', 'bg-slate-100 text-slate-900', 'bg-[#0a0a0a] text-white')
+      }`}
+      style={dynamicTileStyleVars}
+    >
+      <div className={`min-h-16 flex flex-wrap items-center justify-between px-3 py-2 sm:px-6 border-b shadow-sm z-10 shrink-0 gap-2 sm:gap-3 ${
+        themedClass(resolvedTheme === 'light', 'bg-slate-50 border-slate-200', 'bg-[#111] border-white/10')
       }`}>
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 rounded-full bg-slate-800 border border-white/15 flex items-center justify-center shrink-0">
@@ -1087,20 +1084,21 @@ export default function DualMapViewer() {
           </div>
           <div className="flex flex-col min-w-0">
             <h1 className={`text-base sm:text-lg font-medium tracking-tight whitespace-nowrap ${
-              resolvedTheme === 'light' ? 'text-slate-900' : 'text-slate-100'
+              themedClass(resolvedTheme === 'light', 'text-slate-900', 'text-slate-100')
             }`}>MTG-RGB-HD</h1>
             <p className={`hidden lg:block text-xs whitespace-nowrap ${
-              resolvedTheme === 'light' ? 'text-slate-600' : 'text-slate-400'
+              themedClass(resolvedTheme === 'light', 'text-slate-600', 'text-slate-400')
             }`}>{t('subtitle')}</p>
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 sm:gap-3 relative shrink-0 flex-wrap">
+        <div className="flex items-center justify-center sm:justify-end gap-2 sm:gap-3 relative shrink-0 flex-wrap w-full sm:w-auto">
+          <div className="hidden sm:flex items-center gap-2 sm:gap-3">
           <div className={`flex items-center gap-1 rounded-lg p-1 border ${
-            resolvedTheme === 'light' ? 'bg-white border-slate-200' : 'bg-[#1b1b1b] border-white/10'
+            themedClass(resolvedTheme === 'light', 'bg-white border-slate-200', 'bg-[#1b1b1b] border-white/10')
           }`}>
             <div className={`relative grid grid-cols-2 rounded-md p-0.5 border ${
-              resolvedTheme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-black/30 border-white/10'
+              themedClass(resolvedTheme === 'light', 'bg-slate-100 border-slate-200', 'bg-black/30 border-white/10')
             }`}>
               <span
                 className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
@@ -1141,10 +1139,10 @@ export default function DualMapViewer() {
           </div>
 
           <div className={`flex items-center gap-1 rounded-lg p-1 border ${
-            resolvedTheme === 'light' ? 'bg-white border-slate-200' : 'bg-[#1b1b1b] border-white/10'
+            themedClass(resolvedTheme === 'light', 'bg-white border-slate-200', 'bg-[#1b1b1b] border-white/10')
           }`}>
             <div className={`relative grid grid-cols-3 rounded-md p-0.5 border ${
-              resolvedTheme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-black/30 border-white/10'
+              themedClass(resolvedTheme === 'light', 'bg-slate-100 border-slate-200', 'bg-black/30 border-white/10')
             }`}>
               <span
                 className="absolute top-0.5 bottom-0.5 w-[calc(33.333%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
@@ -1204,23 +1202,30 @@ export default function DualMapViewer() {
             </div>
           </div>
           <HeaderInfoButton onHelpClick={() => setIsHelpOpen(true)} onInfoClick={() => setIsInfoOpen(true)} t={t} theme={resolvedTheme} />
+          </div>
+
+          <HeaderOverflowButton onOpen={() => setIsOverflowMenuOpen(true)} t={t} theme={resolvedTheme} />
 
           <button
-            onClick={() => { void shareCurrentView(); }}
-            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
-              resolvedTheme === 'light'
-                ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
-                : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
+            onClick={() => { void shareCurrentViewWithFeedback(); }}
+            className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
+              justCopiedShareLink
+                ? resolvedTheme === 'light'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
+                : resolvedTheme === 'light'
+                  ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
+                  : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
             }`}
             title={t('shareView')}
           >
-            <Share2 className="w-4 h-4 shrink-0" />
-            <span className="hidden sm:inline">{t('shareView')}</span>
+            {justCopiedShareLink ? <Check className="w-4 h-4 shrink-0" /> : <Share2 className="w-4 h-4 shrink-0" />}
+            <span className="hidden sm:inline">{justCopiedShareLink ? t('shareCopiedShort') : t('shareView')}</span>
           </button>
 
           <button
             onClick={() => setIsAnimationModalOpen(true)}
-            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
+            className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
               resolvedTheme === 'light'
                 ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
                 : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
@@ -1233,7 +1238,7 @@ export default function DualMapViewer() {
           <button
             onClick={openDownloadModal}
             disabled={isExporting}
-            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
+            className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
               resolvedTheme === 'light'
                 ? 'bg-slate-900 text-white hover:bg-slate-700'
                 : 'bg-white text-black hover:bg-slate-200'
@@ -1256,56 +1261,56 @@ export default function DualMapViewer() {
 
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
-            <Map2ControlBar
-              activeLayers={activeLayers}
-              adjustmentsRef={adjustmentsRef}
-              autoReduceVisAtNight={autoReduceVisAtNight}
-              effectiveHybridVisOpacity={effectiveHybridVisOpacity}
-              effectiveSandwichOpacity={effectiveSandwichOpacity}
-              hdEnhanceEnabled={hdEnhanceEnabled}
-              hdEnhanceHighlightProtection={hdEnhanceHighlightProtection}
-              hdEnhanceLocalContrast={hdEnhanceLocalContrast}
-              hdEnhanceNoiseReduction={hdEnhanceNoiseReduction}
-              hdEnhancePreset={hdEnhancePreset}
-              hdEnhanceRadius={hdEnhanceRadius}
-              hdEnhanceSaturationAdjust={hdEnhanceSaturationAdjust}
-              hdEnhanceShadowProtection={hdEnhanceShadowProtection}
-              hdEnhanceSharpen={hdEnhanceSharpen}
-              hdEnhanceStrength={hdEnhanceStrength}
-              irStyle={irStyle}
-              isAdjustmentsOpen={isAdjustmentsOpen}
-              mapOptions={mapOptions}
-              onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
-              onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
-              onHdEnhanceEnabledChange={setHdEnhanceEnabled}
-              onHdEnhanceHighlightProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceHighlightProtection(value))}
-              onHdEnhanceLocalContrastChange={(value) => applyHdSliderChange(() => setHdEnhanceLocalContrast(value))}
-              onHdEnhanceNoiseReductionChange={(value) => applyHdSliderChange(() => setHdEnhanceNoiseReduction(value))}
-              onHdEnhancePresetChange={handleHdPresetChange}
-              onHdEnhanceRadiusChange={(value) => applyHdSliderChange(() => setHdEnhanceRadius(value))}
-              onHdEnhanceSaturationAdjustChange={(value) => applyHdSliderChange(() => setHdEnhanceSaturationAdjust(value))}
-              onHdEnhanceShadowProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceShadowProtection(value))}
-              onHdEnhanceSharpenChange={(value) => applyHdSliderChange(() => setHdEnhanceSharpen(value))}
-              onHdEnhanceStrengthChange={(value) => applyHdSliderChange(() => setHdEnhanceStrength(value))}
-              onIrStyleChange={setIrStyle}
-              onMapOptionsChange={setMapOptions}
-              onResetAdjustments={resetAdjustments}
-              onRgbHdOpacityChange={setRgbHdOpacity}
-              onRgbSaturationChange={setRgbSaturation}
-              onSandwichOpacityChange={setSandwichOpacity}
-              onToggleAdjustments={() => setIsAdjustmentsOpen((prev) => !prev)}
-              onResetHdEnhancement={resetHdEnhancement}
-              onVisBrightnessChange={setVisBrightness}
-              onVisContrastChange={setVisContrast}
-              rgbHdOpacity={rgbHdOpacity}
-              rgbSaturation={rgbSaturation}
-              sandwichOpacity={sandwichOpacity}
-              solarElevation={solarElevation}
-              t={t}
-              theme={resolvedTheme}
-              visBrightness={visBrightness}
-              visContrast={visContrast}
-            />
+          <Map2ControlBar
+            activeLayers={activeLayers}
+            adjustmentsRef={adjustmentsRef}
+            autoReduceVisAtNight={autoReduceVisAtNight}
+            effectiveHybridVisOpacity={effectiveHybridVisOpacity}
+            effectiveSandwichOpacity={effectiveSandwichOpacity}
+            hdEnhanceEnabled={hdEnhanceEnabled}
+            hdEnhanceHighlightProtection={hdEnhanceHighlightProtection}
+            hdEnhanceLocalContrast={hdEnhanceLocalContrast}
+            hdEnhanceNoiseReduction={hdEnhanceNoiseReduction}
+            hdEnhancePreset={hdEnhancePreset}
+            hdEnhanceRadius={hdEnhanceRadius}
+            hdEnhanceSaturationAdjust={hdEnhanceSaturationAdjust}
+            hdEnhanceShadowProtection={hdEnhanceShadowProtection}
+            hdEnhanceSharpen={hdEnhanceSharpen}
+            hdEnhanceStrength={hdEnhanceStrength}
+            irStyle={irStyle}
+            isAdjustmentsOpen={isAdjustmentsOpen}
+            mapOptions={mapOptions}
+            onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
+            onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
+            onHdEnhanceEnabledChange={setHdEnhanceEnabled}
+            onHdEnhanceHighlightProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceHighlightProtection(value))}
+            onHdEnhanceLocalContrastChange={(value) => applyHdSliderChange(() => setHdEnhanceLocalContrast(value))}
+            onHdEnhanceNoiseReductionChange={(value) => applyHdSliderChange(() => setHdEnhanceNoiseReduction(value))}
+            onHdEnhancePresetChange={handleHdPresetChange}
+            onHdEnhanceRadiusChange={(value) => applyHdSliderChange(() => setHdEnhanceRadius(value))}
+            onHdEnhanceSaturationAdjustChange={(value) => applyHdSliderChange(() => setHdEnhanceSaturationAdjust(value))}
+            onHdEnhanceShadowProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceShadowProtection(value))}
+            onHdEnhanceSharpenChange={(value) => applyHdSliderChange(() => setHdEnhanceSharpen(value))}
+            onHdEnhanceStrengthChange={(value) => applyHdSliderChange(() => setHdEnhanceStrength(value))}
+            onIrStyleChange={setIrStyle}
+            onMapOptionsChange={setMapOptions}
+            onResetAdjustments={resetAdjustments}
+            onRgbHdOpacityChange={setRgbHdOpacity}
+            onRgbSaturationChange={setRgbSaturation}
+            onSandwichOpacityChange={setSandwichOpacity}
+            onToggleAdjustments={() => setIsAdjustmentsOpen((prev) => !prev)}
+            onResetHdEnhancement={resetHdEnhancement}
+            onVisBrightnessChange={setVisBrightness}
+            onVisContrastChange={setVisContrast}
+            rgbHdOpacity={rgbHdOpacity}
+            rgbSaturation={rgbSaturation}
+            sandwichOpacity={sandwichOpacity}
+            solarElevation={solarElevation}
+            t={t}
+            theme={resolvedTheme}
+            visBrightness={visBrightness}
+            visContrast={visContrast}
+          />
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
 
@@ -1332,7 +1337,7 @@ export default function DualMapViewer() {
                   <span className="text-blue-200 font-mono tabular-nums">{loadingProgress}%</span>
                 </div>
 
-                <div className={`mt-2 h-1.5 w-full rounded overflow-hidden ${resolvedTheme === 'light' ? 'bg-slate-300' : 'bg-white/10'}`}>
+                <div className={`mt-2 h-1.5 w-full rounded overflow-hidden ${themedClass(resolvedTheme === 'light', 'bg-slate-300', 'bg-white/10')}`}>
                   <div
                     className="h-full bg-blue-400 transition-[width] duration-150"
                     style={{ width: `${loadingProgress}%` }}
@@ -1340,7 +1345,7 @@ export default function DualMapViewer() {
                 </div>
 
                 {loadingTileCount > 0 && (
-                  <div className={`mt-1 text-[11px] font-mono ${resolvedTheme === 'light' ? 'text-slate-600' : 'text-slate-300'}`}>{t('pendingTiles')}: {loadingTileCount}</div>
+                  <div className={`mt-1 text-[11px] font-mono ${themedClass(resolvedTheme === 'light', 'text-slate-600', 'text-slate-300')}`}>{t('pendingTiles')}: {loadingTileCount}</div>
                 )}
               </div>
             </div>
@@ -1350,6 +1355,20 @@ export default function DualMapViewer() {
 
       <HelpModal helpRef={helpRef} isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} t={t} theme={resolvedTheme} />
       <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} t={t} theme={resolvedTheme} />
+
+      <HeaderOverflowMenu
+        isOpen={isOverflowMenuOpen}
+        language={language}
+        menuRef={overflowMenuRef}
+        onClose={() => setIsOverflowMenuOpen(false)}
+        onHelpClick={() => { setIsOverflowMenuOpen(false); setIsHelpOpen(true); }}
+        onInfoClick={() => { setIsOverflowMenuOpen(false); setIsInfoOpen(true); }}
+        onLanguageChange={setLanguage}
+        onThemeModeChange={setThemeMode}
+        t={t}
+        theme={resolvedTheme}
+        themeMode={themeMode}
+      />
 
       <AnimationModal
         animationModalRef={animationModalRef}
@@ -1419,87 +1438,8 @@ export default function DualMapViewer() {
         selectedExportKinds={selectedExportKinds}
       />
 
-      {/* Dynamic stylesheets to apply adjustments in real-time */}
-      <style>{`
-        .leaflet-container {
-          background-color: #0a0a0a !important;
-        }
-        .ui-scrollbar {
-          scrollbar-width: thin;
-        }
-        .theme-dark .ui-scrollbar {
-          scrollbar-color: rgba(148, 163, 184, 0.55) rgba(255, 255, 255, 0.06);
-        }
-        .theme-light .ui-scrollbar {
-          scrollbar-color: rgba(100, 116, 139, 0.65) rgba(148, 163, 184, 0.2);
-        }
-        .ui-scrollbar::-webkit-scrollbar {
-          width: 10px;
-          height: 10px;
-        }
-        .ui-scrollbar::-webkit-scrollbar-track {
-          border-radius: 999px;
-        }
-        .theme-dark .ui-scrollbar::-webkit-scrollbar-track {
-          background: rgba(255, 255, 255, 0.06);
-        }
-        .theme-light .ui-scrollbar::-webkit-scrollbar-track {
-          background: rgba(148, 163, 184, 0.2);
-        }
-        .ui-scrollbar::-webkit-scrollbar-thumb {
-          border-radius: 999px;
-          border: 2px solid transparent;
-          background-clip: content-box;
-        }
-        .theme-dark .ui-scrollbar::-webkit-scrollbar-thumb {
-          background-color: rgba(148, 163, 184, 0.55);
-        }
-        .theme-light .ui-scrollbar::-webkit-scrollbar-thumb {
-          background-color: rgba(100, 116, 139, 0.65);
-        }
-        .city-label {
-          color: rgba(255, 255, 255, 0.88);
-          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
-          white-space: nowrap;
-          pointer-events: none;
-          font-family: Inter, system-ui, -apple-system, sans-serif;
-          font-weight: 500;
-          transform: translate(4px, -2px);
-        }
-        .city-label-sm { font-size: 10px; opacity: 0.82; }
-        .city-label-md { font-size: 11px; opacity: 0.88; }
-        .city-label-lg { font-size: 12px; opacity: 0.95; }
-        .vis-layer-tiles {
-          filter: brightness(${visBrightness}) contrast(${visContrast});
-        }
-        .rgb-layer-tiles {
-          filter: saturate(${rgbLayerEffectiveSaturationWithHd}) brightness(${rgbLayerEffectiveBrightness});
-        }
-        .ir-overlay-layer-tiles {
-          mix-blend-mode: color;
-          filter: saturate(1.2) contrast(1.08);
-        }
-        .ir-cloud-only-layer-tiles {
-          mix-blend-mode: color;
-          filter: saturate(1.2) contrast(1.08);
-        }
-        .vis-overlay-layer-tiles {
-          mix-blend-mode: soft-light;
-          filter: brightness(${visBrightness}) contrast(${visContrast});
-        }
-        .vis-overlay-layer-tiles-rgb-hd {
-          mix-blend-mode: luminosity;
-          filter: brightness(${visHdLegacyBrightness}) contrast(${visHdLegacyContrast});
-        }
-        .vis-overlay-layer-tiles-on-ir {
-          mix-blend-mode: screen;
-          filter: brightness(${visBrightness}) contrast(${visContrast}) saturate(1.05);
-        }
-        .vis-overlay-layer-tiles-hybrid {
-          mix-blend-mode: luminosity;
-          filter: brightness(${visBrightness}) contrast(${visContrast});
-        }
-      `}</style>
+      {/* Static stylesheet; per-render values are passed as CSS custom properties above. */}
+      <style>{DYNAMIC_TILE_STYLES}</style>
     </div>
   );
 }

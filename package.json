@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "mtg-rgb-hd",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.4.1",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -30,6 +30,8 @@
     "@types/file-saver": "^2.0.7",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "rimraf": "^6.0.1",

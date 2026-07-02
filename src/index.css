@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+/* The app is a single fixed-height view (no page scroll) built around the map,
+   so any scroll/bounce the browser applies at the document level only fights
+   the map's own pinch/pan handling — this disables that entirely. */
+html, body {
+  overscroll-behavior: none;
+}

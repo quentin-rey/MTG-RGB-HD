@@ -1,5 +1,4 @@
 export const WMS_URL_DIRECT = 'https://view.eumetsat.int/geoserver/ows';
-export const WMS_URL_PROXY = 'https://view.eumetsat.int/geoserver/ows';
 export const LAYER_VIS = 'mtg_fd:vis06_hrfi';
 export const LAYER_RGB = 'mtg_fd:rgb_truecolour';
 export const LAYER_IR = 'mtg_fd:ir105_hrfi';
@@ -82,6 +81,15 @@ export const DEFAULT_ACTIVE_LAYERS: ActiveLayers = {
 export function sanitizeActiveLayers(input: ActiveLayers): ActiveLayers {
   if (input.rgb || input.vis || input.ir) return input;
   return { ...DEFAULT_ACTIVE_LAYERS };
+}
+
+/**
+ * Picks between a light- and dark-theme class string. Replaces the
+ * `isLight ? 'light classes' : 'dark classes'` ternary repeated throughout the
+ * panel components with a single named call.
+ */
+export function themedClass(isLight: boolean, lightClasses: string, darkClasses: string): string {
+  return isLight ? lightClasses : darkClasses;
 }
 
 export function getSinglePanelTitle(layers: ActiveLayers, localized: {
@@ -220,4 +228,190 @@ export function getDaylightVisFactor(solarElevation: number): number {
   if (solarElevation <= -6) return 0;
   if (solarElevation >= 12) return 1;
   return clamp((solarElevation + 6) / 18, 0, 1);
+}
+
+export const HD_ENHANCEMENT_PROFILES: Record<Exclude<HdEnhancementPreset, 'custom'>, {
+  sharpen: number;
+  contrast: number;
+  saturation: number;
+}> = {
+  natural: { sharpen: 0.8, contrast: 0.85, saturation: 0.8 },
+  balanced: { sharpen: 1, contrast: 1, saturation: 1 },
+  punchy: { sharpen: 1.2, contrast: 1.25, saturation: 1.15 },
+  analyze: { sharpen: 1.35, contrast: 1.35, saturation: 0.9 },
+};
+
+export function getHdEnhancementProfile(preset: HdEnhancementPreset): { sharpen: number; contrast: number; saturation: number } {
+  return preset === 'custom' ? { sharpen: 1, contrast: 1, saturation: 1 } : HD_ENHANCEMENT_PROFILES[preset];
+}
+
+export type LayerBlendState = {
+  daylightVisFactor: number;
+  visNightFactor: number;
+  hybridVisNightFactor: number;
+  effectiveSandwichOpacity: number;
+  isRgbVisOnlyMode: boolean;
+  hybridVisOpacityCap: number;
+  rgbVisOnlyOpacityCap: number;
+  /** VIS-on-RGB opacity capped for the RGB+VIS-only blend (no IR involved). */
+  effectiveRgbVisOnlyVisOpacity: number;
+  /** VIS-on-RGB opacity capped for the RGB+VIS+IR hybrid blend. */
+  effectiveHybridOnlyVisOpacity: number;
+  /** Whichever of the two above applies to the layers currently active on the map. */
+  effectiveHybridVisOpacity: number;
+  effectiveHybridIrOpacity: number;
+  isHybridMode: boolean;
+  isRgbIrMode: boolean;
+  isVisIrMode: boolean;
+  shouldPreferIrBaseAtNight: boolean;
+  baseLayer: 'rgb' | 'ir' | 'vis';
+  rgbToIrTransition: number;
+  isRgbBasedCloudOnlyMode: boolean;
+  isCloudOnlyIrMode: boolean;
+  effectiveCloudOnlyIrOpacity: number;
+  cloudOnlyIrVisMaskWeight: number;
+  isVisOverlayEnabled: boolean;
+  isIrOverlayEnabled: boolean;
+  currentVisOverlayOpacity: number;
+};
+
+/**
+ * Derives every layer-blending flag/opacity from the active layers and solar elevation.
+ * Shared by the live Leaflet renderer and the still/GIF export renderer so the two
+ * never drift apart (they previously duplicated this math with a divergent formula).
+ */
+export function computeLayerBlendState(params: {
+  activeLayers: ActiveLayers;
+  rgbHdOpacity: number;
+  sandwichOpacity: number;
+  autoReduceVisAtNight: boolean;
+  solarElevation: number;
+}): LayerBlendState {
+  const { activeLayers, rgbHdOpacity, sandwichOpacity, autoReduceVisAtNight, solarElevation } = params;
+
+  const visNightFactor = autoReduceVisAtNight && activeLayers.vis && activeLayers.ir
+    ? getDaylightVisFactor(solarElevation)
+    : 1;
+  const daylightVisFactor = Math.max(0, Math.min(1, getDaylightVisFactor(solarElevation)));
+  const hybridVisNightFactor = Math.pow(visNightFactor, 1.6);
+  const effectiveSandwichOpacity = sandwichOpacity * visNightFactor;
+  const isRgbVisOnlyMode = activeLayers.rgb && activeLayers.vis && !activeLayers.ir;
+  // In luminosity blend mode, high VIS opacity can noticeably darken RGB.
+  // Keep a conservative dynamic cap to preserve VIS detail without dimming daytime RGB too much.
+  const hybridVisOpacityCap = 0.48 + daylightVisFactor * 0.14;
+  const rgbVisOnlyOpacityCap = 0.8;
+  const rgbVisOnlyNightFactor = Math.max(0.7, visNightFactor);
+  const effectiveRgbVisOnlyVisOpacity = Math.min(rgbHdOpacity * rgbVisOnlyNightFactor, rgbVisOnlyOpacityCap);
+  const effectiveHybridOnlyVisOpacity = Math.min(rgbHdOpacity * hybridVisNightFactor, hybridVisOpacityCap);
+  const effectiveHybridVisOpacity = isRgbVisOnlyMode ? effectiveRgbVisOnlyVisOpacity : effectiveHybridOnlyVisOpacity;
+  const effectiveHybridIrOpacity = sandwichOpacity;
+  const isHybridMode = activeLayers.rgb && activeLayers.vis && activeLayers.ir;
+  const isRgbIrMode = activeLayers.rgb && activeLayers.ir && !activeLayers.vis;
+  const isVisIrMode = activeLayers.vis && activeLayers.ir && !activeLayers.rgb;
+  const shouldPreferIrBaseAtNight = activeLayers.rgb && (activeLayers.vis || activeLayers.ir) && solarElevation < 1.5;
+  const baseLayer: 'rgb' | 'ir' | 'vis' = shouldPreferIrBaseAtNight
+    ? 'ir'
+    : activeLayers.rgb
+      ? 'rgb'
+      : activeLayers.vis
+        ? 'vis'
+        : 'ir';
+  const rgbToIrTransition = activeLayers.rgb && activeLayers.ir
+    ? Math.max(0, Math.min(1, (1.5 - solarElevation) / 12))
+    : 0;
+  const isRgbBasedCloudOnlyMode = baseLayer === 'rgb' && (isHybridMode || isRgbIrMode);
+  const isCloudOnlyIrMode = isVisIrMode || isRgbBasedCloudOnlyMode;
+  const effectiveCloudOnlyIrOpacity = isRgbBasedCloudOnlyMode
+    ? effectiveHybridIrOpacity * (1 - rgbToIrTransition)
+    : isVisIrMode
+      ? sandwichOpacity
+      : 0;
+  const hybridVisMaskWeight = Math.min(0.35, Math.max(0, (daylightVisFactor - 0.35) / 0.65));
+  const cloudOnlyIrVisMaskWeight = isHybridMode ? hybridVisMaskWeight : isVisIrMode ? 1 : 0;
+  const isVisOverlayEnabled = activeLayers.vis && baseLayer !== 'vis';
+  const isIrOverlayEnabled = activeLayers.ir && baseLayer !== 'ir';
+  const currentVisOverlayOpacity = activeLayers.rgb ? effectiveHybridVisOpacity : effectiveSandwichOpacity;
+
+  return {
+    daylightVisFactor,
+    visNightFactor,
+    hybridVisNightFactor,
+    effectiveSandwichOpacity,
+    isRgbVisOnlyMode,
+    hybridVisOpacityCap,
+    rgbVisOnlyOpacityCap,
+    effectiveRgbVisOnlyVisOpacity,
+    effectiveHybridOnlyVisOpacity,
+    effectiveHybridVisOpacity,
+    effectiveHybridIrOpacity,
+    isHybridMode,
+    isRgbIrMode,
+    isVisIrMode,
+    shouldPreferIrBaseAtNight,
+    baseLayer,
+    rgbToIrTransition,
+    isRgbBasedCloudOnlyMode,
+    isCloudOnlyIrMode,
+    effectiveCloudOnlyIrOpacity,
+    cloudOnlyIrVisMaskWeight,
+    isVisOverlayEnabled,
+    isIrOverlayEnabled,
+    currentVisOverlayOpacity,
+  };
+}
+
+export type CloudOnlyIrRenderOptions = {
+  visMaskWeight: number;
+  alphaMultiplier?: number;
+};
+
+/**
+ * Blends VIS/RGB cloud-detection masks with the IR band into a cloud-only RGBA buffer.
+ * Shared by the live per-tile renderer (useDualMapLeaflet) and the still/GIF export
+ * renderer (dualMapExport) so the two cloud-detection algorithms never drift apart.
+ */
+export function computeCloudOnlyIrRgba(
+  visData: Uint8ClampedArray | null,
+  rgbData: Uint8ClampedArray | null,
+  irData: Uint8ClampedArray,
+  options: CloudOnlyIrRenderOptions,
+): Uint8ClampedArray {
+  const { visMaskWeight, alphaMultiplier = 1 } = options;
+  const normalizedVisWeight = Math.max(0, Math.min(1, visMaskWeight));
+  const visThresholdBase = 90;
+  const visThresholdSpan = 100;
+  const rgbThresholdBase = 120;
+  const rgbThresholdSpan = 90;
+  const satBoost = 1.2;
+
+  const out = new Uint8ClampedArray(irData.length);
+
+  for (let i = 0; i < out.length; i += 4) {
+    const visLum = visData ? (visData[i] + visData[i + 1] + visData[i + 2]) / 3 : 0;
+    const rgbLum = rgbData ? (rgbData[i] + rgbData[i + 1] + rgbData[i + 2]) / 3 : visLum;
+
+    const rgbCloudMask = Math.min(1, Math.max(0, (rgbLum - rgbThresholdBase) / rgbThresholdSpan));
+    const visCloudMask = Math.min(1, Math.max(0, (visLum - visThresholdBase) / visThresholdSpan));
+    const refinedCloudMask = rgbCloudMask * (1 - normalizedVisWeight) + visCloudMask * normalizedVisWeight;
+    // RGB floor increases only when VIS becomes unreliable (dusk/night).
+    const rgbFloorFactor = (1 - normalizedVisWeight) * 0.85;
+    const cloudMask = Math.max(rgbCloudMask * rgbFloorFactor, refinedCloudMask);
+
+    if (cloudMask < 0.02) {
+      out[i + 3] = 0;
+      continue;
+    }
+
+    const irR = irData[i];
+    const irG = irData[i + 1];
+    const irB = irData[i + 2];
+    const mean = (irR + irG + irB) / 3;
+
+    out[i] = Math.max(0, Math.min(255, mean + (irR - mean) * satBoost));
+    out[i + 1] = Math.max(0, Math.min(255, mean + (irG - mean) * satBoost));
+    out[i + 2] = Math.max(0, Math.min(255, mean + (irB - mean) * satBoost));
+    out[i + 3] = Math.round(255 * cloudMask * alphaMultiplier);
+  }
+
+  return out;
 }

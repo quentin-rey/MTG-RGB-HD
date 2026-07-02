@@ -2,7 +2,9 @@ import L from 'leaflet';
 import { applyPalette, GIFEncoder, nearestColorIndex, quantize } from 'gifenc';
 
 import {
-  getDaylightVisFactor,
+  computeCloudOnlyIrRgba,
+  computeLayerBlendState,
+  getHdEnhancementProfile,
   LAYER_IR,
   LAYER_RGB,
   LAYER_VIS,
@@ -12,7 +14,7 @@ import {
   type HdEnhancementPreset,
   type IrStyle,
   type MapOptions,
-  WMS_URL_PROXY,
+  WMS_URL_DIRECT,
 } from './dualMapViewerShared';
 import type { Language } from './i18n';
 
@@ -168,13 +170,7 @@ function applyHdEnhancement(sourceCanvas: HTMLCanvasElement, options: {
     return sourceCanvas;
   }
 
-  const profile = options.preset === 'natural'
-    ? { sharpen: 0.85, contrast: 0.8, saturation: 0.8 }
-    : options.preset === 'punchy'
-      ? { sharpen: 1.2, contrast: 1.25, saturation: 1.15 }
-      : options.preset === 'analyze'
-        ? { sharpen: 1.35, contrast: 1.35, saturation: 0.9 }
-        : { sharpen: 1, contrast: 1, saturation: 1 };
+  const profile = getHdEnhancementProfile(options.preset);
 
   const safeSharpen = Math.max(0, Math.min(1, options.sharpen));
   const safeRadius = Math.max(0.5, Math.min(3, options.radius));
@@ -467,7 +463,7 @@ function buildWmsUrl(
   height: number,
   isoTime: string,
 ) {
-  return `${WMS_URL_PROXY}?service=WMS&request=GetMap&layers=${encodeURIComponent(layer)}&styles=${encodeURIComponent(style)}&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=${width}&height=${height}&time=${encodeURIComponent(isoTime)}`;
+  return `${WMS_URL_DIRECT}?service=WMS&request=GetMap&layers=${encodeURIComponent(layer)}&styles=${encodeURIComponent(style)}&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=${width}&height=${height}&time=${encodeURIComponent(isoTime)}`;
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -535,26 +531,21 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const width = Math.max(64, Math.round(rawWidth * scale));
   const height = Math.max(64, Math.round(rawHeight * scale));
   const isoTime = new Date(currentTime + 'Z').toISOString();
-  const visNightFactor = autoReduceVisAtNight && activeLayers.vis && activeLayers.ir
-    ? getDaylightVisFactor(exportSolarElevation)
-    : 1;
-  const daylightVisFactor = Math.max(0, Math.min(1, getDaylightVisFactor(exportSolarElevation)));
-  const hybridVisNightFactor = Math.pow(visNightFactor, 1.6);
-  const hybridVisOpacityCap = 0.48 + daylightVisFactor * 0.14;
-  const rgbVisOnlyOpacityCap = 0.60 + daylightVisFactor * 0.15;
-  const rgbVisOnlyNightFactor = Math.max(0.7, visNightFactor);
-  const exportRgbVisOnlyVisOpacity = Math.min(rgbHdOpacity * rgbVisOnlyNightFactor, rgbVisOnlyOpacityCap);
-  const exportHybridVisOpacity = Math.min(rgbHdOpacity * hybridVisNightFactor, hybridVisOpacityCap);
-  const exportHybridIrOpacity = sandwichOpacity;
-  const rgbToIrTransition = activeLayers.rgb && activeLayers.ir
-    ? Math.max(0, Math.min(1, (1.5 - exportSolarElevation) / 12))
-    : 0;
-  const hybridVisMaskWeight = Math.min(0.35, Math.max(0, (daylightVisFactor - 0.35) / 0.65));
-  const shouldPreferIrBaseAtNight = activeLayers.rgb && (activeLayers.vis || activeLayers.ir) && exportSolarElevation < 1.5;
-  const isRgbExportBase = !shouldPreferIrBaseAtNight;
-  const exportCloudOnlyIrOpacity = isRgbExportBase
-    ? exportHybridIrOpacity * (1 - rgbToIrTransition)
-    : 0;
+  const {
+    shouldPreferIrBaseAtNight,
+    rgbToIrTransition,
+    effectiveRgbVisOnlyVisOpacity: exportRgbVisOnlyVisOpacity,
+    effectiveHybridOnlyVisOpacity: exportHybridVisOpacity,
+    effectiveHybridIrOpacity: exportHybridIrOpacity,
+    effectiveCloudOnlyIrOpacity: exportCloudOnlyIrOpacity,
+    cloudOnlyIrVisMaskWeight: hybridVisMaskWeight,
+  } = computeLayerBlendState({
+    activeLayers,
+    rgbHdOpacity,
+    sandwichOpacity,
+    autoReduceVisAtNight,
+    solarElevation: exportSolarElevation,
+  });
   const exportUtcLabel = `${currentTime.replace('T', ' ')} UTC`;
   const exportOverlayLocale = getExportOverlayLocale(language);
   const selectedKinds = new Set(requestedKinds);
@@ -648,42 +639,9 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     cloudOnlyIrCanvas.height = height;
     const cloudOnlyIrCtx = cloudOnlyIrCanvas.getContext('2d')!;
     const cloudOnlyIrImage = cloudOnlyIrCtx.createImageData(width, height);
-    const cloudOnlyIrData = cloudOnlyIrImage.data;
-
-    const normalizedVisWeight = Math.max(0, Math.min(1, visMaskWeight));
-    const visThresholdBase = 90;
-    const visThresholdSpan = 100;
-    const rgbThresholdBase = 120;
-    const rgbThresholdSpan = 90;
-
-    for (let i = 0; i < cloudOnlyIrData.length; i += 4) {
-      const visLum = (visMaskData[i] + visMaskData[i + 1] + visMaskData[i + 2]) / 3;
-      const rgbLum = rgbMaskData
-        ? (rgbMaskData[i] + rgbMaskData[i + 1] + rgbMaskData[i + 2]) / 3
-        : visLum;
-
-      const visCloudMask = Math.min(1, Math.max(0, (visLum - visThresholdBase) / visThresholdSpan));
-      const rgbCloudMask = Math.min(1, Math.max(0, (rgbLum - rgbThresholdBase) / rgbThresholdSpan));
-      const refinedCloudMask = rgbCloudMask * (1 - normalizedVisWeight) + visCloudMask * normalizedVisWeight;
-      const rgbFloorFactor = (1 - normalizedVisWeight) * 0.85;
-      const cloudMask = Math.max(rgbCloudMask * rgbFloorFactor, refinedCloudMask);
-
-      if (cloudMask < 0.02) {
-        cloudOnlyIrData[i + 3] = 0;
-        continue;
-      }
-
-      const irR = irData[i];
-      const irG = irData[i + 1];
-      const irB = irData[i + 2];
-      const mean = (irR + irG + irB) / 3;
-      const satBoost = 1.2;
-
-      cloudOnlyIrData[i] = Math.max(0, Math.min(255, mean + (irR - mean) * satBoost));
-      cloudOnlyIrData[i + 1] = Math.max(0, Math.min(255, mean + (irG - mean) * satBoost));
-      cloudOnlyIrData[i + 2] = Math.max(0, Math.min(255, mean + (irB - mean) * satBoost));
-      cloudOnlyIrData[i + 3] = Math.round(255 * cloudMask * overlayOpacity);
-    }
+    cloudOnlyIrImage.data.set(
+      computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight, alphaMultiplier: overlayOpacity }),
+    );
 
     cloudOnlyIrCtx.putImageData(cloudOnlyIrImage, 0, 0);
     return cloudOnlyIrCanvas;

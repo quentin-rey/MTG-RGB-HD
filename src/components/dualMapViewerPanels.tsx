@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type React } from 'react';
-import { CircleHelp, Clock, Github, Info, Sliders, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type * as React from 'react';
+import { Bug, CircleHelp, Clock, Github, Info, Monitor, Moon, Sliders, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -7,11 +8,12 @@ import {
   getLatestAvailableTime,
   getSinglePanelTitle,
   IR_STYLES,
+  themedClass,
   type ExportKind,
   type IrStyle,
   type MapOptions,
 } from './dualMapViewerShared';
-import type { Translator } from './i18n';
+import type { Language, Translator } from './i18n';
 
 type UiTheme = 'dark' | 'light';
 
@@ -65,16 +67,16 @@ export function TimeDock(props: TimeDockProps) {
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
       <div className={`backdrop-blur-md border rounded-xl shadow-2xl px-2.5 py-2 sm:px-4 sm:py-3 ${
-        isLight ? 'bg-white/95 border-slate-300/80' : 'bg-black/65 border-white/15'
+        themedClass(isLight, 'bg-white/95 border-slate-300/80', 'bg-black/65 border-white/15')
       }`}>
         <div className={`flex items-center justify-between gap-2 text-[10px] sm:text-[11px] mb-1.5 sm:mb-2 ${
-          isLight ? 'text-slate-700' : 'text-slate-300'
+          themedClass(isLight, 'text-slate-700', 'text-slate-300')
         }`}>
           <span className="inline-flex items-center gap-1.5 font-medium">
             <Clock className="w-3.5 h-3.5 text-blue-300" />
             {t('utcTime')}
           </span>
-          <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{datePart} {hourPart}:{minutePart}</span>
+          <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{datePart} {hourPart}:{minutePart}</span>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -101,11 +103,11 @@ export function TimeDock(props: TimeDockProps) {
               value={totalMinutes}
               onChange={(e) => updateTimeFromTotalMinutes(Number(e.target.value))}
               className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
-                isLight ? 'bg-slate-300' : 'bg-white/10'
+                themedClass(isLight, 'bg-slate-300', 'bg-white/10')
               }`}
             />
             <div className={`mt-1 flex justify-between text-[9px] sm:text-[10px] font-mono ${
-              isLight ? 'text-slate-500' : 'text-slate-500'
+              themedClass(isLight, 'text-slate-500', 'text-slate-500')
             }`}>
               <span>00:00</span>
               <span>06:00</span>
@@ -296,10 +298,10 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
     <div className="relative" ref={adjustmentsRef}>
       <button
         onClick={onToggle}
-        className={`flex items-center justify-center w-8 h-8 rounded-md border text-xs font-medium shadow-xl transition-colors backdrop-blur-md ${
-          isLight ? 'bg-white/90 hover:bg-white border-slate-300' : 'bg-black/60 hover:bg-black/80 border-white/10'
+        className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border text-xs font-medium shadow-xl transition-colors backdrop-blur-md ${
+          themedClass(isLight, 'bg-white/90 hover:bg-white border-slate-300', 'bg-black/60 hover:bg-black/80 border-white/10')
         } ${
-          isOpen ? 'border-blue-500 text-blue-500' : isLight ? 'text-slate-700' : 'text-white'
+          isOpen ? 'border-blue-500 text-blue-500' : themedClass(isLight, 'text-slate-700', 'text-white')
         }`}
         title={t('adjustmentsTooltip')}
       >
@@ -308,12 +310,12 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
 
       {isOpen && (
         <div
-          className={`ui-scrollbar absolute right-0 top-full mt-2 w-[min(92vw,22rem)] backdrop-blur-md border rounded-lg shadow-2xl p-4 z-[500] overflow-auto max-h-[calc(100dvh-19rem)] sm:max-h-[calc(100dvh-17rem)] lg:max-h-[72vh] ${
-          isLight ? 'bg-white/95 border-slate-300 text-slate-700' : 'bg-[#1a1a1a]/95 border-white/10 text-slate-200'
+          className={`ui-scrollbar absolute right-0 top-20 w-[calc(100vw-2rem)] max-h-[calc(100dvh-26rem)] sm:top-full sm:mt-2 sm:w-[22rem] sm:max-h-[calc(100dvh-17rem)] lg:max-h-[72vh] backdrop-blur-md border rounded-lg shadow-2xl p-4 z-[500] overflow-auto ${
+          themedClass(isLight, 'bg-white/95 border-slate-300 text-slate-700', 'bg-[#1a1a1a]/95 border-white/10 text-slate-200')
           }`}
         >
-          <div className={`flex items-center justify-between mb-3 pb-2 ${isLight ? 'border-b border-slate-200' : 'border-b border-white/5'}`}>
-            <span className={`text-xs font-semibold tracking-wider uppercase ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('adjustmentsTitle')}</span>
+          <div className={`flex items-center justify-between mb-3 pb-2 ${themedClass(isLight, 'border-b border-slate-200', 'border-b border-white/5')}`}>
+            <span className={`text-xs font-semibold tracking-wider uppercase ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('adjustmentsTitle')}</span>
             <button
               onClick={onReset}
               className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors uppercase font-medium"
@@ -323,9 +325,9 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
           </div>
 
           <div className="space-y-4">
-            <div className={`rounded-md border p-2.5 space-y-2 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-              <div className={`text-[11px] uppercase tracking-wide font-medium ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{t('mapLayers')}</div>
-              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+            <div className={`rounded-md border p-2.5 space-y-2 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+              <div className={`text-[11px] uppercase tracking-wide font-medium ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('mapLayers')}</div>
+              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
                 <input
                   type="checkbox"
                   checked={mapOptions.showBorders}
@@ -334,7 +336,7 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 />
                 {t('borders')}
               </label>
-              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
                 <input
                   type="checkbox"
                   checked={mapOptions.showFranceDepartments}
@@ -346,8 +348,8 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
               {isAnyBoundaryOverlayVisible && (
                 <div className="pl-6">
                   <div className="flex justify-between text-xs mb-1">
-                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('boundariesOpacity')}</span>
-                    <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(sharedBoundaryOpacity * 100)}%</span>
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('boundariesOpacity')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(sharedBoundaryOpacity * 100)}%</span>
                   </div>
                   <input
                     type="range"
@@ -363,11 +365,11 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                         franceDepartmentsOpacity: nextOpacity,
                       });
                     }}
-                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
                   />
                 </div>
               )}
-              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+              <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
                 <input
                   type="checkbox"
                   checked={mapOptions.showCities}
@@ -380,8 +382,8 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
 
             <div>
               <div className="flex justify-between text-xs mb-1">
-                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('visContrastClouds')}</span>
-                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{visContrast.toFixed(2)}x</span>
+                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visContrastClouds')}</span>
+                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visContrast.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
@@ -390,14 +392,14 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 step="0.05"
                 value={visContrast}
                 onChange={(e) => onVisContrastChange(parseFloat(e.target.value))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
               />
             </div>
 
             <div>
               <div className="flex justify-between text-xs mb-1">
-                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('visBrightnessClouds')}</span>
-                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{visBrightness.toFixed(2)}x</span>
+                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visBrightnessClouds')}</span>
+                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{visBrightness.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
@@ -406,16 +408,16 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 step="0.05"
                 value={visBrightness}
                 onChange={(e) => onVisBrightnessChange(parseFloat(e.target.value))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
               />
             </div>
 
             {activeLayers.rgb && (
-              <div className={`pt-2 space-y-3 ${isLight ? 'border-t border-slate-200' : 'border-t border-white/5'}`}>
+              <div className={`pt-2 space-y-3 ${themedClass(isLight, 'border-t border-slate-200', 'border-t border-white/5')}`}>
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('rgbSaturationColors')}</span>
-                    <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(rgbSaturation * 100)}%</span>
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('rgbSaturationColors')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(rgbSaturation * 100)}%</span>
                   </div>
                   <input
                     type="range"
@@ -424,15 +426,15 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                     step="0.05"
                     value={rgbSaturation}
                     onChange={(e) => onRgbSaturationChange(parseFloat(e.target.value))}
-                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
                   />
                 </div>
 
                 {activeLayers.vis && !activeLayers.ir && (
                   <div>
                     <div className="flex justify-between text-xs mb-1">
-                      <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('visContributionOnRgb')}</span>
-                      <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(rgbHdOpacity * 100)}%</span>
+                      <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visContributionOnRgb')}</span>
+                      <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(rgbHdOpacity * 100)}%</span>
                     </div>
                     <input
                       type="range"
@@ -441,15 +443,15 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                       step="0.05"
                       value={rgbHdOpacity}
                       onChange={(e) => onRgbHdOpacityChange(parseFloat(e.target.value))}
-                      className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                      className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
                     />
                   </div>
                 )}
 
                 {activeLayers.vis && (
                   <div className="space-y-2">
-                    <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>{t('fixedHdRender')}</p>
-                    <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+                    <p className={`text-[11px] ${themedClass(isLight, 'text-slate-500', 'text-slate-500')}`}>{t('fixedHdRender')}</p>
+                    <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
                       <input
                         type="checkbox"
                         checked={hdEnhanceEnabled}
@@ -459,9 +461,9 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                       {t('hdAlgorithmicEnhancement')}
                     </label>
                     {hdEnhanceEnabled && (
-                      <div className={`rounded-lg border p-3 space-y-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+                      <div className={`rounded-lg border p-3 space-y-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
                         <div className="flex items-center justify-between gap-2">
-                          <span className={`text-xs font-semibold ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>{t('hdAlgorithmicEnhancement')}</span>
+                          <span className={`text-xs font-semibold ${themedClass(isLight, 'text-slate-800', 'text-slate-200')}`}>{t('hdAlgorithmicEnhancement')}</span>
                           <button
                             type="button"
                             onClick={onResetHdEnhancement}
@@ -473,13 +475,13 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementPreset')}</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementPreset')}</span>
                           </div>
                           <select
                             value={hdEnhancePreset}
                             onChange={(e) => onHdEnhancePresetChange(e.target.value as 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom')}
                             className={`w-full border rounded-md px-3 py-1.5 text-xs outline-none focus:border-blue-500 cursor-pointer ${
-                              isLight ? 'bg-white border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                              themedClass(isLight, 'bg-white border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                             }`}
                           >
                             <option value="natural">{t('hdEnhancementPresetNatural')}</option>
@@ -492,70 +494,70 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementIntensity')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceStrength * 100)}%</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementIntensity')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceStrength * 100)}%</span>
                           </div>
-                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceStrength} onChange={(e) => onHdEnhanceStrengthChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceStrength} onChange={(e) => onHdEnhanceStrengthChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementSharpen')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceSharpen * 100)}%</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementSharpen')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceSharpen * 100)}%</span>
                           </div>
-                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceSharpen} onChange={(e) => onHdEnhanceSharpenChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceSharpen} onChange={(e) => onHdEnhanceSharpenChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementRadius')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{hdEnhanceRadius.toFixed(2)} px</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementRadius')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{hdEnhanceRadius.toFixed(2)} px</span>
                           </div>
-                          <input type="range" min="0.5" max="3" step="0.1" value={hdEnhanceRadius} onChange={(e) => onHdEnhanceRadiusChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="0.5" max="3" step="0.1" value={hdEnhanceRadius} onChange={(e) => onHdEnhanceRadiusChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementLocalContrast')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceLocalContrast * 100)}%</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementLocalContrast')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceLocalContrast * 100)}%</span>
                           </div>
-                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceLocalContrast} onChange={(e) => onHdEnhanceLocalContrastChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceLocalContrast} onChange={(e) => onHdEnhanceLocalContrastChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementHighlightProtection')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceHighlightProtection * 100)}%</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementHighlightProtection')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceHighlightProtection * 100)}%</span>
                           </div>
-                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceHighlightProtection} onChange={(e) => onHdEnhanceHighlightProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceHighlightProtection} onChange={(e) => onHdEnhanceHighlightProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
                         <div>
                           <div className="flex justify-between text-xs mb-1">
-                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementSaturationAdjust')}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{hdEnhanceSaturationAdjust >= 0 ? `+${Math.round(hdEnhanceSaturationAdjust)}` : Math.round(hdEnhanceSaturationAdjust)}%</span>
+                            <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementSaturationAdjust')}</span>
+                            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{hdEnhanceSaturationAdjust >= 0 ? `+${Math.round(hdEnhanceSaturationAdjust)}` : Math.round(hdEnhanceSaturationAdjust)}%</span>
                           </div>
-                          <input type="range" min="-20" max="30" step="1" value={hdEnhanceSaturationAdjust} onChange={(e) => onHdEnhanceSaturationAdjustChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                          <input type="range" min="-20" max="30" step="1" value={hdEnhanceSaturationAdjust} onChange={(e) => onHdEnhanceSaturationAdjustChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                         </div>
 
-                        <div className={`pt-1 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
-                          <div className={`text-[11px] uppercase tracking-wide font-medium mb-2 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{t('hdEnhancementAdvanced')}</div>
+                        <div className={`pt-1 border-t ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
+                          <div className={`text-[11px] uppercase tracking-wide font-medium mb-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('hdEnhancementAdvanced')}</div>
 
                           <div className="space-y-3">
                             <div>
                               <div className="flex justify-between text-xs mb-1">
-                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementNoiseReduction')}</span>
-                                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceNoiseReduction * 100)}%</span>
+                                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementNoiseReduction')}</span>
+                                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceNoiseReduction * 100)}%</span>
                               </div>
-                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceNoiseReduction} onChange={(e) => onHdEnhanceNoiseReductionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceNoiseReduction} onChange={(e) => onHdEnhanceNoiseReductionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                             </div>
 
                             <div>
                               <div className="flex justify-between text-xs mb-1">
-                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementShadowProtection')}</span>
-                                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceShadowProtection * 100)}%</span>
+                                <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('hdEnhancementShadowProtection')}</span>
+                                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(hdEnhanceShadowProtection * 100)}%</span>
                               </div>
-                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceShadowProtection} onChange={(e) => onHdEnhanceShadowProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceShadowProtection} onChange={(e) => onHdEnhanceShadowProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                             </div>
                           </div>
                         </div>
@@ -567,13 +569,13 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
             )}
 
             {activeLayers.ir && (
-              <div className={`pt-2 ${isLight ? 'border-t border-slate-200' : 'border-t border-white/5'}`}>
+              <div className={`pt-2 ${themedClass(isLight, 'border-t border-slate-200', 'border-t border-white/5')}`}>
                 <div className="space-y-3">
                   {activeLayers.vis && activeLayers.rgb && (
                     <div>
                       <div className="flex justify-between text-xs mb-1">
-                        <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('visContributionOnRgbIr')}</span>
-                        <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(rgbHdOpacity * 100)}%</span>
+                        <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('visContributionOnRgbIr')}</span>
+                        <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(rgbHdOpacity * 100)}%</span>
                       </div>
                       <input
                         type="range"
@@ -582,20 +584,20 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                         step="0.05"
                         value={rgbHdOpacity}
                         onChange={(e) => onRgbHdOpacityChange(parseFloat(e.target.value))}
-                        className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                        className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
                       />
                     </div>
                   )}
 
                   <div>
                     <div className="flex justify-between text-xs mb-1.5">
-                      <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('irStyle')}</span>
+                      <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('irStyle')}</span>
                     </div>
                     <select
                       value={irStyle}
                       onChange={(e) => onIrStyleChange(e.target.value as IrStyle)}
                       className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 cursor-pointer ${
-                        isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                        themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                       }`}
                     >
                       {IR_STYLES.map((style) => (
@@ -607,8 +609,8 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                   {(activeLayers.vis || activeLayers.rgb) && (
                     <div>
                       <div className="flex justify-between text-xs mb-1">
-                        <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('irSandwichIntensity')}</span>
-                        <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(sandwichOpacity * 100)}%</span>
+                        <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('irSandwichIntensity')}</span>
+                        <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(sandwichOpacity * 100)}%</span>
                       </div>
                       <input
                         type="range"
@@ -617,13 +619,13 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                         step="0.05"
                         value={sandwichOpacity}
                         onChange={(e) => onSandwichOpacityChange(parseFloat(e.target.value))}
-                        className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+                        className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
                       />
                     </div>
                   )}
 
                   {activeLayers.vis && activeLayers.ir && (
-                    <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+                    <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
                       <input
                         type="checkbox"
                         checked={autoReduceVisAtNight}
@@ -635,12 +637,12 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                   )}
 
                   {activeLayers.vis && (
-                    <div className={`rounded-md border px-3 py-2 text-xs leading-relaxed ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-black/20 text-slate-300'}`}>
-                      <div>{t('sunAtCenter')}: <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{solarElevation.toFixed(1)}°</span></div>
+                    <div className={`rounded-md border px-3 py-2 text-xs leading-relaxed ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
+                      <div>{t('sunAtCenter')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{solarElevation.toFixed(1)}°</span></div>
                       {activeLayers.rgb ? (
-                        <div>{t('effectiveVisContribution')}: <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(effectiveHybridVisOpacity * 100)}%</span></div>
+                        <div>{t('effectiveVisContribution')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(effectiveHybridVisOpacity * 100)}%</span></div>
                       ) : (
-                        <div>{t('effectiveVisContribution')}: <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(effectiveSandwichOpacity * 100)}%</span></div>
+                        <div>{t('effectiveVisContribution')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(effectiveSandwichOpacity * 100)}%</span></div>
                       )}
                     </div>
                   )}
@@ -669,61 +671,61 @@ export function InfoModal(props: InfoModalProps) {
 
   return (
     <div className={`fixed inset-0 z-[500] flex items-center justify-center p-4 backdrop-blur-sm ${
-      isLight ? 'bg-slate-900/35' : 'bg-black/50'
+      themedClass(isLight, 'bg-slate-900/35', 'bg-black/50')
     }`}>
       <div ref={infoRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-xl w-full max-h-[85vh] overflow-y-auto ${
-        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('aboutTitle')}</h3>
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('aboutTitle')}</h3>
           <button
             onClick={onClose}
             aria-label={t('close')}
             className={`p-1 rounded-md transition-colors ${
-              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
             }`}
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className={`space-y-4 text-sm leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
-          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoGoalTitle')}</h4>
+        <div className={`space-y-4 text-sm leading-relaxed ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
+          <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoGoalTitle')}</h4>
             <p className="text-xs">{t('infoModalParagraph1')}</p>
             <p className="text-xs mt-1.5">{t('infoModalParagraph2')}</p>
           </section>
 
-          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoLayersTitle')}</h4>
+          <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoLayersTitle')}</h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
-                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>RGB True Color</div>
+              <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
+                <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>RGB True Color</div>
                 <div>{t('infoLayerRgbDesc')}</div>
               </article>
-              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
-                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>VIS 0.6 um</div>
+              <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
+                <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>VIS 0.6 um</div>
                 <div>{t('infoLayerVisDesc')}</div>
               </article>
-              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
-                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>IR 10.5 um</div>
+              <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
+                <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>IR 10.5 um</div>
                 <div>{t('infoLayerIrDesc')}</div>
               </article>
             </div>
           </section>
 
-          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoHdAlgoTitle')}</h4>
+          <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoHdAlgoTitle')}</h4>
             <p className="text-xs">{t('infoHdAlgoDesc')}</p>
           </section>
 
-          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoDataSourcesTitle')}</h4>
+          <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoDataSourcesTitle')}</h4>
             <p className="text-xs">
               {t('eumetsatImagery')}{' '}
               <a href="https://www.eumetsat.int/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">EUMETSAT / Meteosat Third Generation (MTG)</a>.
             </p>
-            <div className={`pt-1 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+            <div className={`pt-1 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
               {t('seeEumetsatReferences')}
               {' '}
               <a href="https://www.eumetsat.int/mtg" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">MTG</a>
@@ -733,8 +735,37 @@ export function InfoModal(props: InfoModalProps) {
           </section>
 
           <p className="text-xs">
-            <strong className={isLight ? 'text-slate-900' : 'text-white'}>{t('aboutAuthor')}</strong>
+            <strong className={themedClass(isLight, 'text-slate-900', 'text-white')}>{t('aboutAuthor')}</strong>
           </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <a
+              href="https://github.com/quentin-rey/MTG-RGB-HD"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                isLight
+                  ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                  : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
+              }`}
+            >
+              <Github className="w-4 h-4 shrink-0" />
+              {t('githubProject')}
+            </a>
+            <a
+              href="https://github.com/quentin-rey/MTG-RGB-HD/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                isLight
+                  ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                  : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
+              }`}
+            >
+              <Bug className="w-4 h-4 shrink-0" />
+              {t('reportBug')}
+            </a>
+          </div>
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500 font-mono">
@@ -898,17 +929,17 @@ export function AnimationModal(props: AnimationModalProps) {
 
   return (
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
-      isLight ? 'bg-slate-900/35' : 'bg-black/55'
+      themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
     }`}>
       <div ref={animationModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-xl w-full max-h-[85vh] overflow-y-auto ${
-        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('animationTitle')}</h3>
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('animationTitle')}</h3>
           <button
             onClick={onClose}
             className={`p-1 rounded-md transition-colors ${
-              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
             }`}
             aria-label={t('close')}
           >
@@ -916,11 +947,11 @@ export function AnimationModal(props: AnimationModalProps) {
           </button>
         </div>
 
-        <p className={`text-sm mb-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>{t('animationDescription')}</p>
+        <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>{t('animationDescription')}</p>
 
         <div className="space-y-4">
           <div>
-            <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationPreset')}</label>
+            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationPreset')}</label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {([
                 ['3h', t('animationLast3h')],
@@ -949,7 +980,7 @@ export function AnimationModal(props: AnimationModalProps) {
           {preset === 'custom' && (
             <div className="space-y-3">
               <div>
-                <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationCustomDate')}</label>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationCustomDate')}</label>
                 <input
                   type="date"
                   max={customLatestDate}
@@ -964,11 +995,11 @@ export function AnimationModal(props: AnimationModalProps) {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div className={`rounded-md px-3 py-2 ${isLight ? 'bg-slate-100 border border-slate-300 text-slate-700' : 'bg-[#222] border border-white/10 text-slate-200'}`}>
+                <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
                   <div className="text-[11px] opacity-75 mb-0.5">{t('animationStart')}</div>
                   <div className="font-mono text-xs">{customStart.replace('T', ' ')} UTC</div>
                 </div>
-                <div className={`rounded-md px-3 py-2 ${isLight ? 'bg-slate-100 border border-slate-300 text-slate-700' : 'bg-[#222] border border-white/10 text-slate-200'}`}>
+                <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
                   <div className="text-[11px] opacity-75 mb-0.5">{t('animationEnd')}</div>
                   <div className="font-mono text-xs">{customEnd.replace('T', ' ')} UTC</div>
                 </div>
@@ -976,15 +1007,15 @@ export function AnimationModal(props: AnimationModalProps) {
 
               <div>
                 <div className="flex justify-between text-xs mb-1">
-                  <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationCustomWindow')}</span>
-                  <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
+                  <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationCustomWindow')}</span>
+                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
                 </div>
                 <div
                   ref={rangeSliderRef}
                   onPointerDown={handleTrackPointerDown}
-                  className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${isLight ? 'bg-slate-100 border border-slate-300' : 'bg-[#222] border border-white/10'}`}
+                  className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${themedClass(isLight, 'bg-slate-100 border border-slate-300', 'bg-[#222] border border-white/10')}`}
                 >
-                  <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                  <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
                   <div
                     className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-blue-500"
                     style={{
@@ -996,19 +1027,19 @@ export function AnimationModal(props: AnimationModalProps) {
                     type="button"
                     aria-label={t('animationStart')}
                     onPointerDown={handleKnobPointerDown('start')}
-                    className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${isLight ? 'bg-white border-blue-600' : 'bg-slate-100 border-blue-500'}`}
+                    className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
                     style={{ left: `calc(12px + (100% - 24px) * ${startRatio} - 8px)` }}
                   />
                   <button
                     type="button"
                     aria-label={t('animationEnd')}
                     onPointerDown={handleKnobPointerDown('end')}
-                    className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${isLight ? 'bg-white border-blue-600' : 'bg-slate-100 border-blue-500'}`}
+                    className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
                     style={{ left: `calc(12px + (100% - 24px) * ${endRatio} - 8px)` }}
                   />
                 </div>
 
-                <div className={`mt-2 flex justify-between text-[11px] font-mono ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+                <div className={`mt-2 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
                   <span>{t('animationWindowStart')}: 00:00</span>
                   <span>{t('animationWindowEnd')}: {stepToTime(sliderMax)}</span>
                 </div>
@@ -1018,8 +1049,8 @@ export function AnimationModal(props: AnimationModalProps) {
 
           <div>
             <div className="flex justify-between text-xs mb-1">
-              <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationFps')}</span>
-              <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{fps}</span>
+              <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationFps')}</span>
+              <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{fps}</span>
             </div>
             <input
               type="range"
@@ -1028,18 +1059,18 @@ export function AnimationModal(props: AnimationModalProps) {
               step="1"
               value={fps}
               onChange={(event) => onFpsChange(parseInt(event.target.value, 10))}
-              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifResolution')}</label>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifResolution')}</label>
               <select
                 value={gifMaxDimension}
                 onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
                 className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                 }`}
               >
                 <option value={960}>{t('animationResolution960')}</option>
@@ -1048,12 +1079,12 @@ export function AnimationModal(props: AnimationModalProps) {
               </select>
             </div>
             <div>
-              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifColorCount')}</label>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
               <select
                 value={gifColorCount}
                 onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
                 className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                 }`}
               >
                 <option value={64}>64</option>
@@ -1065,12 +1096,12 @@ export function AnimationModal(props: AnimationModalProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifPaletteMode')}</label>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
               <select
                 value={gifPaletteMode}
                 onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
                 className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                 }`}
               >
                 <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
@@ -1078,12 +1109,12 @@ export function AnimationModal(props: AnimationModalProps) {
               </select>
             </div>
             <div>
-              <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifDither')}</label>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
               <select
                 value={gifDitherLevel}
                 onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
                 className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  isLight ? 'bg-slate-100 border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
                 }`}
               >
                 <option value="none">{t('animationDitherNone')}</option>
@@ -1096,8 +1127,8 @@ export function AnimationModal(props: AnimationModalProps) {
 
           <div>
             <div className="flex justify-between text-xs mb-1">
-              <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationGifFinalPause')}</span>
-              <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{finalPauseLabel}</span>
+              <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
+              <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
             </div>
             <input
               type="range"
@@ -1106,25 +1137,25 @@ export function AnimationModal(props: AnimationModalProps) {
               step={100}
               value={gifFinalPauseMs}
               onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
-              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
+              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
             />
-            <div className={`mt-1 flex justify-between text-[11px] font-mono ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+            <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
               <span>0.1s</span>
               <span>1.0s</span>
               <span>2.0s</span>
             </div>
           </div>
 
-          <div className={`text-xs ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
+          <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
             {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
           </div>
 
           {rangeError && (
-            <p className={`text-xs ${isLight ? 'text-rose-600' : 'text-rose-300'}`}>{rangeError}</p>
+            <p className={`text-xs ${themedClass(isLight, 'text-rose-600', 'text-rose-300')}`}>{rangeError}</p>
           )}
 
           {estimatedFrameCount === 0 && !rangeError ? (
-            <p className={`text-xs ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationNoFrames')}</p>
+            <p className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationNoFrames')}</p>
           ) : null}
 
           <div className="flex items-center justify-end">
@@ -1169,17 +1200,17 @@ export function DownloadModal(props: DownloadModalProps) {
 
   return (
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
-      isLight ? 'bg-slate-900/35' : 'bg-black/55'
+      themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
     }`}>
       <div ref={downloadModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto ${
-        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('preDownloadTitle')}</h3>
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('preDownloadTitle')}</h3>
           <button
             onClick={onClose}
             className={`p-1 rounded-md transition-colors ${
-              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
             }`}
             aria-label={t('close')}
           >
@@ -1187,11 +1218,11 @@ export function DownloadModal(props: DownloadModalProps) {
           </button>
         </div>
 
-        <p className={`text-sm mb-2 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+        <p className={`text-sm mb-2 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
           {t('downloadModalDescription')}
         </p>
-        <div className={`mb-4 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-          {t('downloadSelectedCount')}: <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{selectedExportKinds.length}</span>
+        <div className={`mb-4 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
+          {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
         </div>
 
         <div className="space-y-3">
@@ -1227,7 +1258,7 @@ export function DownloadModal(props: DownloadModalProps) {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className={`text-sm font-medium ${isLight ? 'text-slate-800' : 'text-slate-100'}`}>{label}</span>
+                      <span className={`text-sm font-medium ${themedClass(isLight, 'text-slate-800', 'text-slate-100')}`}>{label}</span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
                         isLight
                           ? 'border-slate-300 text-slate-600 bg-white'
@@ -1243,10 +1274,10 @@ export function DownloadModal(props: DownloadModalProps) {
           })}
         </div>
 
-        <div className={`mt-4 rounded-lg border p-3 text-xs ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-black/20 text-slate-300'}`}>
-          <div className={`font-medium mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('downloadZipPreview')}</div>
+        <div className={`mt-4 rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
+          <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('downloadZipPreview')}</div>
           <div className="font-mono break-all">MTG_SATELLITE_{safeZipSuffix}.zip</div>
-          <div className={`mt-2 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{t('downloadZipHint')}</div>
+          <div className={`mt-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('downloadZipHint')}</div>
         </div>
 
         <div className="mt-6 sticky bottom-0 pt-3 flex items-center justify-end gap-2 bg-transparent">
@@ -1288,21 +1319,6 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
   const isLight = props.theme === 'light';
   return (
     <div className="relative flex items-center gap-2">
-      <a
-        href="https://github.com/quentin-rey/MTG-RGB-HD"
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`flex items-center justify-center w-9 h-9 border rounded-md transition-colors ${
-          isLight
-            ? 'bg-slate-100 border-slate-300 hover:bg-slate-200'
-            : 'bg-[#222] border-white/10 hover:bg-[#333]'
-        }`}
-        title={props.t('githubProject')}
-        aria-label={props.t('githubProject')}
-      >
-        <Github className={`w-4 h-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`} />
-      </a>
-
       <button
         onClick={props.onHelpClick}
         className={`flex items-center justify-center w-9 h-9 border rounded-md transition-colors ${
@@ -1312,7 +1328,7 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
         }`}
         title={props.t('helpTitle')}
       >
-        <CircleHelp className={`w-4 h-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`} />
+        <CircleHelp className={`w-4 h-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`} />
       </button>
 
       <button
@@ -1324,8 +1340,161 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
         }`}
         title={props.t('infoTitle')}
       >
-        <Info className={`w-4 h-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`} />
+        <Info className={`w-4 h-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`} />
       </button>
+    </div>
+  );
+}
+
+type HeaderOverflowButtonProps = {
+  onOpen: () => void;
+  t: Translator;
+  theme: UiTheme;
+};
+
+export function HeaderOverflowButton(props: HeaderOverflowButtonProps) {
+  const { onOpen, t, theme } = props;
+  const isLight = theme === 'light';
+  return (
+    <button
+      onClick={onOpen}
+      className={`sm:hidden flex items-center justify-center w-11 h-11 border rounded-md transition-colors ${
+        isLight
+          ? 'bg-slate-100 border-slate-300 hover:bg-slate-200'
+          : 'bg-[#222] border-white/10 hover:bg-[#333]'
+      }`}
+      title={t('moreOptionsTooltip')}
+      aria-label={t('moreOptionsTooltip')}
+    >
+      <Wrench className={`w-4 h-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`} />
+    </button>
+  );
+}
+
+type HeaderOverflowMenuProps = {
+  isOpen: boolean;
+  language: Language;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+  onHelpClick: () => void;
+  onInfoClick: () => void;
+  onLanguageChange: (language: Language) => void;
+  onThemeModeChange: (mode: 'dark' | 'light' | 'auto') => void;
+  t: Translator;
+  theme: UiTheme;
+  themeMode: 'dark' | 'light' | 'auto';
+};
+
+export function HeaderOverflowMenu(props: HeaderOverflowMenuProps) {
+  const {
+    isOpen,
+    language,
+    menuRef,
+    onClose,
+    onHelpClick,
+    onInfoClick,
+    onLanguageChange,
+    onThemeModeChange,
+    t,
+    theme,
+    themeMode,
+  } = props;
+  const isLight = theme === 'light';
+
+  if (!isOpen) return null;
+
+  const segmentedButtonClass = (isActive: boolean) => `relative z-10 flex-1 flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+    isActive
+      ? 'text-white'
+      : themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-200 hover:text-white')
+  }`;
+
+  return (
+    <div className={`sm:hidden fixed inset-0 z-[520] flex items-center justify-center p-4 backdrop-blur-sm ${
+      themedClass(isLight, 'bg-slate-900/35', 'bg-black/50')
+    }`}>
+      <div ref={menuRef} className={`border rounded-xl shadow-2xl p-5 max-w-sm w-full ${
+        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
+      }`}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('moreOptionsTitle')}</h3>
+          <button
+            onClick={onClose}
+            aria-label={t('close')}
+            className={`p-1 rounded-md transition-colors ${
+              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
+            }`}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <div className={`text-[11px] uppercase tracking-wide font-medium mb-1.5 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('languageLabel')}</div>
+            <div className={`relative grid grid-cols-2 rounded-md p-0.5 border ${
+              themedClass(isLight, 'bg-slate-100 border-slate-200', 'bg-black/30 border-white/10')
+            }`}>
+              <span
+                className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
+                style={{ left: language === 'fr' ? 2 : 'calc(50% + 0px)' }}
+                aria-hidden="true"
+              />
+              <button type="button" onClick={() => onLanguageChange('fr')} aria-pressed={language === 'fr'} className={segmentedButtonClass(language === 'fr')}>
+                {t('langFrench')}
+              </button>
+              <button type="button" onClick={() => onLanguageChange('en')} aria-pressed={language === 'en'} className={segmentedButtonClass(language === 'en')}>
+                {t('langEnglish')}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div className={`text-[11px] uppercase tracking-wide font-medium mb-1.5 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('themeLabel')}</div>
+            <div className={`relative grid grid-cols-3 rounded-md p-0.5 border ${
+              themedClass(isLight, 'bg-slate-100 border-slate-200', 'bg-black/30 border-white/10')
+            }`}>
+              <span
+                className="absolute top-0.5 bottom-0.5 w-[calc(33.333%-2px)] rounded-[5px] bg-blue-500 shadow-sm transition-all duration-200"
+                style={{
+                  left: themeMode === 'dark' ? 2 : themeMode === 'light' ? 'calc(33.333% + 1px)' : 'calc(66.666% + 0px)',
+                }}
+                aria-hidden="true"
+              />
+              <button type="button" onClick={() => onThemeModeChange('dark')} aria-pressed={themeMode === 'dark'} aria-label={t('themeDark')} className={segmentedButtonClass(themeMode === 'dark')}>
+                <Moon className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" onClick={() => onThemeModeChange('light')} aria-pressed={themeMode === 'light'} aria-label={t('themeLight')} className={segmentedButtonClass(themeMode === 'light')}>
+                <Sun className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" onClick={() => onThemeModeChange('auto')} aria-pressed={themeMode === 'auto'} aria-label={t('themeAuto')} className={segmentedButtonClass(themeMode === 'auto')}>
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <button
+              onClick={onHelpClick}
+              className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200', 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]')
+              }`}
+            >
+              <CircleHelp className="w-4 h-4 shrink-0" />
+              {t('helpTitle')}
+            </button>
+            <button
+              onClick={onInfoClick}
+              className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200', 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]')
+              }`}
+            >
+              <Info className="w-4 h-4 shrink-0" />
+              {t('infoTitle')}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1345,18 +1514,18 @@ export function HelpModal(props: HelpModalProps) {
 
   return (
     <div className={`fixed inset-0 z-[505] flex items-center justify-center p-4 backdrop-blur-sm ${
-      isLight ? 'bg-slate-900/35' : 'bg-black/50'
+      themedClass(isLight, 'bg-slate-900/35', 'bg-black/50')
     }`}>
       <div ref={helpRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
-        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('helpTitle')}</h3>
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('helpTitle')}</h3>
           <button
             onClick={onClose}
             aria-label={t('close')}
             className={`p-1 rounded-md transition-colors ${
-              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
             }`}
           >
             <X className="w-5 h-5" />
@@ -1392,8 +1561,8 @@ export function HelpModal(props: HelpModalProps) {
               ],
             },
           ].map((group) => (
-            <section key={group.title} className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-              <h4 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{group.title}</h4>
+            <section key={group.title} className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+              <h4 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{group.title}</h4>
               <div className="space-y-2">
                 {group.rows.map((row) => (
                   <div key={`${group.title}-${row.action}`} className="flex items-center justify-between gap-3 text-xs">
@@ -1411,7 +1580,7 @@ export function HelpModal(props: HelpModalProps) {
                         </span>
                       ))}
                     </div>
-                    <span className={`text-right ${isLight ? 'text-slate-700' : 'text-slate-200'}`}>{row.action}</span>
+                    <span className={`text-right ${themedClass(isLight, 'text-slate-700', 'text-slate-200')}`}>{row.action}</span>
                   </div>
                 ))}
               </div>
@@ -1437,7 +1606,7 @@ export function Map2TitleBadge(props: Map2TitleBadgeProps) {
   return (
     <div className="absolute top-4 left-4 z-[400] pointer-events-none">
       <div className={`backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border shadow-xl ${
-        isLight ? 'bg-white/95 border-slate-300 text-slate-900' : 'bg-black/60 border-white/10 text-white'
+        themedClass(isLight, 'bg-white/95 border-slate-300 text-slate-900', 'bg-black/60 border-white/10 text-white')
       }`}>
         {getSinglePanelTitle(activeLayers, {
           layerPrefix: t('panelLayerPrefix'),
@@ -1573,7 +1742,7 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
   return (
     <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
       <div className={`flex items-center gap-1 backdrop-blur-md p-1 rounded-md border shadow-xl ${
-        isLight ? 'bg-white/95 border-slate-300' : 'bg-black/60 border-white/10'
+        themedClass(isLight, 'bg-white/95 border-slate-300', 'bg-black/60 border-white/10')
       }`}>
         <button
           onClick={() => toggleLayer('rgb')}

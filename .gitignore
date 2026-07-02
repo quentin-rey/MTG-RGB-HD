@@ -11,3 +11,4 @@ coverage/
 .env.production.local
 !.env.example
 .markdownlint.json
+CLAUDE.md
