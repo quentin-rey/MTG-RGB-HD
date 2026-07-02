@@ -1,5 +1,9 @@
 # MTG-RGB-HD
 
+<p align="center">
+  <img src="assets/img/cover.jpg" alt="MTG-RGB-HD preview" width="900" />
+</p>
+
 **Near-real-time EUMETSAT satellite imagery viewer and export tool**
 
 MTG-RGB-HD is a web application to visualize and export Meteosat Third Generation
