@@ -1,18 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Download, Film, Loader2, Monitor, Moon, Sun } from 'lucide-react';
+import { Download, Film, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
   getAvailableExportKindsFromLayers,
   getLatestAvailableTime,
   getSolarElevation,
+  IR_STYLES,
   sanitizeActiveLayers,
   STORAGE_KEYS,
   type ActiveLayers,
+  type HdEnhancementPreset,
   type MapOptions,
   readStoredJson,
   safeSetLocalStorage,
   type ExportKind,
+  type MapViewState,
 } from './dualMapViewerShared';
 import { getTranslator, type Language } from './i18n';
 import {
@@ -27,6 +30,7 @@ import {
   AnimationModal,
   DownloadModal,
   HeaderInfoButton,
+  HelpModal,
   InfoModal,
   Map2ControlBar,
   Map2TitleBadge,
@@ -45,6 +49,94 @@ const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
 const CUSTOM_MIN_RANGE_STEPS = MIN_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
 const CUSTOM_MAX_RANGE_STEPS = MAX_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
+
+type ShareSnapshot = {
+  activeLayers: ActiveLayers;
+  animationFps: number;
+  animationPreset: AnimationPreset;
+  autoReduceVisAtNight: boolean;
+  customAnimationDate: string;
+  customEndStep: number;
+  customStartStep: number;
+  currentTime: string;
+  gifColorCount: 64 | 128 | 256;
+  gifDitherLevel: GifDitherLevel;
+  gifFinalPauseMs: GifFinalPauseMs;
+  gifMaxDimension: 960 | 1280 | 1600;
+  gifPaletteMode: GifPaletteMode;
+  hdEnhanceEnabled: boolean;
+  hdEnhanceHighlightProtection: number;
+  hdEnhanceLocalContrast: number;
+  hdEnhanceNoiseReduction: number;
+  hdEnhancePreset: HdEnhancementPreset;
+  hdEnhanceRadius: number;
+  hdEnhanceSaturationAdjust: number;
+  hdEnhanceShadowProtection: number;
+  hdEnhanceSharpen: number;
+  hdEnhanceStrength: number;
+  irStyle: string;
+  language: Language;
+  mapOptions: MapOptions;
+  mapView: MapViewState;
+  rgbHdOpacity: number;
+  rgbSaturation: number;
+  sandwichOpacity: number;
+  themeMode: ThemeMode;
+  visBrightness: number;
+  visContrast: number;
+};
+
+function encodeShareSnapshot(snapshot: ShareSnapshot): string {
+  const json = JSON.stringify(snapshot);
+  const bytes = new TextEncoder().encode(json);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function decodeShareSnapshot(raw: string): Partial<ShareSnapshot> | null {
+  try {
+    const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    return JSON.parse(json) as Partial<ShareSnapshot>;
+  } catch {
+    return null;
+  }
+}
+function readShareSnapshotFromUrl(): Partial<ShareSnapshot> | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('view');
+    if (!raw) return null;
+    const compactPayload = decodeShareSnapshot(raw);
+    if (compactPayload) return compactPayload;
+
+    // Backward compatibility with previous raw JSON links.
+    return JSON.parse(raw) as Partial<ShareSnapshot>;
+  } catch {
+    return null;
+  }
+}
+
+function clampMapView(input: MapViewState | null | undefined): MapViewState | null {
+  if (!input) return null;
+  const lat = Number(input.lat);
+  const lng = Number(input.lng);
+  const zoom = Number(input.zoom);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return null;
+  return {
+    lat: Math.max(-85, Math.min(85, lat)),
+    lng: Math.max(-180, Math.min(180, lng)),
+    zoom: Math.max(3, Math.min(11, Math.round(zoom))),
+  };
+}
 
 function toUtcInputValue(date: Date): string {
   return date.toISOString().slice(0, 16);
@@ -132,8 +224,65 @@ function getAnimationExportKind(layers: ActiveLayers): ExportKind {
   return 'ir';
 }
 
+const HD_PRESET_SLIDER_VALUES: Record<Exclude<HdEnhancementPreset, 'custom'>, {
+  highlightProtection: number;
+  localContrast: number;
+  noiseReduction: number;
+  radius: number;
+  saturationAdjust: number;
+  shadowProtection: number;
+  sharpen: number;
+  strength: number;
+}> = {
+  natural: {
+    highlightProtection: 0.38,
+    localContrast: 0.18,
+    noiseReduction: 0.18,
+    radius: 1.2,
+    saturationAdjust: 4,
+    shadowProtection: 0.28,
+    sharpen: 0.28,
+    strength: 0.28,
+  },
+  balanced: {
+    highlightProtection: 0.3,
+    localContrast: 0.25,
+    noiseReduction: 0.1,
+    radius: 1.4,
+    saturationAdjust: 8,
+    shadowProtection: 0.2,
+    sharpen: 0.4,
+    strength: 0.35,
+  },
+  punchy: {
+    highlightProtection: 0.2,
+    localContrast: 0.42,
+    noiseReduction: 0.08,
+    radius: 1.65,
+    saturationAdjust: 16,
+    shadowProtection: 0.16,
+    sharpen: 0.62,
+    strength: 0.52,
+  },
+  analyze: {
+    highlightProtection: 0.15,
+    localContrast: 0.5,
+    noiseReduction: 0.06,
+    radius: 1.85,
+    saturationAdjust: 2,
+    shadowProtection: 0.1,
+    sharpen: 0.72,
+    strength: 0.62,
+  },
+};
+
 export default function DualMapViewer() {
+  const [sharedSnapshot] = useState<Partial<ShareSnapshot> | null>(() => readShareSnapshotFromUrl());
+  const rememberedMapView = readStoredJson<MapViewState | null>(STORAGE_KEYS.lastMapView, null);
+  const initialMapView = clampMapView(sharedSnapshot?.mapView ?? rememberedMapView);
+  const [mapViewState, setMapViewState] = useState<MapViewState | null>(initialMapView);
   const [isExporting, setIsExporting] = useState(false);
+    const [shareToastMessage, setShareToastMessage] = useState<string | null>(null);
   const [selectedExports, setSelectedExports] = useState<Record<ExportKind, boolean>>({
     vis: true,
     rgb: true,
@@ -143,14 +292,22 @@ export default function DualMapViewer() {
     hybrid: false,
   });
   const [activeLayers, setActiveLayers] = useState<ActiveLayers>(() => {
+    const fromShare = sharedSnapshot?.activeLayers;
+    if (fromShare) return sanitizeActiveLayers(fromShare);
     const stored = readStoredJson<ActiveLayers>(STORAGE_KEYS.activeLayers, DEFAULT_ACTIVE_LAYERS);
     return sanitizeActiveLayers(stored);
   });
   const [language, setLanguage] = useState<Language>(() => {
+    if (sharedSnapshot?.language === 'fr' || sharedSnapshot?.language === 'en') {
+      return sharedSnapshot.language;
+    }
     const stored = readStoredJson<Language>(STORAGE_KEYS.language, 'fr');
     return stored === 'en' ? 'en' : 'fr';
   });
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (sharedSnapshot?.themeMode === 'dark' || sharedSnapshot?.themeMode === 'light' || sharedSnapshot?.themeMode === 'auto') {
+      return sharedSnapshot.themeMode;
+    }
     const stored = readStoredJson<ThemeMode>(STORAGE_KEYS.themeMode, 'auto');
     return stored === 'dark' || stored === 'light' || stored === 'auto' ? stored : 'auto';
   });
@@ -166,25 +323,49 @@ export default function DualMapViewer() {
     adjustmentsRef,
     animationModalRef,
     downloadModalRef,
+    helpRef,
     infoRef,
     isAdjustmentsOpen,
     isAnimationModalOpen,
     isDownloadModalOpen,
+    isHelpOpen,
     isInfoOpen,
     setIsAdjustmentsOpen,
     setIsAnimationModalOpen,
     setIsDownloadModalOpen,
+    setIsHelpOpen,
     setIsInfoOpen,
   } = useViewerPanelsState();
 
   const {
     autoReduceVisAtNight,
+    hdEnhanceEnabled,
+    hdEnhanceHighlightProtection,
+    hdEnhanceLocalContrast,
+    hdEnhanceNoiseReduction,
+    hdEnhancePreset,
+    hdEnhanceRadius,
+    hdEnhanceSaturationAdjust,
+    hdEnhanceShadowProtection,
+    hdEnhanceSharpen,
+    hdEnhanceStrength,
     irStyle,
+    resetHdEnhancement,
     resetAdjustments,
     rgbHdOpacity,
     rgbSaturation,
     sandwichOpacity,
     setAutoReduceVisAtNight,
+    setHdEnhanceEnabled,
+    setHdEnhanceHighlightProtection,
+    setHdEnhanceLocalContrast,
+    setHdEnhanceNoiseReduction,
+    setHdEnhancePreset,
+    setHdEnhanceRadius,
+    setHdEnhanceSaturationAdjust,
+    setHdEnhanceShadowProtection,
+    setHdEnhanceSharpen,
+    setHdEnhanceStrength,
     setIrStyle,
     setRgbHdOpacity,
     setRgbSaturation,
@@ -194,6 +375,87 @@ export default function DualMapViewer() {
     visBrightness,
     visContrast,
   } = useImageAdjustments();
+
+  useEffect(() => {
+    if (!sharedSnapshot) return;
+
+    if (typeof sharedSnapshot.visBrightness === 'number') {
+      setVisBrightness(Math.max(0.6, Math.min(1.8, sharedSnapshot.visBrightness)));
+    }
+    if (typeof sharedSnapshot.visContrast === 'number') {
+      setVisContrast(Math.max(0.6, Math.min(2, sharedSnapshot.visContrast)));
+    }
+    if (typeof sharedSnapshot.rgbSaturation === 'number') {
+      setRgbSaturation(Math.max(0.5, Math.min(2, sharedSnapshot.rgbSaturation)));
+    }
+    if (typeof sharedSnapshot.rgbHdOpacity === 'number') {
+      setRgbHdOpacity(Math.max(0.1, Math.min(1, sharedSnapshot.rgbHdOpacity)));
+    }
+    if (typeof sharedSnapshot.sandwichOpacity === 'number') {
+      setSandwichOpacity(Math.max(0.1, Math.min(1, sharedSnapshot.sandwichOpacity)));
+    }
+    if (typeof sharedSnapshot.autoReduceVisAtNight === 'boolean') {
+      setAutoReduceVisAtNight(sharedSnapshot.autoReduceVisAtNight);
+    }
+    if (typeof sharedSnapshot.hdEnhanceEnabled === 'boolean') {
+      setHdEnhanceEnabled(sharedSnapshot.hdEnhanceEnabled);
+    }
+    if (typeof sharedSnapshot.hdEnhanceStrength === 'number') {
+      setHdEnhanceStrength(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceStrength)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceSharpen === 'number') {
+      setHdEnhanceSharpen(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceSharpen)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceRadius === 'number') {
+      setHdEnhanceRadius(Math.max(0.5, Math.min(3, sharedSnapshot.hdEnhanceRadius)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceLocalContrast === 'number') {
+      setHdEnhanceLocalContrast(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceLocalContrast)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceHighlightProtection === 'number') {
+      setHdEnhanceHighlightProtection(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceHighlightProtection)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceSaturationAdjust === 'number') {
+      setHdEnhanceSaturationAdjust(Math.max(-20, Math.min(30, sharedSnapshot.hdEnhanceSaturationAdjust)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceNoiseReduction === 'number') {
+      setHdEnhanceNoiseReduction(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceNoiseReduction)));
+    }
+    if (typeof sharedSnapshot.hdEnhanceShadowProtection === 'number') {
+      setHdEnhanceShadowProtection(Math.max(0, Math.min(1, sharedSnapshot.hdEnhanceShadowProtection)));
+    }
+    if (
+      sharedSnapshot.hdEnhancePreset === 'natural'
+      || sharedSnapshot.hdEnhancePreset === 'balanced'
+      || sharedSnapshot.hdEnhancePreset === 'punchy'
+      || sharedSnapshot.hdEnhancePreset === 'analyze'
+      || sharedSnapshot.hdEnhancePreset === 'custom'
+    ) {
+      setHdEnhancePreset(sharedSnapshot.hdEnhancePreset);
+    }
+    if (typeof sharedSnapshot.irStyle === 'string' && IR_STYLES.some((style) => style.id === sharedSnapshot.irStyle)) {
+      setIrStyle(sharedSnapshot.irStyle);
+    }
+  }, [
+    setAutoReduceVisAtNight,
+    setHdEnhanceEnabled,
+    setHdEnhanceHighlightProtection,
+    setHdEnhanceLocalContrast,
+    setHdEnhanceNoiseReduction,
+    setHdEnhancePreset,
+    setHdEnhanceRadius,
+    setHdEnhanceSaturationAdjust,
+    setHdEnhanceShadowProtection,
+    setHdEnhanceSharpen,
+    setHdEnhanceStrength,
+    setIrStyle,
+    setRgbHdOpacity,
+    setRgbSaturation,
+    setSandwichOpacity,
+    setVisBrightness,
+    setVisContrast,
+    sharedSnapshot,
+  ]);
 
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.activeLayers, JSON.stringify(activeLayers));
@@ -220,6 +482,12 @@ export default function DualMapViewer() {
     mediaQuery.addEventListener('change', syncFromSystem);
     return () => mediaQuery.removeEventListener('change', syncFromSystem);
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!shareToastMessage) return;
+    const timeout = window.setTimeout(() => setShareToastMessage(null), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [shareToastMessage]);
   
   const [mapOptions, setMapOptions] = useState<MapOptions>(() => {
     const defaults: MapOptions = {
@@ -230,33 +498,67 @@ export default function DualMapViewer() {
       showFranceDepartments: false,
     };
     const stored = readStoredJson<MapOptions>(STORAGE_KEYS.mapOptions, defaults);
-    return { ...defaults, ...stored };
+    return { ...defaults, ...stored, ...(sharedSnapshot?.mapOptions ?? {}) };
   });
 
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.mapOptions, JSON.stringify(mapOptions));
   }, [mapOptions]);
 
+  useEffect(() => {
+    if (!mapViewState) return;
+    safeSetLocalStorage(STORAGE_KEYS.lastMapView, JSON.stringify(mapViewState));
+  }, [mapViewState]);
+
   // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer)
-  const [currentTime, setCurrentTime] = useState(() => getLatestAvailableTime());
-  const [animationPreset, setAnimationPreset] = useState<AnimationPreset>('3h');
-  const [animationFps, setAnimationFps] = useState(6);
-  const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(1280);
-  const [gifColorCount, setGifColorCount] = useState<64 | 128 | 256>(128);
-  const [gifPaletteMode, setGifPaletteMode] = useState<GifPaletteMode>('per-frame');
-  const [gifDitherLevel, setGifDitherLevel] = useState<GifDitherLevel>('none');
-  const [gifFinalPauseMs, setGifFinalPauseMs] = useState<GifFinalPauseMs>(100);
+  const [currentTime, setCurrentTime] = useState(() => sharedSnapshot?.currentTime ?? getLatestAvailableTime());
+  const [animationPreset, setAnimationPreset] = useState<AnimationPreset>(() => {
+    const preset = sharedSnapshot?.animationPreset;
+    return preset === '3h' || preset === '6h' || preset === '12h' || preset === 'custom' ? preset : '3h';
+  });
+  const [animationFps, setAnimationFps] = useState(() => {
+    const fps = Number(sharedSnapshot?.animationFps ?? 6);
+    return Math.max(2, Math.min(20, Math.round(fps)));
+  });
+  const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(() => {
+    const value = sharedSnapshot?.gifMaxDimension;
+    return value === 960 || value === 1280 || value === 1600 ? value : 1280;
+  });
+  const [gifColorCount, setGifColorCount] = useState<64 | 128 | 256>(() => {
+    const value = sharedSnapshot?.gifColorCount;
+    return value === 64 || value === 128 || value === 256 ? value : 128;
+  });
+  const [gifPaletteMode, setGifPaletteMode] = useState<GifPaletteMode>(() => {
+    const value = sharedSnapshot?.gifPaletteMode;
+    return value === 'global' || value === 'per-frame' ? value : 'per-frame';
+  });
+  const [gifDitherLevel, setGifDitherLevel] = useState<GifDitherLevel>(() => {
+    const value = sharedSnapshot?.gifDitherLevel;
+    return value === 'none' || value === 'low' || value === 'medium' || value === 'high' ? value : 'none';
+  });
+  const [gifFinalPauseMs, setGifFinalPauseMs] = useState<GifFinalPauseMs>(() => {
+    const value = sharedSnapshot?.gifFinalPauseMs;
+    return value === 100 || value === 500 || value === 1000 || value === 2000 ? value : 100;
+  });
   const [isGifExporting, setIsGifExporting] = useState(false);
   const [gifExportProgress, setGifExportProgress] = useState(0);
   const [animationRangeError, setAnimationRangeError] = useState<string | null>(null);
   const latestAvailableTime = getLatestAvailableTime();
   const latestAvailableDatePart = latestAvailableTime.split('T')[0];
-  const [customAnimationDate, setCustomAnimationDate] = useState(() => currentTime.split('T')[0]);
+  const [customAnimationDate, setCustomAnimationDate] = useState(() => sharedSnapshot?.customAnimationDate ?? currentTime.split('T')[0]);
   const [customStartStep, setCustomStartStep] = useState(() => {
+    if (typeof sharedSnapshot?.customStartStep === 'number') {
+      return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)));
+    }
     const latestStep = getStepFromUtcValue(getLatestAvailableTime());
     return Math.max(0, latestStep - 18);
   });
-  const [customEndStep, setCustomEndStep] = useState(() => getStepFromUtcValue(getLatestAvailableTime()));
+  const [customEndStep, setCustomEndStep] = useState(() => {
+    if (typeof sharedSnapshot?.customEndStep === 'number') {
+      return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customEndStep)));
+    }
+    return getStepFromUtcValue(getLatestAvailableTime());
+  });
 
   const customDayMaxStep = getLatestAllowedStepForDate(customAnimationDate, latestAvailableTime);
   const customAnimationStart = `${customAnimationDate}T${toTimePartFromStep(customStartStep)}`;
@@ -314,8 +616,10 @@ export default function DualMapViewer() {
     autoReduceVisAtNight,
     activeLayers,
     currentTime,
+    initialMapView,
     irStyle,
     mapOptions,
+    onMapViewChange: setMapViewState,
     rgbHdOpacity,
     sandwichOpacity,
   });
@@ -325,10 +629,50 @@ export default function DualMapViewer() {
     : 1;
   const rgbLegacyFusionSaturationBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.45 : 1;
   const rgbLegacyFusionBrightnessBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.12 : 1;
-  const rgbLayerEffectiveSaturation = rgbSaturation * rgbLegacyFusionSaturationBoost;
-  const rgbLayerEffectiveBrightness = rgbVisNightBrightness * rgbLegacyFusionBrightnessBoost;
-  const visHdLegacyBrightness = Math.min(2, visBrightness * 1.2);
-  const visHdLegacyContrast = Math.min(2.4, visContrast * 1.2);
+  const hdPresetProfile = hdEnhancePreset === 'natural'
+    ? { sharpen: 0.8, contrast: 0.85, saturation: 0.8 }
+    : hdEnhancePreset === 'punchy'
+      ? { sharpen: 1.2, contrast: 1.25, saturation: 1.15 }
+      : hdEnhancePreset === 'analyze'
+        ? { sharpen: 1.35, contrast: 1.35, saturation: 0.9 }
+        : { sharpen: 1, contrast: 1, saturation: 1 };
+
+  const applyHdSliderChange = (apply: () => void) => {
+    apply();
+    if (hdEnhancePreset !== 'custom') {
+      setHdEnhancePreset('custom');
+    }
+  };
+
+  const handleHdPresetChange = (preset: HdEnhancementPreset) => {
+    setHdEnhancePreset(preset);
+    if (preset === 'custom') return;
+
+    const values = HD_PRESET_SLIDER_VALUES[preset];
+    setHdEnhanceStrength(values.strength);
+    setHdEnhanceSharpen(values.sharpen);
+    setHdEnhanceRadius(values.radius);
+    setHdEnhanceLocalContrast(values.localContrast);
+    setHdEnhanceHighlightProtection(values.highlightProtection);
+    setHdEnhanceSaturationAdjust(values.saturationAdjust);
+    setHdEnhanceNoiseReduction(values.noiseReduction);
+    setHdEnhanceShadowProtection(values.shadowProtection);
+  };
+  const hdSharpenWeight = hdEnhanceEnabled ? hdEnhanceStrength * hdEnhanceSharpen * hdPresetProfile.sharpen : 0;
+  const hdContrastWeight = hdEnhanceEnabled ? hdEnhanceStrength * hdEnhanceLocalContrast * hdPresetProfile.contrast : 0;
+  const hdHighlightCut = hdEnhanceEnabled ? hdEnhanceHighlightProtection * hdEnhanceStrength * 0.08 : 0;
+  const hdShadowLift = hdEnhanceEnabled ? hdEnhanceShadowProtection * hdEnhanceStrength * 0.06 : 0;
+  const hdSaturationFactor = hdEnhanceEnabled
+    ? 1 + (hdEnhanceSaturationAdjust / 100) * hdEnhanceStrength * hdPresetProfile.saturation
+    : 1;
+  const hdPreviewBoost = 1 + hdSharpenWeight * 0.18;
+  const hdPreviewVisBrightnessBoost = Math.max(0.7, 1 + hdShadowLift - hdHighlightCut + hdSharpenWeight * 0.04);
+  const hdPreviewVisContrastBoost = 1 + hdContrastWeight * 0.24;
+  const rgbLayerEffectiveSaturation = rgbSaturation * rgbLegacyFusionSaturationBoost * hdPreviewBoost;
+  const rgbLayerEffectiveBrightness = rgbVisNightBrightness * rgbLegacyFusionBrightnessBoost * hdPreviewVisBrightnessBoost;
+  const rgbLayerEffectiveSaturationWithHd = Math.max(0.4, rgbLayerEffectiveSaturation * hdSaturationFactor);
+  const visHdLegacyBrightness = Math.min(2, visBrightness * 1.2 * hdPreviewVisBrightnessBoost);
+  const visHdLegacyContrast = Math.min(2.4, visContrast * 1.2 * hdPreviewVisContrastBoost);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
   const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
 
@@ -343,6 +687,15 @@ export default function DualMapViewer() {
       setCurrentTime(newTimeStr);
     }
   };
+
+  useEffect(() => {
+    const latestAvailable = getLatestAvailableTime();
+    const requested = new Date(currentTime + 'Z');
+    const latest = new Date(latestAvailable + 'Z');
+    if (requested.getTime() > latest.getTime()) {
+      setCurrentTime(latestAvailable);
+    }
+  }, [currentTime]);
 
   const handleAnimationPresetChange = (value: AnimationPreset) => {
     setAnimationPreset(value);
@@ -472,6 +825,16 @@ export default function DualMapViewer() {
         irStyle,
         visBrightness,
         visContrast,
+        hdEnhanceEnabled,
+        hdEnhanceHighlightProtection,
+        hdEnhanceLocalContrast,
+        hdEnhanceNoiseReduction,
+        hdEnhancePreset,
+        hdEnhanceRadius,
+        hdEnhanceSaturationAdjust,
+        hdEnhanceShadowProtection,
+        hdEnhanceSharpen,
+        hdEnhanceStrength,
         rgbSaturation,
         rgbHdOpacity,
         sandwichOpacity,
@@ -545,6 +908,16 @@ export default function DualMapViewer() {
         irStyle,
         visBrightness,
         visContrast,
+        hdEnhanceEnabled,
+        hdEnhanceHighlightProtection,
+        hdEnhanceLocalContrast,
+        hdEnhanceNoiseReduction,
+        hdEnhancePreset,
+        hdEnhanceRadius,
+        hdEnhanceSaturationAdjust,
+        hdEnhanceShadowProtection,
+        hdEnhanceSharpen,
+        hdEnhanceStrength,
         rgbSaturation,
         rgbHdOpacity,
         sandwichOpacity,
@@ -564,6 +937,142 @@ export default function DualMapViewer() {
       setIsExporting(false);
     }
   };
+
+  const shareCurrentView = async () => {
+    if (typeof window === 'undefined') return;
+
+    const map = map2Instance.current;
+    const liveCenter = map?.getCenter();
+    const liveZoom = map?.getZoom();
+    const shareMapView = clampMapView(
+      liveCenter && typeof liveZoom === 'number'
+        ? { lat: liveCenter.lat, lng: liveCenter.lng, zoom: liveZoom }
+        : mapViewState,
+    );
+
+    if (!shareMapView) {
+      setShareToastMessage(t('shareUnavailable'));
+      return;
+    }
+
+    const snapshot: ShareSnapshot = {
+      activeLayers,
+      animationFps,
+      animationPreset,
+      autoReduceVisAtNight,
+      customAnimationDate,
+      customEndStep,
+      customStartStep,
+      currentTime,
+      gifColorCount,
+      gifDitherLevel,
+      gifFinalPauseMs,
+      gifMaxDimension,
+      gifPaletteMode,
+      hdEnhanceEnabled,
+      hdEnhanceHighlightProtection,
+      hdEnhanceLocalContrast,
+      hdEnhanceNoiseReduction,
+      hdEnhancePreset,
+      hdEnhanceRadius,
+      hdEnhanceSaturationAdjust,
+      hdEnhanceShadowProtection,
+      hdEnhanceSharpen,
+      hdEnhanceStrength,
+      irStyle,
+      language,
+      mapOptions,
+      mapView: shareMapView,
+      rgbHdOpacity,
+      rgbSaturation,
+      sandwichOpacity,
+      themeMode,
+      visBrightness,
+      visContrast,
+    };
+
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('view', encodeShareSnapshot(snapshot));
+    const shareUrl = nextUrl.toString();
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareToastMessage(t('shareCopied'));
+    } catch {
+      setShareToastMessage(t('shareCopyFailed'));
+    }
+  };
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase() ?? '';
+      const isEditable = target?.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select';
+      if (isEditable) return;
+
+      const key = event.key;
+      const lowerKey = key.toLowerCase();
+
+      if (event.shiftKey && lowerKey === 's') {
+        event.preventDefault();
+        void shareCurrentView();
+        return;
+      }
+
+      if (lowerKey === 'a') {
+        event.preventDefault();
+        setIsAnimationModalOpen((prev) => !prev);
+        return;
+      }
+
+      if (lowerKey === 'd') {
+        event.preventDefault();
+        openDownloadModal();
+        return;
+      }
+
+      if (lowerKey === 'l') {
+        event.preventDefault();
+        handleTimeChange(getLatestAvailableTime());
+        return;
+      }
+
+      if (lowerKey === 'r') {
+        event.preventDefault();
+        resetAdjustments();
+        return;
+      }
+
+      if (lowerKey === 's') {
+        event.preventDefault();
+        setIsAdjustmentsOpen((prev) => !prev);
+        return;
+      }
+
+      if (lowerKey === 'i') {
+        event.preventDefault();
+        setIsInfoOpen((prev) => !prev);
+        return;
+      }
+
+      if (key === '?') {
+        event.preventDefault();
+        setIsHelpOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
+  }, [
+    handleTimeChange,
+    openDownloadModal,
+    resetAdjustments,
+    setIsAdjustmentsOpen,
+    setIsAnimationModalOpen,
+    setIsHelpOpen,
+    setIsInfoOpen,
+    shareCurrentView,
+  ]);
 
   return (
     <div className={`theme-${resolvedTheme} flex flex-col h-screen w-full font-sans overflow-hidden ${
@@ -694,7 +1203,20 @@ export default function DualMapViewer() {
               </button>
             </div>
           </div>
-          <HeaderInfoButton onClick={() => setIsInfoOpen(true)} t={t} theme={resolvedTheme} />
+          <HeaderInfoButton onHelpClick={() => setIsHelpOpen(true)} onInfoClick={() => setIsInfoOpen(true)} t={t} theme={resolvedTheme} />
+
+          <button
+            onClick={() => { void shareCurrentView(); }}
+            className={`flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
+              resolvedTheme === 'light'
+                ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
+                : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
+            }`}
+            title={t('shareView')}
+          >
+            <Share2 className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">{t('shareView')}</span>
+          </button>
 
           <button
             onClick={() => setIsAnimationModalOpen(true)}
@@ -740,11 +1262,31 @@ export default function DualMapViewer() {
               autoReduceVisAtNight={autoReduceVisAtNight}
               effectiveHybridVisOpacity={effectiveHybridVisOpacity}
               effectiveSandwichOpacity={effectiveSandwichOpacity}
+              hdEnhanceEnabled={hdEnhanceEnabled}
+              hdEnhanceHighlightProtection={hdEnhanceHighlightProtection}
+              hdEnhanceLocalContrast={hdEnhanceLocalContrast}
+              hdEnhanceNoiseReduction={hdEnhanceNoiseReduction}
+              hdEnhancePreset={hdEnhancePreset}
+              hdEnhanceRadius={hdEnhanceRadius}
+              hdEnhanceSaturationAdjust={hdEnhanceSaturationAdjust}
+              hdEnhanceShadowProtection={hdEnhanceShadowProtection}
+              hdEnhanceSharpen={hdEnhanceSharpen}
+              hdEnhanceStrength={hdEnhanceStrength}
               irStyle={irStyle}
               isAdjustmentsOpen={isAdjustmentsOpen}
               mapOptions={mapOptions}
               onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
               onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
+              onHdEnhanceEnabledChange={setHdEnhanceEnabled}
+              onHdEnhanceHighlightProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceHighlightProtection(value))}
+              onHdEnhanceLocalContrastChange={(value) => applyHdSliderChange(() => setHdEnhanceLocalContrast(value))}
+              onHdEnhanceNoiseReductionChange={(value) => applyHdSliderChange(() => setHdEnhanceNoiseReduction(value))}
+              onHdEnhancePresetChange={handleHdPresetChange}
+              onHdEnhanceRadiusChange={(value) => applyHdSliderChange(() => setHdEnhanceRadius(value))}
+              onHdEnhanceSaturationAdjustChange={(value) => applyHdSliderChange(() => setHdEnhanceSaturationAdjust(value))}
+              onHdEnhanceShadowProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceShadowProtection(value))}
+              onHdEnhanceSharpenChange={(value) => applyHdSliderChange(() => setHdEnhanceSharpen(value))}
+              onHdEnhanceStrengthChange={(value) => applyHdSliderChange(() => setHdEnhanceStrength(value))}
               onIrStyleChange={setIrStyle}
               onMapOptionsChange={setMapOptions}
               onResetAdjustments={resetAdjustments}
@@ -752,6 +1294,7 @@ export default function DualMapViewer() {
               onRgbSaturationChange={setRgbSaturation}
               onSandwichOpacityChange={setSandwichOpacity}
               onToggleAdjustments={() => setIsAdjustmentsOpen((prev) => !prev)}
+              onResetHdEnhancement={resetHdEnhancement}
               onVisBrightnessChange={setVisBrightness}
               onVisContrastChange={setVisContrast}
               rgbHdOpacity={rgbHdOpacity}
@@ -805,6 +1348,7 @@ export default function DualMapViewer() {
         </div>
       </div>
 
+      <HelpModal helpRef={helpRef} isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} t={t} theme={resolvedTheme} />
       <InfoModal infoRef={infoRef} isOpen={isInfoOpen} onClose={() => setIsInfoOpen(false)} t={t} theme={resolvedTheme} />
 
       <AnimationModal
@@ -846,8 +1390,19 @@ export default function DualMapViewer() {
         theme={resolvedTheme}
       />
 
+      {shareToastMessage && (
+        <div className={`fixed left-1/2 -translate-x-1/2 top-20 sm:top-24 z-[610] pointer-events-none px-4 py-2 text-xs rounded-md border shadow-xl backdrop-blur-md ${
+          resolvedTheme === 'light'
+            ? 'bg-white/95 border-slate-300 text-slate-800'
+            : 'bg-black/70 border-white/15 text-slate-100'
+        }`}>
+          {shareToastMessage}
+        </div>
+      )}
+
       <DownloadModal
         availableExportKinds={availableExportKinds}
+        currentTime={currentTime}
         downloadModalRef={downloadModalRef}
         isExporting={isExporting}
         isOpen={isDownloadModalOpen}
@@ -918,7 +1473,7 @@ export default function DualMapViewer() {
           filter: brightness(${visBrightness}) contrast(${visContrast});
         }
         .rgb-layer-tiles {
-          filter: saturate(${rgbLayerEffectiveSaturation}) brightness(${rgbLayerEffectiveBrightness});
+          filter: saturate(${rgbLayerEffectiveSaturationWithHd}) brightness(${rgbLayerEffectiveBrightness});
         }
         .ir-overlay-layer-tiles {
           mix-blend-mode: color;

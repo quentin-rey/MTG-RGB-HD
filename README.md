@@ -32,6 +32,7 @@ Context-aware image adjustments that adapt based on active layers:
 
 - VIS contrast and brightness fine-tuning
 - RGB color saturation control
+- Optional algorithmic HD enhancement for RGB+VIS with intensity slider
 - VIS contribution weighting (when blending with RGB)
 - IR/Sandwich intensity modulation
 - IR visualization style (Style 01, Style 02, Grayscale)
@@ -70,6 +71,13 @@ Enhance your view with map overlays:
 ### User Experience
 
 - **Real-time time selection** in 10-minute UTC increments
+- **Map memory**: last map position (center/zoom) is restored after refresh/revisit
+- **Share button** to generate a URL that reopens the same view (time, map position, active layers, and settings)
+- **Keyboard time navigation shortcuts**:
+  - Left/Right: -/+ 10 minutes
+  - Shift + Left/Right: -/+ 30 minutes
+  - Ctrl/Cmd + Left/Right: -/+ 60 minutes
+- **Quick help modal** with shortcut and HD enhancement guidance
 - **Tile loading progress indicator** with percentage and pending tile count
 - **Light/Dark/Auto theme support**
 - **Bilingual interface** (FR/EN)

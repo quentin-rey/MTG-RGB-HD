@@ -1,5 +1,5 @@
-import { useRef, useState, type React } from 'react';
-import { Clock, Github, Info, Sliders, X } from 'lucide-react';
+import { useEffect, useRef, useState, type React } from 'react';
+import { CircleHelp, Clock, Github, Info, Sliders, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -37,6 +37,30 @@ export function TimeDock(props: TimeDockProps) {
     const nextMinute = String(normalized % 60).padStart(2, '0');
     onTimeChange(`${datePart}T${nextHour}:${nextMinute}`);
   };
+
+  useEffect(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+
+      const target = event.target as HTMLElement | null;
+      const targetTag = target?.tagName?.toLowerCase() ?? '';
+      const isEditable = target?.isContentEditable
+        || targetTag === 'input'
+        || targetTag === 'textarea'
+        || targetTag === 'select';
+      if (isEditable) return;
+
+      const baseStep = event.shiftKey ? 30 : event.ctrlKey || event.metaKey ? 60 : 10;
+      const delta = event.key === 'ArrowLeft' ? -baseStep : baseStep;
+      event.preventDefault();
+      event.stopPropagation();
+      updateTimeFromTotalMinutes(totalMinutes + delta);
+    };
+
+    // Capture phase ensures map keyboard handlers (Leaflet) do not consume arrows first.
+    window.addEventListener('keydown', handleKeydown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
+  }, [totalMinutes]);
 
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
@@ -166,10 +190,30 @@ type AdjustmentsPanelProps = {
   autoReduceVisAtNight: boolean;
   effectiveHybridVisOpacity: number;
   effectiveSandwichOpacity: number;
+  hdEnhanceEnabled: boolean;
+  hdEnhanceHighlightProtection: number;
+  hdEnhanceLocalContrast: number;
+  hdEnhanceNoiseReduction: number;
+  hdEnhancePreset: 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom';
+  hdEnhanceRadius: number;
+  hdEnhanceSaturationAdjust: number;
+  hdEnhanceShadowProtection: number;
+  hdEnhanceSharpen: number;
+  hdEnhanceStrength: number;
   irStyle: IrStyle;
   isOpen: boolean;
   mapOptions: MapOptions;
   onAutoReduceVisAtNightChange: (value: boolean) => void;
+  onHdEnhanceEnabledChange: (value: boolean) => void;
+  onHdEnhanceHighlightProtectionChange: (value: number) => void;
+  onHdEnhanceLocalContrastChange: (value: number) => void;
+  onHdEnhanceNoiseReductionChange: (value: number) => void;
+  onHdEnhancePresetChange: (value: 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom') => void;
+  onHdEnhanceRadiusChange: (value: number) => void;
+  onHdEnhanceSaturationAdjustChange: (value: number) => void;
+  onHdEnhanceShadowProtectionChange: (value: number) => void;
+  onHdEnhanceSharpenChange: (value: number) => void;
+  onHdEnhanceStrengthChange: (value: number) => void;
   onIrStyleChange: (value: IrStyle) => void;
   onMapOptionsChange: (next: MapOptions) => void;
   onReset: () => void;
@@ -177,6 +221,7 @@ type AdjustmentsPanelProps = {
   onRgbSaturationChange: (value: number) => void;
   onSandwichOpacityChange: (value: number) => void;
   onToggle: () => void;
+  onResetHdEnhancement: () => void;
   onVisBrightnessChange: (value: number) => void;
   onVisContrastChange: (value: number) => void;
   rgbHdOpacity: number;
@@ -196,10 +241,30 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
     autoReduceVisAtNight,
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
+    hdEnhanceEnabled,
+    hdEnhanceHighlightProtection,
+    hdEnhanceLocalContrast,
+    hdEnhanceNoiseReduction,
+    hdEnhancePreset,
+    hdEnhanceRadius,
+    hdEnhanceSaturationAdjust,
+    hdEnhanceShadowProtection,
+    hdEnhanceSharpen,
+    hdEnhanceStrength,
     irStyle,
     isOpen,
     mapOptions,
     onAutoReduceVisAtNightChange,
+    onHdEnhanceEnabledChange,
+    onHdEnhanceHighlightProtectionChange,
+    onHdEnhanceLocalContrastChange,
+    onHdEnhanceNoiseReductionChange,
+    onHdEnhancePresetChange,
+    onHdEnhanceRadiusChange,
+    onHdEnhanceSaturationAdjustChange,
+    onHdEnhanceShadowProtectionChange,
+    onHdEnhanceSharpenChange,
+    onHdEnhanceStrengthChange,
     onIrStyleChange,
     onMapOptionsChange,
     onReset,
@@ -207,6 +272,7 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
     onRgbSaturationChange,
     onSandwichOpacityChange,
     onToggle,
+    onResetHdEnhancement,
     onVisBrightnessChange,
     onVisContrastChange,
     rgbHdOpacity,
@@ -219,6 +285,12 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
     visContrast,
   } = props;
   const isLight = theme === 'light';
+  const isAnyBoundaryOverlayVisible = mapOptions.showBorders || mapOptions.showFranceDepartments;
+  const sharedBoundaryOpacity = mapOptions.showBorders && mapOptions.showFranceDepartments
+    ? (mapOptions.bordersOpacity + mapOptions.franceDepartmentsOpacity) / 2
+    : mapOptions.showBorders
+      ? mapOptions.bordersOpacity
+      : mapOptions.franceDepartmentsOpacity;
 
   return (
     <div className="relative" ref={adjustmentsRef}>
@@ -262,23 +334,6 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 />
                 {t('borders')}
               </label>
-              {mapOptions.showBorders && (
-                <div className="pl-6">
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('bordersOpacity')}</span>
-                    <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(mapOptions.bordersOpacity * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={mapOptions.bordersOpacity}
-                    onChange={(e) => onMapOptionsChange({ ...mapOptions, bordersOpacity: parseFloat(e.target.value) })}
-                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
-                  />
-                </div>
-              )}
               <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
                 <input
                   type="checkbox"
@@ -288,19 +343,26 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 />
                 {t('departments')}
               </label>
-              {mapOptions.showFranceDepartments && (
+              {isAnyBoundaryOverlayVisible && (
                 <div className="pl-6">
                   <div className="flex justify-between text-xs mb-1">
-                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('departmentsOpacity')}</span>
-                    <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(mapOptions.franceDepartmentsOpacity * 100)}%</span>
+                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('boundariesOpacity')}</span>
+                    <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(sharedBoundaryOpacity * 100)}%</span>
                   </div>
                   <input
                     type="range"
                     min="0"
                     max="1"
                     step="0.05"
-                    value={mapOptions.franceDepartmentsOpacity}
-                    onChange={(e) => onMapOptionsChange({ ...mapOptions, franceDepartmentsOpacity: parseFloat(e.target.value) })}
+                    value={sharedBoundaryOpacity}
+                    onChange={(e) => {
+                      const nextOpacity = parseFloat(e.target.value);
+                      onMapOptionsChange({
+                        ...mapOptions,
+                        bordersOpacity: nextOpacity,
+                        franceDepartmentsOpacity: nextOpacity,
+                      });
+                    }}
                     className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`}
                   />
                 </div>
@@ -385,7 +447,121 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 )}
 
                 {activeLayers.vis && (
-                  <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>{t('fixedHdRender')}</p>
+                  <div className="space-y-2">
+                    <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>{t('fixedHdRender')}</p>
+                    <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${isLight ? 'text-slate-700 hover:text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+                      <input
+                        type="checkbox"
+                        checked={hdEnhanceEnabled}
+                        onChange={(e) => onHdEnhanceEnabledChange(e.target.checked)}
+                        className="w-4 h-4 rounded-sm accent-blue-500"
+                      />
+                      {t('hdAlgorithmicEnhancement')}
+                    </label>
+                    {hdEnhanceEnabled && (
+                      <div className={`rounded-lg border p-3 space-y-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-xs font-semibold ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>{t('hdAlgorithmicEnhancement')}</span>
+                          <button
+                            type="button"
+                            onClick={onResetHdEnhancement}
+                            className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors uppercase font-medium"
+                          >
+                            {t('hdEnhancementReset')}
+                          </button>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementPreset')}</span>
+                          </div>
+                          <select
+                            value={hdEnhancePreset}
+                            onChange={(e) => onHdEnhancePresetChange(e.target.value as 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom')}
+                            className={`w-full border rounded-md px-3 py-1.5 text-xs outline-none focus:border-blue-500 cursor-pointer ${
+                              isLight ? 'bg-white border-slate-300 text-slate-900' : 'bg-[#222] border-white/10 text-white'
+                            }`}
+                          >
+                            <option value="natural">{t('hdEnhancementPresetNatural')}</option>
+                            <option value="balanced">{t('hdEnhancementPresetBalanced')}</option>
+                            <option value="punchy">{t('hdEnhancementPresetPunchy')}</option>
+                            <option value="analyze">{t('hdEnhancementPresetAnalyze')}</option>
+                                                      <option value="custom">{t('hdEnhancementPresetCustom')}</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementIntensity')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceStrength * 100)}%</span>
+                          </div>
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceStrength} onChange={(e) => onHdEnhanceStrengthChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementSharpen')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceSharpen * 100)}%</span>
+                          </div>
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceSharpen} onChange={(e) => onHdEnhanceSharpenChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementRadius')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{hdEnhanceRadius.toFixed(2)} px</span>
+                          </div>
+                          <input type="range" min="0.5" max="3" step="0.1" value={hdEnhanceRadius} onChange={(e) => onHdEnhanceRadiusChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementLocalContrast')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceLocalContrast * 100)}%</span>
+                          </div>
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceLocalContrast} onChange={(e) => onHdEnhanceLocalContrastChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementHighlightProtection')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceHighlightProtection * 100)}%</span>
+                          </div>
+                          <input type="range" min="0" max="1" step="0.05" value={hdEnhanceHighlightProtection} onChange={(e) => onHdEnhanceHighlightProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementSaturationAdjust')}</span>
+                            <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{hdEnhanceSaturationAdjust >= 0 ? `+${Math.round(hdEnhanceSaturationAdjust)}` : Math.round(hdEnhanceSaturationAdjust)}%</span>
+                          </div>
+                          <input type="range" min="-20" max="30" step="1" value={hdEnhanceSaturationAdjust} onChange={(e) => onHdEnhanceSaturationAdjustChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                        </div>
+
+                        <div className={`pt-1 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+                          <div className={`text-[11px] uppercase tracking-wide font-medium mb-2 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{t('hdEnhancementAdvanced')}</div>
+
+                          <div className="space-y-3">
+                            <div>
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementNoiseReduction')}</span>
+                                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceNoiseReduction * 100)}%</span>
+                              </div>
+                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceNoiseReduction} onChange={(e) => onHdEnhanceNoiseReductionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                            </div>
+
+                            <div>
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{t('hdEnhancementShadowProtection')}</span>
+                                <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{Math.round(hdEnhanceShadowProtection * 100)}%</span>
+                              </div>
+                              <input type="range" min="0" max="1" step="0.05" value={hdEnhanceShadowProtection} onChange={(e) => onHdEnhanceShadowProtectionChange(parseFloat(e.target.value))} className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${isLight ? 'bg-slate-300' : 'bg-white/10'}`} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -512,61 +688,53 @@ export function InfoModal(props: InfoModalProps) {
         </div>
 
         <div className={`space-y-4 text-sm leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
-          <p>
-            {t('infoModalParagraph1')}
-          </p>
+          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoGoalTitle')}</h4>
+            <p className="text-xs">{t('infoModalParagraph1')}</p>
+            <p className="text-xs mt-1.5">{t('infoModalParagraph2')}</p>
+          </section>
 
-          <p>
-            {t('infoModalParagraph2')}
-          </p>
+          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoLayersTitle')}</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
+                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>RGB True Color</div>
+                <div>{t('infoLayerRgbDesc')}</div>
+              </article>
+              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
+                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>VIS 0.6 um</div>
+                <div>{t('infoLayerVisDesc')}</div>
+              </article>
+              <article className={`rounded-md border p-2 ${isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'}`}>
+                <div className={`font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>IR 10.5 um</div>
+                <div>{t('infoLayerIrDesc')}</div>
+              </article>
+            </div>
+          </section>
 
-          <p>
+          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoHdAlgoTitle')}</h4>
+            <p className="text-xs">{t('infoHdAlgoDesc')}</p>
+          </section>
+
+          <section className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoDataSourcesTitle')}</h4>
+            <p className="text-xs">
+              {t('eumetsatImagery')}{' '}
+              <a href="https://www.eumetsat.int/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">EUMETSAT / Meteosat Third Generation (MTG)</a>.
+            </p>
+            <div className={`pt-1 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+              {t('seeEumetsatReferences')}
+              {' '}
+              <a href="https://www.eumetsat.int/mtg" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">MTG</a>
+              {' '}|{' '}
+              <a href="https://www.eumetsat.int/imagery-guide" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Imagery Guide</a>
+            </div>
+          </section>
+
+          <p className="text-xs">
             <strong className={isLight ? 'text-slate-900' : 'text-white'}>{t('aboutAuthor')}</strong>
           </p>
-
-          <p>
-            <strong className={isLight ? 'text-slate-900' : 'text-white'}>{t('sources')}</strong><br />
-            {t('eumetsatImagery')}{' '}<a href="https://www.eumetsat.int/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">EUMETSAT / Meteosat Third Generation (MTG)</a>.
-          </p>
-
-          <div className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
-            <h4 className={`text-sm font-semibold mb-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('infoLayersTitle')}</h4>
-            <div className={`space-y-3 text-xs leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
-              <div>
-                <div className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>RGB True Color</div>
-                <div>
-                  {t('infoLayerRgbDesc')}
-                </div>
-              </div>
-
-              <div>
-                <div className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>VIS 0.6 um</div>
-                <div>
-                  {t('infoLayerVisDesc')}
-                </div>
-              </div>
-
-              <div>
-                <div className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>IR 10.5 um</div>
-                <div>
-                  {t('infoLayerIrDesc')}
-                </div>
-              </div>
-
-              <div className={`pt-1 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                {t('seeEumetsatReferences')}
-                {' '}
-                <a href="https://www.eumetsat.int/mtg" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
-                  MTG
-                </a>
-                {' '}|
-                {' '}
-                <a href="https://www.eumetsat.int/imagery-guide" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
-                  Imagery Guide
-                </a>
-              </div>
-            </div>
-          </div>
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500 font-mono">
@@ -579,6 +747,7 @@ export function InfoModal(props: InfoModalProps) {
 
 type DownloadModalProps = {
   availableExportKinds: ExportKind[];
+  currentTime: string;
   downloadModalRef: React.RefObject<HTMLDivElement | null>;
   isExporting: boolean;
   isOpen: boolean;
@@ -926,7 +1095,6 @@ export function AnimationModal(props: AnimationModalProps) {
           </div>
 
           <div>
-            <label className={`block text-xs font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{t('animationGifFinalPause')}</label>
             <div className="flex justify-between text-xs mb-1">
               <span className={isLight ? 'text-slate-600' : 'text-slate-300'}>{t('animationGifFinalPause')}</span>
               <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{finalPauseLabel}</span>
@@ -982,6 +1150,7 @@ export function AnimationModal(props: AnimationModalProps) {
 export function DownloadModal(props: DownloadModalProps) {
   const {
     availableExportKinds,
+    currentTime,
     downloadModalRef,
     isExporting,
     isOpen,
@@ -994,6 +1163,7 @@ export function DownloadModal(props: DownloadModalProps) {
     selectedExportKinds,
   } = props;
   const isLight = theme === 'light';
+  const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
 
   if (!isOpen) return null;
 
@@ -1017,32 +1187,69 @@ export function DownloadModal(props: DownloadModalProps) {
           </button>
         </div>
 
-        <p className={`text-sm mb-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+        <p className={`text-sm mb-2 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
           {t('downloadModalDescription')}
         </p>
-
-        <div className="space-y-3">
-          {availableExportKinds.map((kind) => (
-            <label key={kind} className={`flex items-center gap-2 text-sm cursor-pointer ${isLight ? 'text-slate-700' : 'text-slate-200'}`}>
-              <input
-                type="checkbox"
-                checked={selectedExports[kind]}
-                onChange={(e) => onToggleKind(kind, e.target.checked)}
-                className="w-4 h-4 rounded-sm accent-blue-500"
-              />
-              {getExportLabel(kind, {
-                vis: t('exportLabelVis'),
-                rgb: t('exportLabelRgb'),
-                ir: t('exportLabelIr'),
-                hd: t('exportLabelHd'),
-                hybrid: t('exportLabelHybrid'),
-                sandwich: t('exportLabelSandwich'),
-              })}
-            </label>
-          ))}
+        <div className={`mb-4 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+          {t('downloadSelectedCount')}: <span className={`font-mono ${isLight ? 'text-slate-900' : 'text-white'}`}>{selectedExportKinds.length}</span>
         </div>
 
-        <div className="mt-6 flex items-center justify-end gap-2">
+        <div className="space-y-3">
+          {availableExportKinds.map((kind) => {
+            const isComposite = kind === 'hd' || kind === 'sandwich' || kind === 'hybrid';
+            const label = getExportLabel(kind, {
+              vis: t('exportLabelVis'),
+              rgb: t('exportLabelRgb'),
+              ir: t('exportLabelIr'),
+              hd: t('exportLabelHd'),
+              hybrid: t('exportLabelHybrid'),
+              sandwich: t('exportLabelSandwich'),
+            });
+            return (
+              <label
+                key={kind}
+                className={`block rounded-lg border p-3 cursor-pointer transition-colors ${
+                  selectedExports[kind]
+                    ? isLight
+                      ? 'border-blue-300 bg-blue-50'
+                      : 'border-blue-400/40 bg-blue-500/10'
+                    : isLight
+                      ? 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                      : 'border-white/10 bg-black/20 hover:bg-black/30'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedExports[kind]}
+                    onChange={(e) => onToggleKind(kind, e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded-sm accent-blue-500"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-sm font-medium ${isLight ? 'text-slate-800' : 'text-slate-100'}`}>{label}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                        isLight
+                          ? 'border-slate-300 text-slate-600 bg-white'
+                          : 'border-white/15 text-slate-300 bg-black/20'
+                      }`}>
+                        {isComposite ? t('downloadCompositeBadge') : t('downloadSimpleBadge')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className={`mt-4 rounded-lg border p-3 text-xs ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-black/20 text-slate-300'}`}>
+          <div className={`font-medium mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('downloadZipPreview')}</div>
+          <div className="font-mono break-all">MTG_SATELLITE_{safeZipSuffix}.zip</div>
+          <div className={`mt-2 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{t('downloadZipHint')}</div>
+        </div>
+
+        <div className="mt-6 sticky bottom-0 pt-3 flex items-center justify-end gap-2 bg-transparent">
           <button
             onClick={onClose}
             className={`px-3 py-2 text-sm rounded-md border transition-colors ${
@@ -1071,7 +1278,8 @@ export function DownloadModal(props: DownloadModalProps) {
 }
 
 type HeaderInfoButtonProps = {
-  onClick: () => void;
+  onHelpClick: () => void;
+  onInfoClick: () => void;
   t: Translator;
   theme: UiTheme;
 };
@@ -1096,7 +1304,19 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
       </a>
 
       <button
-        onClick={props.onClick}
+        onClick={props.onHelpClick}
+        className={`flex items-center justify-center w-9 h-9 border rounded-md transition-colors ${
+          isLight
+            ? 'bg-slate-100 border-slate-300 hover:bg-slate-200'
+            : 'bg-[#222] border-white/10 hover:bg-[#333]'
+        }`}
+        title={props.t('helpTitle')}
+      >
+        <CircleHelp className={`w-4 h-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`} />
+      </button>
+
+      <button
+        onClick={props.onInfoClick}
         className={`flex items-center justify-center w-9 h-9 border rounded-md transition-colors ${
           isLight
             ? 'bg-slate-100 border-slate-300 hover:bg-slate-200'
@@ -1106,6 +1326,99 @@ export function HeaderInfoButton(props: HeaderInfoButtonProps) {
       >
         <Info className={`w-4 h-4 ${isLight ? 'text-slate-700' : 'text-slate-300'}`} />
       </button>
+    </div>
+  );
+}
+
+type HelpModalProps = {
+  helpRef: React.RefObject<HTMLDivElement | null>;
+  isOpen: boolean;
+  onClose: () => void;
+  t: Translator;
+  theme: UiTheme;
+};
+
+export function HelpModal(props: HelpModalProps) {
+  const { helpRef, isOpen, onClose, t, theme } = props;
+  const isLight = theme === 'light';
+  if (!isOpen) return null;
+
+  return (
+    <div className={`fixed inset-0 z-[505] flex items-center justify-center p-4 backdrop-blur-sm ${
+      isLight ? 'bg-slate-900/35' : 'bg-black/50'
+    }`}>
+      <div ref={helpRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
+        isLight ? 'bg-white border-slate-300' : 'bg-[#1a1a1a] border-white/10'
+      }`}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className={`text-lg font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>{t('helpTitle')}</h3>
+          <button
+            onClick={onClose}
+            aria-label={t('close')}
+            className={`p-1 rounded-md transition-colors ${
+              isLight ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          {[
+            {
+              title: t('helpGroupTime'),
+              rows: [
+                { keys: ['←', '→'], action: t('helpActionTime10') },
+                { keys: ['Shift', '←', '→'], action: t('helpActionTime30') },
+                { keys: ['Ctrl/Cmd', '←', '→'], action: t('helpActionTime60') },
+              ],
+            },
+            {
+              title: t('helpGroupPanels'),
+              rows: [
+                { keys: ['A'], action: t('helpActionAnimation') },
+                { keys: ['D'], action: t('helpActionDownload') },
+                { keys: ['I'], action: t('helpActionInfo') },
+                { keys: ['?'], action: t('helpActionHelp') },
+              ],
+            },
+            {
+              title: t('helpGroupActions'),
+              rows: [
+                { keys: ['L'], action: t('helpActionLatest') },
+                { keys: ['R'], action: t('helpActionReset') },
+                { keys: ['S'], action: t('helpActionAdjustments') },
+                { keys: ['Shift', 'S'], action: t('helpActionShare') },
+              ],
+            },
+          ].map((group) => (
+            <section key={group.title} className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'}`}>
+              <h4 className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>{group.title}</h4>
+              <div className="space-y-2">
+                {group.rows.map((row) => (
+                  <div key={`${group.title}-${row.action}`} className="flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {row.keys.map((keyLabel) => (
+                        <span
+                          key={`${row.action}-${keyLabel}`}
+                          className={`inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-md font-mono text-[11px] border shadow-sm ${
+                            isLight
+                              ? 'bg-gradient-to-b from-white to-slate-100 border-slate-300 text-slate-700'
+                              : 'bg-gradient-to-b from-slate-700/80 to-slate-900/90 border-white/20 text-slate-100'
+                          }`}
+                        >
+                          {keyLabel}
+                        </span>
+                      ))}
+                    </div>
+                    <span className={`text-right ${isLight ? 'text-slate-700' : 'text-slate-200'}`}>{row.action}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1153,11 +1466,31 @@ type Map2ControlBarProps = {
   autoReduceVisAtNight: boolean;
   effectiveHybridVisOpacity: number;
   effectiveSandwichOpacity: number;
+  hdEnhanceEnabled: boolean;
+  hdEnhanceHighlightProtection: number;
+  hdEnhanceLocalContrast: number;
+  hdEnhanceNoiseReduction: number;
+  hdEnhancePreset: 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom';
+  hdEnhanceRadius: number;
+  hdEnhanceSaturationAdjust: number;
+  hdEnhanceShadowProtection: number;
+  hdEnhanceSharpen: number;
+  hdEnhanceStrength: number;
   irStyle: IrStyle;
   isAdjustmentsOpen: boolean;
   mapOptions: MapOptions;
   onActiveLayersChange: (next: ActiveLayers) => void;
   onAutoReduceVisAtNightChange: (value: boolean) => void;
+  onHdEnhanceEnabledChange: (value: boolean) => void;
+  onHdEnhanceHighlightProtectionChange: (value: number) => void;
+  onHdEnhanceLocalContrastChange: (value: number) => void;
+  onHdEnhanceNoiseReductionChange: (value: number) => void;
+  onHdEnhancePresetChange: (value: 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom') => void;
+  onHdEnhanceRadiusChange: (value: number) => void;
+  onHdEnhanceSaturationAdjustChange: (value: number) => void;
+  onHdEnhanceShadowProtectionChange: (value: number) => void;
+  onHdEnhanceSharpenChange: (value: number) => void;
+  onHdEnhanceStrengthChange: (value: number) => void;
   onIrStyleChange: (value: IrStyle) => void;
   onMapOptionsChange: (next: MapOptions) => void;
   onResetAdjustments: () => void;
@@ -1165,6 +1498,7 @@ type Map2ControlBarProps = {
   onRgbSaturationChange: (value: number) => void;
   onSandwichOpacityChange: (value: number) => void;
   onToggleAdjustments: () => void;
+  onResetHdEnhancement: () => void;
   onVisBrightnessChange: (value: number) => void;
   onVisContrastChange: (value: number) => void;
   rgbHdOpacity: number;
@@ -1184,11 +1518,31 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     autoReduceVisAtNight,
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
+    hdEnhanceEnabled,
+    hdEnhanceHighlightProtection,
+    hdEnhanceLocalContrast,
+    hdEnhanceNoiseReduction,
+    hdEnhancePreset,
+    hdEnhanceRadius,
+    hdEnhanceSaturationAdjust,
+    hdEnhanceShadowProtection,
+    hdEnhanceSharpen,
+    hdEnhanceStrength,
     irStyle,
     isAdjustmentsOpen,
     mapOptions,
     onActiveLayersChange,
     onAutoReduceVisAtNightChange,
+    onHdEnhanceEnabledChange,
+    onHdEnhanceHighlightProtectionChange,
+    onHdEnhanceLocalContrastChange,
+    onHdEnhanceNoiseReductionChange,
+    onHdEnhancePresetChange,
+    onHdEnhanceRadiusChange,
+    onHdEnhanceSaturationAdjustChange,
+    onHdEnhanceShadowProtectionChange,
+    onHdEnhanceSharpenChange,
+    onHdEnhanceStrengthChange,
     onIrStyleChange,
     onMapOptionsChange,
     onResetAdjustments,
@@ -1196,6 +1550,7 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     onRgbSaturationChange,
     onSandwichOpacityChange,
     onToggleAdjustments,
+    onResetHdEnhancement,
     onVisBrightnessChange,
     onVisContrastChange,
     rgbHdOpacity,
@@ -1267,10 +1622,30 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         autoReduceVisAtNight={autoReduceVisAtNight}
         effectiveHybridVisOpacity={effectiveHybridVisOpacity}
         effectiveSandwichOpacity={effectiveSandwichOpacity}
+        hdEnhanceEnabled={hdEnhanceEnabled}
+        hdEnhanceHighlightProtection={hdEnhanceHighlightProtection}
+        hdEnhanceLocalContrast={hdEnhanceLocalContrast}
+        hdEnhanceNoiseReduction={hdEnhanceNoiseReduction}
+        hdEnhancePreset={hdEnhancePreset}
+        hdEnhanceRadius={hdEnhanceRadius}
+        hdEnhanceSaturationAdjust={hdEnhanceSaturationAdjust}
+        hdEnhanceShadowProtection={hdEnhanceShadowProtection}
+        hdEnhanceSharpen={hdEnhanceSharpen}
+        hdEnhanceStrength={hdEnhanceStrength}
         irStyle={irStyle}
         isOpen={isAdjustmentsOpen}
         mapOptions={mapOptions}
         onAutoReduceVisAtNightChange={onAutoReduceVisAtNightChange}
+        onHdEnhanceEnabledChange={onHdEnhanceEnabledChange}
+        onHdEnhanceHighlightProtectionChange={onHdEnhanceHighlightProtectionChange}
+        onHdEnhanceLocalContrastChange={onHdEnhanceLocalContrastChange}
+        onHdEnhanceNoiseReductionChange={onHdEnhanceNoiseReductionChange}
+        onHdEnhancePresetChange={onHdEnhancePresetChange}
+        onHdEnhanceRadiusChange={onHdEnhanceRadiusChange}
+        onHdEnhanceSaturationAdjustChange={onHdEnhanceSaturationAdjustChange}
+        onHdEnhanceShadowProtectionChange={onHdEnhanceShadowProtectionChange}
+        onHdEnhanceSharpenChange={onHdEnhanceSharpenChange}
+        onHdEnhanceStrengthChange={onHdEnhanceStrengthChange}
         onIrStyleChange={onIrStyleChange}
         onMapOptionsChange={onMapOptionsChange}
         onReset={onResetAdjustments}
@@ -1278,6 +1653,7 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         onRgbSaturationChange={onRgbSaturationChange}
         onSandwichOpacityChange={onSandwichOpacityChange}
         onToggle={onToggleAdjustments}
+        onResetHdEnhancement={onResetHdEnhancement}
         onVisBrightnessChange={onVisBrightnessChange}
         onVisContrastChange={onVisContrastChange}
         rgbHdOpacity={rgbHdOpacity}

@@ -9,6 +9,7 @@ import {
   type ActiveLayers,
   type CityFeature,
   type ExportKind,
+  type HdEnhancementPreset,
   type IrStyle,
   type MapOptions,
   WMS_URL_PROXY,
@@ -24,6 +25,16 @@ type DownloadSatellitePackOptions = {
   irStyle: IrStyle;
   visBrightness: number;
   visContrast: number;
+  hdEnhanceEnabled: boolean;
+  hdEnhanceHighlightProtection: number;
+  hdEnhanceLocalContrast: number;
+  hdEnhanceNoiseReduction: number;
+  hdEnhancePreset: HdEnhancementPreset;
+  hdEnhanceRadius: number;
+  hdEnhanceSaturationAdjust: number;
+  hdEnhanceShadowProtection: number;
+  hdEnhanceSharpen: number;
+  hdEnhanceStrength: number;
   rgbSaturation: number;
   rgbHdOpacity: number;
   sandwichOpacity: number;
@@ -133,6 +144,159 @@ function applyPaletteWithDithering(
   }
 
   return indexed;
+}
+
+function clampByte(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function applyHdEnhancement(sourceCanvas: HTMLCanvasElement, options: {
+  strength: number;
+  sharpen: number;
+  radius: number;
+  localContrast: number;
+  highlightProtection: number;
+  saturationAdjust: number;
+  noiseReduction: number;
+  shadowProtection: number;
+  preset: HdEnhancementPreset;
+}): HTMLCanvasElement {
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+  const safeStrength = Math.max(0, Math.min(1, options.strength));
+  if (safeStrength <= 0) {
+    return sourceCanvas;
+  }
+
+  const profile = options.preset === 'natural'
+    ? { sharpen: 0.85, contrast: 0.8, saturation: 0.8 }
+    : options.preset === 'punchy'
+      ? { sharpen: 1.2, contrast: 1.25, saturation: 1.15 }
+      : options.preset === 'analyze'
+        ? { sharpen: 1.35, contrast: 1.35, saturation: 0.9 }
+        : { sharpen: 1, contrast: 1, saturation: 1 };
+
+  const safeSharpen = Math.max(0, Math.min(1, options.sharpen));
+  const safeRadius = Math.max(0.5, Math.min(3, options.radius));
+  const safeLocalContrast = Math.max(0, Math.min(1, options.localContrast));
+  const safeHighlights = Math.max(0, Math.min(1, options.highlightProtection));
+  const safeSaturationAdjust = Math.max(-20, Math.min(30, options.saturationAdjust));
+  const safeNoiseReduction = Math.max(0, Math.min(1, options.noiseReduction));
+  const safeShadows = Math.max(0, Math.min(1, options.shadowProtection));
+
+  const sourceCtx = sourceCanvas.getContext('2d');
+  if (!sourceCtx) {
+    return sourceCanvas;
+  }
+
+  const inputCanvas = document.createElement('canvas');
+  inputCanvas.width = width;
+  inputCanvas.height = height;
+  const inputCtx = inputCanvas.getContext('2d');
+  if (!inputCtx) {
+    return sourceCanvas;
+  }
+  inputCtx.drawImage(sourceCanvas, 0, 0, width, height);
+
+  if (safeNoiseReduction > 0.01) {
+    const denoiseCanvas = document.createElement('canvas');
+    denoiseCanvas.width = width;
+    denoiseCanvas.height = height;
+    const denoiseCtx = denoiseCanvas.getContext('2d');
+    if (denoiseCtx) {
+      denoiseCtx.filter = `blur(${(0.4 + safeNoiseReduction * 1.2).toFixed(2)}px)`;
+      denoiseCtx.drawImage(sourceCanvas, 0, 0, width, height);
+      denoiseCtx.filter = 'none';
+      inputCtx.globalAlpha = Math.min(0.5, safeNoiseReduction * 0.45);
+      inputCtx.drawImage(denoiseCanvas, 0, 0, width, height);
+      inputCtx.globalAlpha = 1;
+    }
+  }
+
+  const blurCanvas = document.createElement('canvas');
+  blurCanvas.width = width;
+  blurCanvas.height = height;
+  const blurCtx = blurCanvas.getContext('2d');
+  if (!blurCtx) {
+    return sourceCanvas;
+  }
+
+  blurCtx.filter = `blur(${(safeRadius * (0.85 + safeStrength * 0.55)).toFixed(2)}px)`;
+  blurCtx.drawImage(inputCanvas, 0, 0, width, height);
+  blurCtx.filter = 'none';
+
+  const sourceData = inputCtx.getImageData(0, 0, width, height);
+  const blurData = blurCtx.getImageData(0, 0, width, height);
+  const amount = 0.2 + safeStrength * safeSharpen * profile.sharpen * 1.45;
+  const contrastAmount = safeStrength * safeLocalContrast * profile.contrast;
+  const highlightAmount = safeStrength * safeHighlights;
+  const shadowAmount = safeStrength * safeShadows;
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = width;
+  outCanvas.height = height;
+  const outCtx = outCanvas.getContext('2d');
+  if (!outCtx) {
+    return sourceCanvas;
+  }
+
+  const outData = outCtx.createImageData(width, height);
+  for (let i = 0; i < sourceData.data.length; i += 4) {
+    const sr = sourceData.data[i];
+    const sg = sourceData.data[i + 1];
+    const sb = sourceData.data[i + 2];
+    const sa = sourceData.data[i + 3];
+    const br = blurData.data[i];
+    const bg = blurData.data[i + 1];
+    const bb = blurData.data[i + 2];
+
+    let rr = sr + (sr - br) * amount;
+    let gg = sg + (sg - bg) * amount;
+    let bb2 = sb + (sb - bb) * amount;
+
+    if (contrastAmount > 0) {
+      const contrastFactor = 1 + contrastAmount * 0.45;
+      rr = (rr - 128) * contrastFactor + 128;
+      gg = (gg - 128) * contrastFactor + 128;
+      bb2 = (bb2 - 128) * contrastFactor + 128;
+    }
+
+    const luma = (0.299 * rr + 0.587 * gg + 0.114 * bb2) / 255;
+    if (highlightAmount > 0 && luma > 0.72) {
+      const rolloff = ((luma - 0.72) / 0.28) * highlightAmount * 0.32;
+      rr -= rr * rolloff;
+      gg -= gg * rolloff;
+      bb2 -= bb2 * rolloff;
+    }
+    if (shadowAmount > 0 && luma < 0.3) {
+      const lift = ((0.3 - luma) / 0.3) * shadowAmount * 22;
+      rr += lift;
+      gg += lift;
+      bb2 += lift;
+    }
+
+    outData.data[i] = clampByte(rr);
+    outData.data[i + 1] = clampByte(gg);
+    outData.data[i + 2] = clampByte(bb2);
+    outData.data[i + 3] = sa;
+  }
+
+  outCtx.putImageData(outData, 0, 0);
+
+  const gradeCanvas = document.createElement('canvas');
+  gradeCanvas.width = width;
+  gradeCanvas.height = height;
+  const gradeCtx = gradeCanvas.getContext('2d');
+  if (!gradeCtx) {
+    return outCanvas;
+  }
+  const saturation = 100 + safeSaturationAdjust * safeStrength * profile.saturation;
+  const postContrast = 100 + contrastAmount * 16 + amount * 6;
+  gradeCtx.filter = `saturate(${Math.max(70, Math.min(150, saturation)).toFixed(0)}%) contrast(${Math.max(90, Math.min(150, postContrast)).toFixed(0)}%)`;
+  gradeCtx.drawImage(outCanvas, 0, 0, width, height);
+  gradeCtx.filter = 'none';
+
+  return gradeCanvas;
 }
 
 type ExportOverlayLocale = {
@@ -334,6 +498,16 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     irStyle,
     visBrightness,
     visContrast,
+    hdEnhanceEnabled,
+    hdEnhanceHighlightProtection,
+    hdEnhanceLocalContrast,
+    hdEnhanceNoiseReduction,
+    hdEnhancePreset,
+    hdEnhanceRadius,
+    hdEnhanceSaturationAdjust,
+    hdEnhanceShadowProtection,
+    hdEnhanceSharpen,
+    hdEnhanceStrength,
     rgbSaturation,
     rgbHdOpacity,
     sandwichOpacity,
@@ -539,7 +713,19 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     outputCtx.globalAlpha = 1;
     outputCtx.filter = 'none';
 
-    return outputCanvas;
+    return hdEnhanceEnabled
+      ? applyHdEnhancement(outputCanvas, {
+        strength: hdEnhanceStrength,
+        sharpen: hdEnhanceSharpen,
+        radius: hdEnhanceRadius,
+        localContrast: hdEnhanceLocalContrast,
+        highlightProtection: hdEnhanceHighlightProtection,
+        saturationAdjust: hdEnhanceSaturationAdjust,
+        noiseReduction: hdEnhanceNoiseReduction,
+        shadowProtection: hdEnhanceShadowProtection,
+        preset: hdEnhancePreset,
+      })
+      : outputCanvas;
   })() : null;
   const sandwichCanvas = shouldExportSandwich && visRawData && irRawData ? (() => {
     const outputCanvas = document.createElement('canvas');

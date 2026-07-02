@@ -18,8 +18,19 @@ export const FRANCE_DEPARTMENTS_GEOJSON_URL = 'https://raw.githubusercontent.com
 export const STORAGE_KEYS = {
   activeLayers: 'mtg_active_layers',
   autoReduceVisAtNight: 'mtg_auto_reduce_vis_night',
+  hdEnhanceEnabled: 'mtg_hd_enhance_enabled',
+  hdEnhanceHighlightProtection: 'mtg_hd_enhance_highlight_protection',
+  hdEnhanceLocalContrast: 'mtg_hd_enhance_local_contrast',
+  hdEnhanceNoiseReduction: 'mtg_hd_enhance_noise_reduction',
+  hdEnhancePreset: 'mtg_hd_enhance_preset',
+  hdEnhanceRadius: 'mtg_hd_enhance_radius',
+  hdEnhanceSaturationAdjust: 'mtg_hd_enhance_saturation_adjust',
+  hdEnhanceShadowProtection: 'mtg_hd_enhance_shadow_protection',
+  hdEnhanceSharpen: 'mtg_hd_enhance_sharpen',
+  hdEnhanceStrength: 'mtg_hd_enhance_strength',
   irStyle: 'mtg_ir_style',
   language: 'mtg_language',
+  lastMapView: 'mtg_last_map_view',
   mapOptions: 'mtg_map_options',
   rgbHdOpacity: 'mtg_rgb_hd_opacity',
   rgbSaturation: 'mtg_rgb_saturation',
@@ -40,6 +51,7 @@ export type CityFeature = {
 };
 
 export type IrStyle = (typeof IR_STYLES)[number]['id'];
+export type HdEnhancementPreset = 'natural' | 'balanced' | 'punchy' | 'analyze' | 'custom';
 export type ExportKind = 'vis' | 'rgb' | 'ir' | 'hd' | 'sandwich' | 'hybrid';
 export type MapOptions = {
   bordersOpacity: number;
@@ -53,6 +65,12 @@ export type ActiveLayers = {
   rgb: boolean;
   vis: boolean;
   ir: boolean;
+};
+
+export type MapViewState = {
+  lat: number;
+  lng: number;
+  zoom: number;
 };
 
 export const DEFAULT_ACTIVE_LAYERS: ActiveLayers = {

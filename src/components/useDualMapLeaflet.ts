@@ -15,6 +15,7 @@ import {
   WMS_URL_DIRECT,
   type CityFeature,
   type IrStyle,
+  type MapViewState,
   type MapOptions,
 } from './dualMapViewerShared';
 
@@ -26,6 +27,8 @@ type UseDualMapLeafletArgs = {
   sandwichOpacity: number;
   autoReduceVisAtNight: boolean;
   mapOptions: MapOptions;
+  initialMapView: MapViewState | null;
+  onMapViewChange: (mapView: MapViewState) => void;
 };
 
 export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
@@ -37,6 +40,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     sandwichOpacity,
     autoReduceVisAtNight,
     mapOptions,
+    initialMapView,
+    onMapViewChange,
   } = args;
 
   const map1Ref = useRef<HTMLDivElement>(null);
@@ -69,6 +74,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const loadingCycleRef = useRef(0);
   const hybridTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const hybridTileCacheOrderRef = useRef<string[]>([]);
+  const initialMapViewRef = useRef<MapViewState | null>(initialMapView);
+  const onMapViewChangeRef = useRef(onMapViewChange);
 
   const [mapsReady, setMapsReady] = useState(false);
   const [isMapLoading, setIsMapLoading] = useState(true);
@@ -127,6 +134,14 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const currentVisOverlayOpacity = activeLayers.rgb ? effectiveHybridVisOpacity : effectiveSandwichOpacity;
   const borderStrokeOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
   const departmentsStrokeOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
+
+  useEffect(() => {
+    initialMapViewRef.current = initialMapView;
+  }, [initialMapView]);
+
+  useEffect(() => {
+    onMapViewChangeRef.current = onMapViewChange;
+  }, [onMapViewChange]);
 
   const getVisibleCityFeatures = (bounds: L.LatLngBounds, zoom: number): CityFeature[] => {
     const allCities = cityFeaturesRef.current;
@@ -573,9 +588,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       attributionControl: false,
     });
 
-    const franceBounds = L.latLngBounds(DEFAULT_FRANCE_BOUNDS);
-    map1.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
-    map2.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
+    const rememberedMapView = initialMapViewRef.current;
+    if (rememberedMapView) {
+      const nextZoom = Math.max(3, Math.min(11, Math.round(rememberedMapView.zoom)));
+      const nextLat = Math.max(-85, Math.min(85, rememberedMapView.lat));
+      const nextLng = Math.max(-180, Math.min(180, rememberedMapView.lng));
+      map1.setView([nextLat, nextLng], nextZoom, { animate: false });
+      map2.setView([nextLat, nextLng], nextZoom, { animate: false });
+    } else {
+      const franceBounds = L.latLngBounds(DEFAULT_FRANCE_BOUNDS);
+      map1.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
+      map2.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
+    }
 
     // Keep the satellite view clean: no opaque basemap underlay to avoid visual bleed-through.
 
@@ -595,6 +619,11 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const updateViewportCenter = () => {
       const center = map2.getCenter();
       setViewportCenter({ lat: center.lat, lng: center.lng });
+      onMapViewChangeRef.current({
+        lat: center.lat,
+        lng: center.lng,
+        zoom: map2.getZoom(),
+      });
     };
 
     const handleMapLoading = () => {
@@ -631,6 +660,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     map2.on('loading', handleMapLoading);
     map2.on('load', handleMapLoad);
     map2.on('moveend', updateViewportCenter);
+    map2.on('zoomend', updateViewportCenter);
     updateViewportCenter();
 
     map1Instance.current = map1;
@@ -642,6 +672,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       map2.off('loading', handleMapLoading);
       map2.off('load', handleMapLoad);
       map2.off('moveend', updateViewportCenter);
+      map2.off('zoomend', updateViewportCenter);
       map1.remove();
       map2.remove();
       map1Instance.current = null;
