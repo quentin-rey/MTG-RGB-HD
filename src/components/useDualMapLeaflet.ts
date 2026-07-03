@@ -104,6 +104,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     effectiveHybridVisOpacity,
     effectiveHybridIrOpacity,
     effectiveSandwichOpacity,
+    isRgbVisOnlyMode,
+    rgbVisOnlyNightBrightness,
   } = computeLayerBlendState({
     activeLayers,
     rgbHdOpacity,
@@ -976,6 +978,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     effectiveSandwichOpacity,
     getVisibleCityFeatures,
     isNightIrFallbackActive,
+    isRgbVisOnlyMode,
+    rgbVisOnlyNightBrightness,
     map1BordersRef,
     map1DepartmentsRef,
     map1Ref,

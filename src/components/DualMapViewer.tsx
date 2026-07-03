@@ -14,6 +14,7 @@ import {
   type HdEnhancementPreset,
   type MapOptions,
   readStoredJson,
+  RGB_VIS_FUSION,
   safeSetLocalStorage,
   themedClass,
   type ExportKind,
@@ -23,9 +24,11 @@ import { getTranslator, type Language } from './i18n';
 import {
   downloadSatellitePack,
   exportAnimationGif,
+  generateExportPreviews,
   type GifDitherLevel,
   type GifFinalPauseMs,
   type GifPaletteMode,
+  type StillImageFormat,
 } from './dualMapExport';
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
@@ -329,6 +332,11 @@ export default function DualMapViewer() {
     sandwich: false,
     hybrid: false,
   });
+  const [exportFormat, setExportFormat] = useState<StillImageFormat>('png');
+  const [exportResolution, setExportResolution] = useState<1920 | 2560 | 4096>(4096);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [previewImages, setPreviewImages] = useState<Partial<Record<ExportKind, string>>>({});
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [activeLayers, setActiveLayers] = useState<ActiveLayers>(() => {
     const fromShare = sharedSnapshot?.activeLayers;
     if (fromShare) return sanitizeActiveLayers(fromShare);
@@ -641,6 +649,8 @@ export default function DualMapViewer() {
     effectiveSandwichOpacity,
     getVisibleCityFeatures,
     isNightIrFallbackActive,
+    isRgbVisOnlyMode,
+    rgbVisOnlyNightBrightness,
     isMapLoading,
     loadingProgress,
     loadingTileCount,
@@ -661,12 +671,8 @@ export default function DualMapViewer() {
     rgbHdOpacity,
     sandwichOpacity,
   });
-  const rgbVisNightFade = Math.max(0, Math.min(1, (solarElevation + 2) / 6));
-  const rgbVisNightBrightness = activeLayers.rgb && activeLayers.vis && !activeLayers.ir
-    ? 0.55 + rgbVisNightFade * 0.45
-    : 1;
-  const rgbLegacyFusionSaturationBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.45 : 1;
-  const rgbLegacyFusionBrightnessBoost = activeLayers.rgb && activeLayers.vis && !activeLayers.ir ? 1.12 : 1;
+  const rgbLegacyFusionSaturationBoost = isRgbVisOnlyMode ? RGB_VIS_FUSION.rgbSaturationBoost : 1;
+  const rgbLegacyFusionBrightnessBoost = isRgbVisOnlyMode ? RGB_VIS_FUSION.rgbBrightnessBoost : 1;
   const hdPresetProfile = getHdEnhancementProfile(hdEnhancePreset);
 
   const applyHdSliderChange = (apply: () => void) => {
@@ -701,7 +707,7 @@ export default function DualMapViewer() {
   const hdPreviewVisBrightnessBoost = Math.max(0.7, 1 + hdShadowLift - hdHighlightCut + hdSharpenWeight * 0.04);
   const hdPreviewVisContrastBoost = 1 + hdContrastWeight * 0.24;
   const rgbLayerEffectiveSaturation = rgbSaturation * rgbLegacyFusionSaturationBoost * hdPreviewBoost;
-  const rgbLayerEffectiveBrightness = rgbVisNightBrightness * rgbLegacyFusionBrightnessBoost * hdPreviewVisBrightnessBoost;
+  const rgbLayerEffectiveBrightness = rgbVisOnlyNightBrightness * rgbLegacyFusionBrightnessBoost * hdPreviewVisBrightnessBoost;
   // Upper-bounded like visHdLegacyBrightness/visHdLegacyContrast below: rgbSaturation alone goes up to
   // 2.0, and rgbLegacyFusionSaturationBoost (1.45x, always applied in RGB+VIS-only mode) stacks on top of
   // it unbounded, so without a ceiling this can exceed ~1.9 even with HD disabled. That range renders fine
@@ -711,8 +717,8 @@ export default function DualMapViewer() {
   // and only past this range. 1.8 sits above the default (~1.67 with default rgbSaturation) so the slider
   // still has room to move, but keeps it out of the confirmed-bad zone.
   const rgbLayerEffectiveSaturationWithHd = Math.min(1.8, Math.max(0.4, rgbLayerEffectiveSaturation * hdSaturationFactor));
-  const visHdLegacyBrightness = Math.min(2, visBrightness * 1.2 * hdPreviewVisBrightnessBoost);
-  const visHdLegacyContrast = Math.min(2.4, visContrast * 1.2 * hdPreviewVisContrastBoost);
+  const visHdLegacyBrightness = Math.min(2, visBrightness * RGB_VIS_FUSION.visBrightnessBoost * hdPreviewVisBrightnessBoost);
+  const visHdLegacyContrast = Math.min(2.4, visContrast * RGB_VIS_FUSION.visContrastBoost * hdPreviewVisContrastBoost);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
   const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
 
@@ -898,6 +904,68 @@ export default function DualMapViewer() {
     computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
   }
 
+  const buildBaseExportOptions = () => {
+    if (!map2Instance.current || !map2Ref.current) return null;
+    const map = map2Instance.current;
+    const exportCenter = map.getCenter();
+    return {
+      map,
+      mapContainer: map2Ref.current,
+      currentTime,
+      activeLayers,
+      irStyle,
+      visBrightness,
+      visContrast,
+      hdEnhanceEnabled,
+      hdEnhanceHighlightProtection,
+      hdEnhanceLocalContrast,
+      hdEnhanceNoiseReduction,
+      hdEnhancePreset,
+      hdEnhanceRadius,
+      hdEnhanceSaturationAdjust,
+      hdEnhanceShadowProtection,
+      hdEnhanceSharpen,
+      hdEnhanceStrength,
+      rgbSaturation,
+      rgbHdOpacity,
+      sandwichOpacity,
+      autoReduceVisAtNight,
+      exportSolarElevation: getSolarElevation(new Date(currentTime + 'Z'), exportCenter.lat, exportCenter.lng),
+      mapOptions,
+      language,
+      map1BordersLayer: map1BordersRef.current,
+      map1DepartmentsLayer: map1DepartmentsRef.current,
+      cityLoadPromise: cityLoadPromiseRef.current,
+      getVisibleCityFeatures,
+    };
+  };
+
+  const revokePreviewImages = () => {
+    Object.values(previewImages).forEach((url) => {
+      if (url) URL.revokeObjectURL(url);
+    });
+  };
+
+  const loadDownloadPreviews = async () => {
+    const base = buildBaseExportOptions();
+    if (!base || availableExportKinds.length === 0) return;
+    setIsPreviewLoading(true);
+
+    try {
+      const results = await generateExportPreviews({ ...base, requestedKinds: availableExportKinds });
+      revokePreviewImages();
+      const next: Partial<Record<ExportKind, string>> = {};
+      results.forEach(({ kind, url }) => {
+        next[kind] = url;
+      });
+      setPreviewImages(next);
+    } catch (err) {
+      console.error('Preview generation failed:', err);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
   const openDownloadModal = () => {
     const nextSelection: Record<ExportKind, boolean> = {
       vis: availableExportKinds.includes('vis'),
@@ -909,46 +977,29 @@ export default function DualMapViewer() {
     };
     setSelectedExports(nextSelection);
     setIsDownloadModalOpen(true);
+    void loadDownloadPreviews();
+  };
+
+  const closeDownloadModal = () => {
+    setIsDownloadModalOpen(false);
+    revokePreviewImages();
+    setPreviewImages({});
   };
 
   const downloadPack = async (requestedKinds: ExportKind[]) => {
-    if (!map2Instance.current || !map2Ref.current) return;
+    const base = buildBaseExportOptions();
+    if (!base) return;
     if (requestedKinds.length === 0) return;
     setIsExporting(true);
+    setDownloadProgress(0);
 
     try {
-      const map = map2Instance.current;
-      const exportCenter = map.getCenter();
       await downloadSatellitePack({
+        ...base,
         requestedKinds,
-        map,
-        mapContainer: map2Ref.current,
-        currentTime,
-        activeLayers,
-        irStyle,
-        visBrightness,
-        visContrast,
-        hdEnhanceEnabled,
-        hdEnhanceHighlightProtection,
-        hdEnhanceLocalContrast,
-        hdEnhanceNoiseReduction,
-        hdEnhancePreset,
-        hdEnhanceRadius,
-        hdEnhanceSaturationAdjust,
-        hdEnhanceShadowProtection,
-        hdEnhanceSharpen,
-        hdEnhanceStrength,
-        rgbSaturation,
-        rgbHdOpacity,
-        sandwichOpacity,
-        autoReduceVisAtNight,
-        exportSolarElevation: getSolarElevation(new Date(currentTime + 'Z'), exportCenter.lat, exportCenter.lng),
-        mapOptions,
-        language,
-        map1BordersLayer: map1BordersRef.current,
-        map1DepartmentsLayer: map1DepartmentsRef.current,
-        cityLoadPromise: cityLoadPromiseRef.current,
-        getVisibleCityFeatures,
+        imageFormat: exportFormat,
+        maxDimension: exportResolution,
+        onProgress: setDownloadProgress,
       });
     } catch (err) {
       console.error('Export failed:', err);
@@ -1279,7 +1330,7 @@ export default function DualMapViewer() {
             }`}
           >
             {isExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
-            <span className="hidden sm:inline">{isExporting ? t('generating') : t('download')}</span>
+            <span className="hidden sm:inline">{isExporting ? `${t('generating')} ${downloadProgress}%` : t('download')}</span>
           </button>
         </div>
       </div>
@@ -1456,15 +1507,33 @@ export default function DualMapViewer() {
       <DownloadModal
         availableExportKinds={availableExportKinds}
         currentTime={currentTime}
+        exportResolutionText={(() => {
+          const container = map2Ref.current;
+          if (!container) return `${exportResolution}x${exportResolution}`;
+          const rect = container.getBoundingClientRect();
+          const rawWidth = Math.max(64, Math.round(rect.width));
+          const rawHeight = Math.max(64, Math.round(rect.height));
+          const scale = exportResolution / Math.max(rawWidth, rawHeight);
+          const width = Math.max(64, Math.round(rawWidth * scale));
+          const height = Math.max(64, Math.round(rawHeight * scale));
+          return `${width}x${height}`;
+        })()}
         downloadModalRef={downloadModalRef}
+        downloadProgress={downloadProgress}
+        exportFormat={exportFormat}
+        exportResolution={exportResolution}
+        hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
         isOpen={isDownloadModalOpen}
-        onClose={() => setIsDownloadModalOpen(false)}
+        isPreviewLoading={isPreviewLoading}
+        onClose={closeDownloadModal}
+        onExportFormatChange={setExportFormat}
+        onExportResolutionChange={setExportResolution}
+        previewImages={previewImages}
         t={t}
         theme={resolvedTheme}
         onConfirm={() => {
           if (selectedExportKinds.length === 0) return;
-          setIsDownloadModalOpen(false);
           void downloadPack(selectedExportKinds);
         }}
         onToggleKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}

@@ -4,6 +4,7 @@ import { Bug, CircleHelp, Clock, Github, Info, Monitor, Moon, Sliders, Sun, Wren
 
 import {
   type ActiveLayers,
+  getExportFileBaseName,
   getExportLabel,
   getLatestAvailableTime,
   getSinglePanelTitle,
@@ -13,6 +14,7 @@ import {
   type IrStyle,
   type MapOptions,
 } from './dualMapViewerShared';
+import type { StillImageFormat } from './dualMapExport';
 import type { Language, Translator } from './i18n';
 
 type UiTheme = 'dark' | 'light';
@@ -784,10 +786,19 @@ type DownloadModalProps = {
   availableExportKinds: ExportKind[];
   currentTime: string;
   downloadModalRef: React.RefObject<HTMLDivElement | null>;
+  downloadProgress: number;
+  exportFormat: StillImageFormat;
+  exportResolution: 1920 | 2560 | 4096;
+  exportResolutionText: string;
+  hdEnhanceEnabled: boolean;
   isExporting: boolean;
   isOpen: boolean;
+  isPreviewLoading: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  onExportFormatChange: (format: StillImageFormat) => void;
+  onExportResolutionChange: (value: 1920 | 2560 | 4096) => void;
+  previewImages: Partial<Record<ExportKind, string>>;
   t: Translator;
   theme: UiTheme;
   onToggleKind: (kind: ExportKind, checked: boolean) => void;
@@ -1187,10 +1198,19 @@ export function DownloadModal(props: DownloadModalProps) {
     availableExportKinds,
     currentTime,
     downloadModalRef,
+    downloadProgress,
+    exportFormat,
+    exportResolution,
+    exportResolutionText,
+    hdEnhanceEnabled,
     isExporting,
     isOpen,
+    isPreviewLoading,
     onClose,
     onConfirm,
+    onExportFormatChange,
+    onExportResolutionChange,
+    previewImages,
     t,
     theme,
     onToggleKind,
@@ -1199,6 +1219,8 @@ export function DownloadModal(props: DownloadModalProps) {
   } = props;
   const isLight = theme === 'light';
   const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
+  const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
+  const isSingleFile = selectedExportKinds.length === 1;
 
   if (!isOpen) return null;
 
@@ -1206,7 +1228,7 @@ export function DownloadModal(props: DownloadModalProps) {
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
       themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
     }`}>
-      <div ref={downloadModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto ${
+      <div ref={downloadModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
         themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
@@ -1229,65 +1251,124 @@ export function DownloadModal(props: DownloadModalProps) {
           {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
         </div>
 
-        <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
           {availableExportKinds.map((kind) => {
             const isComposite = kind === 'hd' || kind === 'sandwich' || kind === 'hybrid';
             const label = getExportLabel(kind, {
               vis: t('exportLabelVis'),
               rgb: t('exportLabelRgb'),
               ir: t('exportLabelIr'),
-              hd: t('exportLabelHd'),
+              hd: hdEnhanceEnabled ? t('exportLabelHd') : t('exportLabelRgbVis'),
               hybrid: t('exportLabelHybrid'),
               sandwich: t('exportLabelSandwich'),
             });
+            const previewUrl = previewImages[kind];
             return (
               <label
                 key={kind}
-                className={`block rounded-lg border p-3 cursor-pointer transition-colors ${
+                className={`relative block h-24 rounded-lg border overflow-hidden transition-colors ${isExporting ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${
                   selectedExports[kind]
-                    ? isLight
-                      ? 'border-blue-300 bg-blue-50'
-                      : 'border-blue-400/40 bg-blue-500/10'
-                    : isLight
-                      ? 'border-slate-200 bg-slate-50 hover:bg-slate-100'
-                      : 'border-white/10 bg-black/20 hover:bg-black/30'
+                    ? 'border-blue-400'
+                    : themedClass(isLight, 'border-slate-300', 'border-white/15')
                 }`}
               >
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedExports[kind]}
-                    onChange={(e) => onToggleKind(kind, e.target.checked)}
-                    className="mt-0.5 w-4 h-4 rounded-sm accent-blue-500"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className={`text-sm font-medium ${themedClass(isLight, 'text-slate-800', 'text-slate-100')}`}>{label}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
-                        isLight
-                          ? 'border-slate-300 text-slate-600 bg-white'
-                          : 'border-white/15 text-slate-300 bg-black/20'
-                      }`}>
-                        {isComposite ? t('downloadCompositeBadge') : t('downloadSimpleBadge')}
-                      </span>
-                    </div>
-                  </div>
+                <div className={`absolute inset-0 ${themedClass(isLight, 'bg-slate-200', 'bg-black/40')}`}>
+                  {previewUrl && (
+                    <img src={previewUrl} alt={label} className="w-full h-full object-cover" />
+                  )}
+                  {!previewUrl && isPreviewLoading && (
+                    <div className={`w-full h-full animate-pulse ${themedClass(isLight, 'bg-slate-300', 'bg-white/5')}`} />
+                  )}
+                </div>
+                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
+
+                <input
+                  type="checkbox"
+                  checked={selectedExports[kind]}
+                  disabled={isExporting}
+                  onChange={(e) => onToggleKind(kind, e.target.checked)}
+                  className="absolute top-2 right-2 w-5 h-5 rounded accent-blue-500 disabled:cursor-not-allowed"
+                />
+                <span className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full border border-white/25 text-white bg-black/35 backdrop-blur-sm">
+                  {isComposite ? t('downloadCompositeBadge') : t('downloadSimpleBadge')}
+                </span>
+
+                <div className="absolute bottom-0 left-0 right-0 px-3 py-2">
+                  <span className="text-sm font-semibold text-white drop-shadow-sm">{label}</span>
                 </div>
               </label>
             );
           })}
         </div>
 
-        <div className={`mt-4 rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
-          <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('downloadZipPreview')}</div>
-          <div className="font-mono break-all">MTG_SATELLITE_{safeZipSuffix}.zip</div>
-          <div className={`mt-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('downloadZipHint')}</div>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div>
+            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadFormatLabel')}</label>
+            <select
+              value={exportFormat}
+              disabled={isExporting}
+              onChange={(event) => onExportFormatChange(event.target.value as 'png' | 'jpeg')}
+              className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
+                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+              }`}
+            >
+              <option value="png">{t('downloadFormatPng')}</option>
+              <option value="jpeg">{t('downloadFormatJpeg')}</option>
+            </select>
+          </div>
+          <div>
+            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadResolutionLabel')}</label>
+            <select
+              value={exportResolution}
+              disabled={isExporting}
+              onChange={(event) => onExportResolutionChange(parseInt(event.target.value, 10) as 1920 | 2560 | 4096)}
+              className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
+                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+              }`}
+            >
+              <option value={1920}>{t('downloadResolution1920')}</option>
+              <option value={2560}>{t('downloadResolution2560')}</option>
+              <option value={4096}>{t('downloadResolution4096')}</option>
+            </select>
+          </div>
         </div>
+
+        {selectedExportKinds.length > 0 && (
+          <div className={`mt-4 rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
+            <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>
+              {isSingleFile ? t('downloadFilePreview') : t('downloadZipPreview')}
+            </div>
+            {isSingleFile && selectedExportKinds[0] ? (
+              <div className="font-mono break-all">
+                {getExportFileBaseName(selectedExportKinds[0], hdEnhanceEnabled)}_{exportResolutionText}_{safeZipSuffix}.{fileExtension}
+              </div>
+            ) : (
+              <div className="font-mono break-all">MTG_SATELLITE_PACK_{exportResolutionText}_{safeZipSuffix}.zip</div>
+            )}
+            <div className={`mt-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('downloadZipHint')}</div>
+          </div>
+        )}
+
+        {isExporting && (
+          <div className="mt-4">
+            <div className={`flex justify-between text-xs mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+              <span>{t('generating')}</span>
+              <span className="font-mono">{downloadProgress}%</span>
+            </div>
+            <div className={`h-1.5 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
+              <div
+                className="h-full bg-blue-500 transition-all duration-200 ease-out"
+                style={{ width: `${downloadProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 sticky bottom-0 pt-3 flex items-center justify-end gap-2 bg-transparent">
           <button
             onClick={onClose}
-            className={`px-3 py-2 text-sm rounded-md border transition-colors ${
+            disabled={isExporting}
+            className={`px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               isLight
                 ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
                 : 'border-white/10 text-slate-200 hover:bg-white/10'
@@ -1304,7 +1385,7 @@ export function DownloadModal(props: DownloadModalProps) {
                 : 'bg-white text-black hover:bg-slate-200'
             }`}
           >
-            {t('downloadSelection')}
+            {isExporting ? `${t('generating')} ${downloadProgress}%` : t('downloadSelection')}
           </button>
         </div>
       </div>

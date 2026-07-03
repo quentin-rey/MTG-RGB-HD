@@ -134,6 +134,31 @@ export function getExportLabel(kind: ExportKind, labels: {
   return labels.sandwich;
 }
 
+/**
+ * The on-image badge text and exported filename stem per export kind. Shared between the
+ * export renderer (which draws the badge and names the file) and the download modal (which
+ * needs to preview that same filename before a single, non-zipped export) so they can't drift
+ * apart. The 'hd' kind's naming depends on whether HD enhancement is actually on — it used to
+ * always say "HD" even when the enhancement toggle was off, which was misleading.
+ */
+export function getExportBadge(kind: ExportKind, hdEnhanceEnabled: boolean): string {
+  if (kind === 'vis') return 'VIS';
+  if (kind === 'rgb') return 'RGB';
+  if (kind === 'ir') return 'IR10.5';
+  if (kind === 'hd') return hdEnhanceEnabled ? 'RGB+VIS HD' : 'RGB+VIS';
+  if (kind === 'hybrid') return 'VIS+RGB+SANDWICH';
+  return 'SANDWICH(IR)';
+}
+
+export function getExportFileBaseName(kind: ExportKind, hdEnhanceEnabled: boolean): string {
+  if (kind === 'vis') return 'VIS_0.6';
+  if (kind === 'rgb') return 'RGB_TRUE_COLOR';
+  if (kind === 'ir') return 'IR10.5';
+  if (kind === 'hd') return hdEnhanceEnabled ? 'RGB_VIS_HD' : 'RGB_VIS';
+  if (kind === 'hybrid') return 'VIS_RGB_SANDWICH';
+  return 'SANDWICH_IR_VIS';
+}
+
 export function readStoredNumber(key: string, fallback: number): number {
   try {
     const value = localStorage.getItem(key);
@@ -245,12 +270,30 @@ export function getHdEnhancementProfile(preset: HdEnhancementPreset): { sharpen:
   return preset === 'custom' ? { sharpen: 1, contrast: 1, saturation: 1 } : HD_ENHANCEMENT_PROFILES[preset];
 }
 
+/**
+ * The extra boost applied on top of the user's own saturation/brightness/contrast sliders
+ * specifically in RGB+VIS-only mode (no IR), where the VIS layer is blended over RGB in
+ * `mix-blend-mode: luminosity` to add cloud detail. Shared between the live CSS-filter
+ * renderer and the still/GIF export canvas renderer so they can't silently drift apart —
+ * they used to each hardcode their own slightly different numbers (e.g. 1.45x/1.30x for
+ * the RGB saturation boost), which made exported RGB+VIS images look visibly darker than
+ * the live view for the same slider settings.
+ */
+export const RGB_VIS_FUSION = {
+  rgbSaturationBoost: 1.45,
+  rgbBrightnessBoost: 1.12,
+  visBrightnessBoost: 1.2,
+  visContrastBoost: 1.2,
+} as const;
+
 export type LayerBlendState = {
   daylightVisFactor: number;
   visNightFactor: number;
   hybridVisNightFactor: number;
   effectiveSandwichOpacity: number;
   isRgbVisOnlyMode: boolean;
+  /** RGB base brightness factor (0.55-1) that dims RGB+VIS-only mode at night; 1 in every other mode. */
+  rgbVisOnlyNightBrightness: number;
   hybridVisOpacityCap: number;
   rgbVisOnlyOpacityCap: number;
   /** VIS-on-RGB opacity capped for the RGB+VIS-only blend (no IR involved). */
@@ -296,6 +339,8 @@ export function computeLayerBlendState(params: {
   const hybridVisNightFactor = Math.pow(visNightFactor, 1.6);
   const effectiveSandwichOpacity = sandwichOpacity * visNightFactor;
   const isRgbVisOnlyMode = activeLayers.rgb && activeLayers.vis && !activeLayers.ir;
+  const rgbVisNightFade = Math.max(0, Math.min(1, (solarElevation + 2) / 6));
+  const rgbVisOnlyNightBrightness = isRgbVisOnlyMode ? 0.55 + rgbVisNightFade * 0.45 : 1;
   // In luminosity blend mode, high VIS opacity can noticeably darken RGB.
   // Keep a conservative dynamic cap to preserve VIS detail without dimming daytime RGB too much.
   const hybridVisOpacityCap = 0.48 + daylightVisFactor * 0.14;
@@ -338,6 +383,7 @@ export function computeLayerBlendState(params: {
     hybridVisNightFactor,
     effectiveSandwichOpacity,
     isRgbVisOnlyMode,
+    rgbVisOnlyNightBrightness,
     hybridVisOpacityCap,
     rgbVisOnlyOpacityCap,
     effectiveRgbVisOnlyVisOpacity,

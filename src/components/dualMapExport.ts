@@ -4,10 +4,13 @@ import { applyPalette, GIFEncoder, nearestColorIndex, quantize } from 'gifenc';
 import {
   computeCloudOnlyIrRgba,
   computeLayerBlendState,
+  getExportBadge,
+  getExportFileBaseName,
   getHdEnhancementProfile,
   LAYER_IR,
   LAYER_RGB,
   LAYER_VIS,
+  RGB_VIS_FUSION,
   type ActiveLayers,
   type CityFeature,
   type ExportKind,
@@ -17,6 +20,8 @@ import {
   WMS_URL_DIRECT,
 } from './dualMapViewerShared';
 import type { Language } from './i18n';
+
+export type StillImageFormat = 'png' | 'jpeg';
 
 type DownloadSatellitePackOptions = {
   requestedKinds: ExportKind[];
@@ -48,6 +53,9 @@ type DownloadSatellitePackOptions = {
   map1DepartmentsLayer: L.GeoJSON | null;
   cityLoadPromise: Promise<void> | null;
   getVisibleCityFeatures: (bounds: L.LatLngBounds, zoom: number) => CityFeature[];
+  maxDimension?: number;
+  imageFormat?: StillImageFormat;
+  onProgress?: (progress: number) => void;
 };
 
 type RenderSatelliteFramesOptions = Omit<DownloadSatellitePackOptions, 'currentTime'> & {
@@ -305,7 +313,7 @@ type ExportOverlayLocale = {
 function getExportOverlayLocale(language: Language): ExportOverlayLocale {
   if (language === 'en') {
     return {
-      watermarkText: 'Source: EUMETSAT / MTG | MTG-RGB-HD by Quentin Rey',
+      watermarkText: 'Source: EUMETSAT / MTG | MTG-RGB-HD',
       layerLabelSingle: 'LAYER',
       layerLabelPlural: 'LAYERS',
       dateUtcLabel: 'UTC DATE',
@@ -313,7 +321,7 @@ function getExportOverlayLocale(language: Language): ExportOverlayLocale {
   }
 
   return {
-    watermarkText: 'Sources: EUMETSAT / MTG | MTG-RGB-HD par Quentin Rey',
+    watermarkText: 'Sources: EUMETSAT / MTG | MTG-RGB-HD',
     layerLabelSingle: 'COUCHE',
     layerLabelPlural: 'COUCHES',
     dateUtcLabel: 'DATE UTC',
@@ -325,23 +333,25 @@ function applyWatermark(
   width: number,
   height: number,
   locale: ExportOverlayLocale,
+  scale: number,
 ) {
   const text = locale.watermarkText;
-  const horizontalPadding = 12;
-  const badgeHeight = 28;
+  const horizontalPadding = 12 * scale;
+  const badgeHeight = 28 * scale;
+  const margin = 10 * scale;
 
   context.save();
-  context.font = '600 11px "JetBrains Mono", monospace, sans-serif';
+  context.font = `600 ${Math.round(11 * scale)}px "JetBrains Mono", monospace, sans-serif`;
   const badgeWidth = Math.ceil(context.measureText(text).width + horizontalPadding * 2);
-  const left = width - badgeWidth - 10;
-  const top = height - badgeHeight - 10;
+  const left = width - badgeWidth - margin;
+  const top = height - badgeHeight - margin;
 
   drawGlassPanel(context, left, top, badgeWidth, badgeHeight, 0);
 
   context.fillStyle = 'rgba(245, 250, 255, 0.96)';
   context.textAlign = 'right';
   context.textBaseline = 'middle';
-  context.fillText(text, width - 10 - horizontalPadding, top + badgeHeight / 2 + 0.5);
+  context.fillText(text, width - margin - horizontalPadding, top + badgeHeight / 2 + 0.5);
   context.restore();
 }
 
@@ -408,32 +418,33 @@ function drawInfoBadge(
   top: number,
   label: string,
   value: string,
+  scale: number,
 ) {
-  const horizontalPadding = 11;
-  const labelLineHeight = 11;
-  const valueLineHeight = 16;
-  const verticalPaddingTop = 7;
-  const verticalGap = 4;
-  const verticalPaddingBottom = 8;
+  const horizontalPadding = 11 * scale;
+  const labelLineHeight = 11 * scale;
+  const valueLineHeight = 16 * scale;
+  const verticalPaddingTop = 7 * scale;
+  const verticalGap = 4 * scale;
+  const verticalPaddingBottom = 8 * scale;
   const height = verticalPaddingTop + labelLineHeight + verticalGap + valueLineHeight + verticalPaddingBottom;
 
   context.save();
-  context.font = '600 10px "JetBrains Mono", monospace, sans-serif';
+  context.font = `600 ${Math.round(10 * scale)}px "JetBrains Mono", monospace, sans-serif`;
   const labelWidth = context.measureText(label).width;
-  context.font = '700 14px "JetBrains Mono", monospace, sans-serif';
+  context.font = `700 ${Math.round(14 * scale)}px "JetBrains Mono", monospace, sans-serif`;
   const valueWidth = context.measureText(value).width;
-  const width = Math.ceil(Math.max(labelWidth, valueWidth) + horizontalPadding * 2 + 2);
+  const width = Math.ceil(Math.max(labelWidth, valueWidth) + horizontalPadding * 2 + 2 * scale);
 
   drawGlassPanel(context, left, top, width, height, 0);
 
   context.textAlign = 'left';
   context.textBaseline = 'top';
   context.fillStyle = 'rgba(220, 238, 252, 0.9)';
-  context.font = '600 10px "JetBrains Mono", monospace, sans-serif';
+  context.font = `600 ${Math.round(10 * scale)}px "JetBrains Mono", monospace, sans-serif`;
   context.fillText(label, left + horizontalPadding, top + verticalPaddingTop);
 
   context.fillStyle = 'rgba(250, 252, 255, 0.98)';
-  context.font = '700 14px "JetBrains Mono", monospace, sans-serif';
+  context.font = `700 ${Math.round(14 * scale)}px "JetBrains Mono", monospace, sans-serif`;
   context.fillText(value, left + horizontalPadding, top + verticalPaddingTop + labelLineHeight + verticalGap);
   context.restore();
 
@@ -445,14 +456,15 @@ function applyTopInfoBadges(
   utcLabel: string,
   layerType: string,
   locale: ExportOverlayLocale,
+  scale: number,
 ) {
-  const left = 10;
-  const top = 10;
-  const gap = 8;
+  const left = 10 * scale;
+  const top = 10 * scale;
+  const gap = 8 * scale;
   const layerLabel = layerType.includes('+') ? locale.layerLabelPlural : locale.layerLabelSingle;
 
-  const layerBadge = drawInfoBadge(context, left, top, layerLabel, layerType);
-  drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel);
+  const layerBadge = drawInfoBadge(context, left, top, layerLabel, layerType, scale);
+  drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel, scale);
 }
 
 function buildWmsUrl(
@@ -476,15 +488,19 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Promise<Array<{
-  descriptor: {
-    kind: ExportKind;
-    badge: string;
-    fileBaseName: string;
-    sourceCanvas: HTMLCanvasElement;
-  };
-  blob: Blob;
-}>> {
+async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Promise<{
+  width: number;
+  height: number;
+  files: Array<{
+    descriptor: {
+      kind: ExportKind;
+      badge: string;
+      fileBaseName: string;
+      sourceCanvas: HTMLCanvasElement;
+    };
+    blob: Blob;
+  }>;
+}> {
   const {
     requestedKinds,
     map,
@@ -515,9 +531,11 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     map1DepartmentsLayer,
     cityLoadPromise,
     getVisibleCityFeatures,
+    imageFormat = 'png',
+    onProgress,
   } = options;
 
-  if (requestedKinds.length === 0) return [];
+  if (requestedKinds.length === 0) return { width: 0, height: 0, files: [] };
 
   const exportBounds = map.getBounds();
   const ne = L.CRS.EPSG3857.project(exportBounds.getNorthEast());
@@ -527,9 +545,20 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const rawWidth = Math.max(64, Math.round(rect.width));
   const rawHeight = Math.max(64, Math.round(rect.height));
   const maxDimension = Math.max(64, Math.min(options.maxDimension ?? 4096, 4096));
-  const scale = Math.min(1, maxDimension / Math.max(rawWidth, rawHeight));
+  // Always scale to hit maxDimension on the longer side — both up and down. WMS renders the
+  // requested pixel size server-side (it's not a browser canvas upscale), so this is a real
+  // resolution change, not just cosmetic. A `Math.min(1, ...)` here (i.e. only ever downscaling
+  // from the on-screen map container's current CSS size) meant every resolution option above the
+  // container's own size behaved identically, since the container is rarely wider than ~1920px —
+  // picking 2560 or 4096 silently produced the same image as 1920.
+  const scale = maxDimension / Math.max(rawWidth, rawHeight);
   const width = Math.max(64, Math.round(rawWidth * scale));
   const height = Math.max(64, Math.round(rawHeight * scale));
+  // Badge/watermark/city-label text is drawn at fixed pixel sizes designed for the on-screen
+  // container size (rawWidth/rawHeight) — without scaling those sizes up for higher export
+  // resolutions, they'd shrink to an unreadable fraction of a 4096px-wide image. Never scale
+  // below 1x (that would make text bigger than the source design at low resolutions).
+  const overlayScale = Math.max(1, scale);
   const isoTime = new Date(currentTime + 'Z').toISOString();
   const {
     shouldPreferIrBaseAtNight,
@@ -539,6 +568,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     effectiveHybridIrOpacity: exportHybridIrOpacity,
     effectiveCloudOnlyIrOpacity: exportCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight: hybridVisMaskWeight,
+    rgbVisOnlyNightBrightness,
   } = computeLayerBlendState({
     activeLayers,
     rgbHdOpacity,
@@ -562,6 +592,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     needsRgb ? loadImage(buildWmsUrl(LAYER_RGB, '', bbox, width, height, isoTime)) : Promise.resolve(undefined),
     needsIr ? loadImage(buildWmsUrl(LAYER_IR, irStyle, bbox, width, height, isoTime)) : Promise.resolve(undefined),
   ]);
+  onProgress?.(25);
 
   const visTempCanvas = document.createElement('canvas');
   visTempCanvas.width = width;
@@ -651,6 +682,12 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const shouldExportSandwich = selectedKinds.has('sandwich') && activeLayers.ir && activeLayers.vis;
   const shouldExportHybrid = selectedKinds.has('hybrid') && activeLayers.rgb && activeLayers.vis && activeLayers.ir;
   const exportRgbModeBaseCanvas = shouldPreferIrBaseAtNight && imgIr ? irTempCanvas : rgbTempCanvas;
+  // Unfiltered base for the 'hd' (RGB+VIS) export below: it needs to apply the RGB_VIS_FUSION
+  // boost on top of the RAW image, matching the live view's single-pass filter. Reusing
+  // rgbTempCanvas/visTempCanvas (already filtered once for the plain 'rgb'/'vis' exports) here
+  // would filter twice, squaring the saturation/contrast boost and making the export visibly
+  // darker/harsher than the live view for the same slider settings — this was a real bug.
+  const exportRgbModeRawBaseCanvas = shouldPreferIrBaseAtNight && imgIr ? irTempCanvas : rgbRawCanvas;
   const visRawData = imgVis ? visRawCtx.getImageData(0, 0, width, height).data : null;
   const rgbRawData = imgRgb ? rgbRawCtx.getImageData(0, 0, width, height).data : null;
   const irRawData = imgIr ? irTempCtx.getImageData(0, 0, width, height).data : null;
@@ -661,15 +698,18 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     outputCanvas.height = height;
     const outputCtx = outputCanvas.getContext('2d')!;
 
-    outputCtx.filter = `saturate(${Math.round(rgbSaturation * 130)}%) brightness(110%)`;
-    outputCtx.drawImage(exportRgbModeBaseCanvas, 0, 0);
-    outputCtx.filter = `brightness(${Math.min(2, visBrightness * 1.15)}) contrast(${Math.min(2.4, visContrast * 1.15)})`;
-    outputCtx.globalCompositeOperation = 'luminosity';
-    outputCtx.globalAlpha = Math.min(0.7, exportRgbVisOnlyVisOpacity);
-    outputCtx.drawImage(visTempCanvas, 0, 0);
-    outputCtx.globalCompositeOperation = 'source-over';
-    outputCtx.globalAlpha = 1;
+    outputCtx.filter = `saturate(${Math.round(rgbSaturation * RGB_VIS_FUSION.rgbSaturationBoost * 100)}%) brightness(${Math.round(rgbVisOnlyNightBrightness * RGB_VIS_FUSION.rgbBrightnessBoost * 100)}%)`;
+    outputCtx.drawImage(exportRgbModeRawBaseCanvas, 0, 0);
     outputCtx.filter = 'none';
+    if (imgVis) {
+      outputCtx.filter = `brightness(${Math.min(2, visBrightness * RGB_VIS_FUSION.visBrightnessBoost)}) contrast(${Math.min(2.4, visContrast * RGB_VIS_FUSION.visContrastBoost)})`;
+      outputCtx.globalCompositeOperation = 'luminosity';
+      outputCtx.globalAlpha = exportRgbVisOnlyVisOpacity;
+      outputCtx.drawImage(visRawCanvas, 0, 0);
+      outputCtx.globalCompositeOperation = 'source-over';
+      outputCtx.globalAlpha = 1;
+      outputCtx.filter = 'none';
+    }
 
     return hdEnhanceEnabled
       ? applyHdEnhancement(outputCanvas, {
@@ -777,13 +817,14 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       }
       const zoom = Math.round(map.getZoom());
       const visibleCities = getVisibleCityFeatures(map.getBounds(), zoom);
-      const dotRadius = zoom >= 8 ? 2.5 : zoom >= 6 ? 2 : 1.5;
+      const dotRadius = (zoom >= 8 ? 2.5 : zoom >= 6 ? 2 : 1.5) * overlayScale;
+      const cityFontSize = Math.round((zoom >= 8 ? 13 : zoom >= 6 ? 12 : 11) * overlayScale);
       context.save();
       context.textAlign = 'left';
       context.textBaseline = 'middle';
       context.shadowColor = 'rgba(0, 0, 0, 0.9)';
-      context.shadowBlur = 4;
-      context.font = zoom >= 8 ? '13px "Inter", sans-serif' : zoom >= 6 ? '12px "Inter", sans-serif' : '11px "Inter", sans-serif';
+      context.shadowBlur = 4 * overlayScale;
+      context.font = `${cityFontSize}px "Inter", sans-serif`;
 
       visibleCities.forEach((feature) => {
         const [lng, lat] = feature.geometry.coordinates;
@@ -803,7 +844,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
           context.fill();
 
           context.fillStyle = 'rgba(255, 255, 255, 0.88)';
-          context.fillText(name, canvasX + 4, canvasY);
+          context.fillText(name, canvasX + 4 * overlayScale, canvasY);
         }
       });
 
@@ -816,23 +857,31 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   overlayCanvas.height = height;
   const overlayCtx = overlayCanvas.getContext('2d')!;
   await drawOverlays(overlayCtx, width, height);
+  onProgress?.(45);
 
+  const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
   const getBlob = async (canvasObj: HTMLCanvasElement, layerType: string): Promise<Blob> => {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = width;
     tempCanvas.height = height;
     const tempCtx = tempCanvas.getContext('2d')!;
 
+    if (imageFormat === 'jpeg') {
+      // JPEG has no alpha channel: fill an opaque background first so any transparent edge
+      // (e.g. panned past WMS coverage) doesn't get an inconsistent browser-dependent color.
+      tempCtx.fillStyle = '#05070c';
+      tempCtx.fillRect(0, 0, width, height);
+    }
     tempCtx.drawImage(canvasObj, 0, 0);
     tempCtx.drawImage(overlayCanvas, 0, 0);
-    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale);
-    applyWatermark(tempCtx, width, height, exportOverlayLocale);
+    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale, overlayScale);
+    applyWatermark(tempCtx, width, height, exportOverlayLocale, overlayScale);
 
     return new Promise((resolve, reject) => {
       tempCanvas.toBlob((blob) => {
         if (blob) resolve(blob);
-        else reject(new Error('Failed to generate PNG blob'));
-      }, 'image/png');
+        else reject(new Error('Failed to generate image blob'));
+      }, mimeType, imageFormat === 'jpeg' ? 0.92 : undefined);
     });
   };
 
@@ -845,50 +894,60 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
 
   requestedKinds.forEach((kind) => {
     if (kind === 'vis' && needsVis) {
-      exportDescriptors.push({ kind: 'vis', badge: 'VIS', fileBaseName: 'VIS_0.6', sourceCanvas: visTempCanvas });
+      exportDescriptors.push({ kind: 'vis', badge: getExportBadge('vis', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('vis', hdEnhanceEnabled), sourceCanvas: visTempCanvas });
       return;
     }
     if (kind === 'rgb' && needsRgb) {
-      exportDescriptors.push({ kind: 'rgb', badge: 'RGB', fileBaseName: 'RGB_TRUE_COLOR', sourceCanvas: rgbTempCanvas });
+      exportDescriptors.push({ kind: 'rgb', badge: getExportBadge('rgb', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('rgb', hdEnhanceEnabled), sourceCanvas: rgbTempCanvas });
       return;
     }
     if (kind === 'ir' && needsIr) {
-      exportDescriptors.push({ kind: 'ir', badge: 'IR10.5', fileBaseName: 'IR10.5', sourceCanvas: irTempCanvas });
+      exportDescriptors.push({ kind: 'ir', badge: getExportBadge('ir', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('ir', hdEnhanceEnabled), sourceCanvas: irTempCanvas });
       return;
     }
     if (kind === 'hd' && rgbHdCanvas) {
-      exportDescriptors.push({ kind: 'hd', badge: 'RGB+VIS HD', fileBaseName: 'RGB_VIS_HD', sourceCanvas: rgbHdCanvas });
+      exportDescriptors.push({
+        kind: 'hd',
+        badge: getExportBadge('hd', hdEnhanceEnabled),
+        fileBaseName: getExportFileBaseName('hd', hdEnhanceEnabled),
+        sourceCanvas: rgbHdCanvas,
+      });
       return;
     }
     if (kind === 'sandwich' && sandwichCanvas) {
-      exportDescriptors.push({ kind: 'sandwich', badge: 'SANDWICH(IR)', fileBaseName: 'SANDWICH_IR_VIS', sourceCanvas: sandwichCanvas });
+      exportDescriptors.push({ kind: 'sandwich', badge: getExportBadge('sandwich', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('sandwich', hdEnhanceEnabled), sourceCanvas: sandwichCanvas });
       return;
     }
     if (kind === 'hybrid' && hybridCanvas) {
-      exportDescriptors.push({ kind: 'hybrid', badge: 'VIS+RGB+SANDWICH', fileBaseName: 'VIS_RGB_SANDWICH', sourceCanvas: hybridCanvas });
+      exportDescriptors.push({ kind: 'hybrid', badge: getExportBadge('hybrid', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('hybrid', hdEnhanceEnabled), sourceCanvas: hybridCanvas });
     }
   });
 
   const selectedDescriptors = exportDescriptors;
-  const generatedFiles = await Promise.all(
-    selectedDescriptors.map(async (descriptor) => ({
-      descriptor,
-      blob: await getBlob(descriptor.sourceCanvas, descriptor.badge),
-    })),
-  );
+  const generatedFiles: Array<{
+    descriptor: (typeof selectedDescriptors)[number];
+    blob: Blob;
+  }> = [];
+  for (let index = 0; index < selectedDescriptors.length; index += 1) {
+    const descriptor = selectedDescriptors[index];
+    const blob = await getBlob(descriptor.sourceCanvas, descriptor.badge);
+    generatedFiles.push({ descriptor, blob });
+    if (onProgress) {
+      onProgress(45 + Math.round(((index + 1) / selectedDescriptors.length) * 45));
+    }
+  }
 
-  return generatedFiles;
+  return { width, height, files: generatedFiles };
 }
 
 export async function downloadSatellitePack(options: DownloadSatellitePackOptions): Promise<void> {
-  const [{ default: JSZip }, { saveAs }] = await Promise.all([
-    import('jszip'),
-    import('file-saver'),
-  ]);
+  const { saveAs } = await import('file-saver');
+  const { onProgress, imageFormat = 'png', maxDimension = 4096 } = options;
+  const extension = imageFormat === 'jpeg' ? 'jpg' : 'png';
 
-  const generatedFiles = await renderSatelliteFrames({
+  const { width, height, files: generatedFiles } = await renderSatelliteFrames({
     ...options,
-    maxDimension: 4096,
+    maxDimension,
   });
 
   if (generatedFiles.length === 0) {
@@ -896,13 +955,40 @@ export async function downloadSatellitePack(options: DownloadSatellitePackOption
   }
 
   const safeTimeStr = options.currentTime.replace('T', '_').replace(/:/g, '-');
+  const resolutionStr = `${width}x${height}`;
+
+  // A single selected export doesn't need a ZIP wrapper — save the image directly.
+  if (generatedFiles.length === 1) {
+    const { descriptor, blob } = generatedFiles[0];
+    saveAs(blob, `${descriptor.fileBaseName}_${resolutionStr}_${safeTimeStr}.${extension}`);
+    onProgress?.(100);
+    return;
+  }
+
+  const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   generatedFiles.forEach(({ descriptor, blob }, index) => {
-    zip.file(`${index + 1}_${descriptor.fileBaseName}_${safeTimeStr}.png`, blob);
+    zip.file(`${index + 1}_${descriptor.fileBaseName}_${resolutionStr}_${safeTimeStr}.${extension}`, blob);
   });
 
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
-  saveAs(zipBlob, `MTG_SATELLITE_PACK_${safeTimeStr}.zip`);
+  const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+    onProgress?.(90 + Math.round((metadata.percent / 100) * 10));
+  });
+  saveAs(zipBlob, `MTG_SATELLITE_PACK_${resolutionStr}_${safeTimeStr}.zip`);
+  onProgress?.(100);
+}
+
+/**
+ * Renders small, fast preview thumbnails for the given export kinds (same rendering pipeline
+ * and blend math as the real export, just at a much smaller `maxDimension`), so the download
+ * modal can show what each selected format will actually look like before committing to a
+ * full-resolution render.
+ */
+export async function generateExportPreviews(
+  options: Omit<DownloadSatellitePackOptions, 'onProgress' | 'maxDimension' | 'imageFormat'>,
+): Promise<Array<{ kind: ExportKind; url: string }>> {
+  const { files } = await renderSatelliteFrames({ ...options, maxDimension: 360 });
+  return files.map(({ descriptor, blob }) => ({ kind: descriptor.kind, url: URL.createObjectURL(blob) }));
 }
 
 export async function exportAnimationGif(options: ExportAnimationGifOptions): Promise<Blob> {
@@ -945,11 +1031,11 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
       maxDimension,
     });
 
-    if (frame.length === 0) {
+    if (frame.files.length === 0) {
       throw new Error(`No render output for frame at ${time}`);
     }
 
-    frameBlobs.push(frame[0].blob);
+    frameBlobs.push(frame.files[0].blob);
 
     if (onProgress) {
       onProgress(Math.round(((index + 1) / frameTimes.length) * 45));
