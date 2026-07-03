@@ -662,6 +662,140 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
   );
 }
 
+type FireHotspotPanelProps = {
+  fireHotspotEnabled: boolean;
+  fireHotspotMinBrightness: number;
+  fireHotspotMinRedBlueDiff: number;
+  fireHotspotOpacity: number;
+  fireHotspotRef: React.RefObject<HTMLDivElement | null>;
+  isOpen: boolean;
+  onEnabledChange: (value: boolean) => void;
+  onMinBrightnessChange: (value: number) => void;
+  onMinRedBlueDiffChange: (value: number) => void;
+  onOpacityChange: (value: number) => void;
+  onToggle: () => void;
+  t: Translator;
+  theme: UiTheme;
+};
+
+export function FireHotspotPanel(props: FireHotspotPanelProps) {
+  const {
+    fireHotspotEnabled,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
+    fireHotspotRef,
+    isOpen,
+    onEnabledChange,
+    onMinBrightnessChange,
+    onMinRedBlueDiffChange,
+    onOpacityChange,
+    onToggle,
+    t,
+    theme,
+  } = props;
+  const isLight = theme === 'light';
+
+  return (
+    <div className="relative" ref={fireHotspotRef}>
+      <button
+        onClick={onToggle}
+        className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border text-xs font-medium shadow-xl transition-colors backdrop-blur-md ${
+          fireHotspotEnabled
+            ? 'bg-orange-500 border-orange-500 text-white hover:bg-orange-600'
+            : themedClass(
+              isLight,
+              'bg-white/90 hover:bg-white border-slate-300 text-slate-700',
+              'bg-black/60 hover:bg-black/80 border-white/10 text-white',
+            )
+        } ${isOpen ? 'ring-2 ring-offset-1 ring-orange-400' : ''}`}
+        title={t('toggleFireHotspot')}
+        aria-pressed={fireHotspotEnabled}
+      >
+        🔥
+      </button>
+
+      {isOpen && (
+        <div
+          className={`ui-scrollbar absolute right-0 top-20 w-[calc(100vw-2rem)] max-h-[calc(100dvh-26rem)] sm:top-full sm:mt-2 sm:w-[20rem] sm:max-h-[calc(100dvh-17rem)] lg:max-h-[72vh] backdrop-blur-md border rounded-lg shadow-2xl p-4 z-[500] overflow-auto ${
+            themedClass(isLight, 'bg-white/95 border-slate-300 text-slate-700', 'bg-[#1a1a1a]/95 border-white/10 text-slate-200')
+          }`}
+        >
+          <div className={`flex items-center justify-between mb-3 pb-2 ${themedClass(isLight, 'border-b border-slate-200', 'border-b border-white/5')}`}>
+            <span className={`text-xs font-semibold tracking-wider uppercase ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('fireHotspotSectionTitle')}</span>
+          </div>
+
+          <div className="space-y-4">
+            <p className={`text-[11px] leading-relaxed ${themedClass(isLight, 'text-slate-500', 'text-slate-500')}`}>{t('fireHotspotSectionHint')}</p>
+
+            <label className={`flex items-center gap-2 text-sm cursor-pointer transition-colors ${themedClass(isLight, 'text-slate-700 hover:text-slate-900', 'text-slate-300 hover:text-white')}`}>
+              <input
+                type="checkbox"
+                checked={fireHotspotEnabled}
+                onChange={(e) => onEnabledChange(e.target.checked)}
+                className="w-4 h-4 rounded-sm accent-orange-500"
+              />
+              {t('fireHotspotEnableLabel')}
+            </label>
+
+            {fireHotspotEnabled && (
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('fireHotspotOpacity')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(fireHotspotOpacity * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1.0"
+                    step="0.05"
+                    value={fireHotspotOpacity}
+                    onChange={(e) => onOpacityChange(parseFloat(e.target.value))}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-orange-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('fireHotspotMinRedBlueDiff')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(fireHotspotMinRedBlueDiff)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="10"
+                    max="150"
+                    step="5"
+                    value={fireHotspotMinRedBlueDiff}
+                    onChange={(e) => onMinRedBlueDiffChange(parseFloat(e.target.value))}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-orange-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('fireHotspotMinBrightness')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(fireHotspotMinBrightness)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="60"
+                    max="255"
+                    step="5"
+                    value={fireHotspotMinBrightness}
+                    onChange={(e) => onMinBrightnessChange(parseFloat(e.target.value))}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-orange-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type InfoModalProps = {
   infoRef: React.RefObject<HTMLDivElement | null>;
   isOpen: boolean;
@@ -704,7 +838,7 @@ export function InfoModal(props: InfoModalProps) {
 
           <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
             <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoLayersTitle')}</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
                 <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>RGB True Color</div>
                 <div>{t('infoLayerRgbDesc')}</div>
@@ -716,6 +850,10 @@ export function InfoModal(props: InfoModalProps) {
               <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
                 <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>IR 10.5 um</div>
                 <div>{t('infoLayerIrDesc')}</div>
+              </article>
+              <article className={`rounded-md border p-2 ${themedClass(isLight, 'border-slate-200 bg-white/70', 'border-white/10 bg-black/20')}`}>
+                <div className={`font-semibold mb-1 ${themedClass(isLight, 'text-slate-900', 'text-slate-100')}`}>Fire Temperature RGB</div>
+                <div>{t('infoLayerFireDesc')}</div>
               </article>
             </div>
           </section>
@@ -859,6 +997,7 @@ type ExportModalProps = {
   availableExportKinds: ExportKind[];
   currentTime: string;
   exportModalRef: React.RefObject<HTMLDivElement | null>;
+  fireHotspotEnabled: boolean;
   hdEnhanceEnabled: boolean;
   isOpen: boolean;
   isPreviewLoading: boolean;
@@ -934,6 +1073,7 @@ export function ExportModal(props: ExportModalProps) {
     exportModalRef,
     exportResolution,
     exportResolutionText,
+    fireHotspotEnabled,
     fps,
     gifColorCount,
     gifDitherLevel,
@@ -1089,6 +1229,15 @@ export function ExportModal(props: ExportModalProps) {
         <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
           {isImageMode ? t('downloadModalDescription') : t('animationDescription')}
         </p>
+
+        {fireHotspotEnabled && (
+          <div className={`mb-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs ${
+            themedClass(isLight, 'border-orange-300 bg-orange-50 text-orange-800', 'border-orange-400/30 bg-orange-500/10 text-orange-200')
+          }`}>
+            <span className="text-sm leading-none shrink-0" aria-hidden="true">🔥</span>
+            <span>{t('downloadFireHotspotHint')}</span>
+          </div>
+        )}
 
         {isImageMode ? (
           <>
@@ -1684,6 +1833,7 @@ export function HelpModal(props: HelpModalProps) {
             {
               title: t('helpGroupActions'),
               rows: [
+                { keys: ['F'], action: t('helpActionFireHotspot') },
                 { keys: ['L'], action: t('helpActionLatest') },
                 { keys: ['R'], action: t('helpActionReset') },
                 { keys: ['S'], action: t('helpActionAdjustments') },
@@ -1765,6 +1915,11 @@ type Map2ControlBarProps = {
   autoReduceVisAtNight: boolean;
   effectiveHybridVisOpacity: number;
   effectiveSandwichOpacity: number;
+  fireHotspotEnabled: boolean;
+  fireHotspotMinBrightness: number;
+  fireHotspotMinRedBlueDiff: number;
+  fireHotspotOpacity: number;
+  fireHotspotRef: React.RefObject<HTMLDivElement | null>;
   hdEnhanceEnabled: boolean;
   hdEnhanceHighlightProtection: number;
   hdEnhanceLocalContrast: number;
@@ -1777,9 +1932,15 @@ type Map2ControlBarProps = {
   hdEnhanceStrength: number;
   irStyle: IrStyle;
   isAdjustmentsOpen: boolean;
+  isFireHotspotOpen: boolean;
   mapOptions: MapOptions;
   onActiveLayersChange: (next: ActiveLayers) => void;
   onAutoReduceVisAtNightChange: (value: boolean) => void;
+  onFireHotspotEnabledChange: (value: boolean) => void;
+  onFireHotspotMinBrightnessChange: (value: number) => void;
+  onFireHotspotMinRedBlueDiffChange: (value: number) => void;
+  onFireHotspotOpacityChange: (value: number) => void;
+  onToggleFireHotspot: () => void;
   onHdEnhanceEnabledChange: (value: boolean) => void;
   onHdEnhanceHighlightProtectionChange: (value: number) => void;
   onHdEnhanceLocalContrastChange: (value: number) => void;
@@ -1817,6 +1978,11 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     autoReduceVisAtNight,
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
+    fireHotspotEnabled,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
+    fireHotspotRef,
     hdEnhanceEnabled,
     hdEnhanceHighlightProtection,
     hdEnhanceLocalContrast,
@@ -1829,9 +1995,15 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     hdEnhanceStrength,
     irStyle,
     isAdjustmentsOpen,
+    isFireHotspotOpen,
     mapOptions,
     onActiveLayersChange,
     onAutoReduceVisAtNightChange,
+    onFireHotspotEnabledChange,
+    onFireHotspotMinBrightnessChange,
+    onFireHotspotMinRedBlueDiffChange,
+    onFireHotspotOpacityChange,
+    onToggleFireHotspot,
     onHdEnhanceEnabledChange,
     onHdEnhanceHighlightProtectionChange,
     onHdEnhanceLocalContrastChange,
@@ -1914,6 +2086,22 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
           IR
         </button>
       </div>
+
+      <FireHotspotPanel
+        fireHotspotEnabled={fireHotspotEnabled}
+        fireHotspotMinBrightness={fireHotspotMinBrightness}
+        fireHotspotMinRedBlueDiff={fireHotspotMinRedBlueDiff}
+        fireHotspotOpacity={fireHotspotOpacity}
+        fireHotspotRef={fireHotspotRef}
+        isOpen={isFireHotspotOpen}
+        onEnabledChange={onFireHotspotEnabledChange}
+        onMinBrightnessChange={onFireHotspotMinBrightnessChange}
+        onMinRedBlueDiffChange={onFireHotspotMinRedBlueDiffChange}
+        onOpacityChange={onFireHotspotOpacityChange}
+        onToggle={onToggleFireHotspot}
+        t={t}
+        theme={theme}
+      />
 
       <AdjustmentsPanel
         activeLayers={activeLayers}

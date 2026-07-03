@@ -19,6 +19,10 @@ export type ShareSnapshot = {
   customEndStep: number;
   customStartStep: number;
   currentTime: string;
+  fireHotspotEnabled: boolean;
+  fireHotspotMinBrightness: number;
+  fireHotspotMinRedBlueDiff: number;
+  fireHotspotOpacity: number;
   gifColorCount: 64 | 128 | 256;
   gifDitherLevel: GifDitherLevel;
   gifFinalPauseMs: GifFinalPauseMs;

@@ -3,12 +3,14 @@ import { useEffect, useRef, useState } from 'react';
 export function useViewerPanelsState() {
   const [isAdjustmentsOpen, setIsAdjustmentsOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isFireHotspotOpen, setIsFireHotspotOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
 
   const adjustmentsRef = useRef<HTMLDivElement>(null);
   const exportModalRef = useRef<HTMLDivElement>(null);
+  const fireHotspotRef = useRef<HTMLDivElement>(null);
   const helpRef = useRef<HTMLDivElement>(null);
   const infoRef = useRef<HTMLDivElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
@@ -22,6 +24,9 @@ export function useViewerPanelsState() {
       }
       if (adjustmentsRef.current && !adjustmentsRef.current.contains(target)) {
         setIsAdjustmentsOpen(false);
+      }
+      if (fireHotspotRef.current && !fireHotspotRef.current.contains(target)) {
+        setIsFireHotspotOpen(false);
       }
       if (exportModalRef.current && !exportModalRef.current.contains(target)) {
         setIsExportModalOpen(false);
@@ -38,13 +43,14 @@ export function useViewerPanelsState() {
       if (event.key === 'Escape') {
         setIsInfoOpen(false);
         setIsAdjustmentsOpen(false);
+        setIsFireHotspotOpen(false);
         setIsExportModalOpen(false);
         setIsHelpOpen(false);
         setIsOverflowMenuOpen(false);
       }
     };
 
-    if (isInfoOpen || isAdjustmentsOpen || isExportModalOpen || isHelpOpen || isOverflowMenuOpen) {
+    if (isInfoOpen || isAdjustmentsOpen || isFireHotspotOpen || isExportModalOpen || isHelpOpen || isOverflowMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleEsc);
     }
@@ -53,21 +59,24 @@ export function useViewerPanelsState() {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [isInfoOpen, isAdjustmentsOpen, isExportModalOpen, isHelpOpen, isOverflowMenuOpen]);
+  }, [isInfoOpen, isAdjustmentsOpen, isFireHotspotOpen, isExportModalOpen, isHelpOpen, isOverflowMenuOpen]);
 
   return {
     adjustmentsRef,
     exportModalRef,
+    fireHotspotRef,
     helpRef,
     infoRef,
     isAdjustmentsOpen,
     isExportModalOpen,
+    isFireHotspotOpen,
     isHelpOpen,
     isInfoOpen,
     isOverflowMenuOpen,
     overflowMenuRef,
     setIsAdjustmentsOpen,
     setIsExportModalOpen,
+    setIsFireHotspotOpen,
     setIsHelpOpen,
     setIsInfoOpen,
     setIsOverflowMenuOpen,

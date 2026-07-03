@@ -25,6 +25,14 @@ is centered on France; the map can be freely panned over Europe and Africa.
   - VIS + IR (Sandwich mode)
   - RGB + IR (Cloud-only)
   - RGB + VIS + IR (Hybrid)
+- **Fire hotspot overlay** (Fire Temperature RGB, 500 m resolution): an
+  independent, always-on-top layer toggled from its own 🔥 button, separate
+  from the RGB/VIS/IR combination in use. It isolates the hottest pixels of
+  EUMETSAT's Fire Temperature RGB product (intense fires read yellow-white,
+  cooler/smaller ones red) via live-adjustable thresholds — opacity,
+  detection sensitivity (red/blue channel gap), and minimum brightness —
+  rather than a fixed cutoff, since bare soil and deserts can also read
+  red-ish in that product depending on sun angle
 
 ### Adjustments & Refinement
 
@@ -85,9 +93,10 @@ Enhance your view with map overlays:
   - Dithering levels: none / low / medium / high
   - Export progress integrated in the export button
 - **Bilingual export labels** (French/English)
-- **Overlay integration** – borders, departments, cities, a date/layer info
-  badge, and a source watermark are rendered directly into exported images,
-  scaled to stay legible at every export resolution
+- **Overlay integration** – borders, departments, cities, the fire hotspot
+  layer (when enabled), a date/layer info badge, and a source watermark are
+  rendered directly into exported images, scaled to stay legible at every
+  export resolution
 - **Resolution- and timestamp-tagged filenames** (e.g.
   `RGB_VIS_2560x1312_2026-07-03_08-10.png`) — the filename preview shown in
   the download modal always matches the file you actually get
@@ -104,6 +113,7 @@ Enhance your view with map overlays:
   - `L`: jump to the latest available time
   - `A`: toggle the animation (GIF) modal
   - `D`: open the download modal
+  - `F`: toggle the fire hotspot overlay on/off
   - `S`: toggle the adjustments panel
   - `I`: toggle the info modal
   - `R`: reset adjustments to defaults
@@ -192,7 +202,10 @@ directly from EUMETSAT's public WMS endpoint, and all state lives client-side
    (contrast, brightness, saturation, etc.)
 4. **Add Overlays**: Enable borders, departments, and cities from the Adjustments
    panel
-5. **Download**: Click "Download" to preview each available format as a
+5. **Spot fires**: Click the 🔥 button to open its own panel, enable the fire
+   hotspot overlay, and tune opacity/sensitivity/brightness thresholds live
+   against the current view
+6. **Download**: Click "Download" to preview each available format as a
    thumbnail, pick a file format (PNG/JPEG) and resolution, then export —
    you'll get a single file directly if one format is selected, or a ZIP if
    several are
@@ -208,6 +221,7 @@ directly from EUMETSAT's public WMS endpoint, and all state lives client-side
 | **RGB True Color** | Visible spectrum (0.44–0.64 µm) | Natural color visualization | ~1 km |
 | **VIS 0.6 µm** | 0.64 µm | Cloud detection, daytime detail | ~0.5 km (HRFI) |
 | **IR 10.5 µm** | 10.5 µm | Cloud-top temperature, night analysis | ~1 km (HRFI) |
+| **Fire Temperature RGB** | 3.8 / 2.2 / 1.6 µm composite | Wildfire detection and intensity | ~0.5 km |
 
 For technical documentation, see:
 
