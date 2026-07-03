@@ -380,6 +380,23 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
                 />
                 {t('cities')}
               </label>
+              {mapOptions.showCities && (
+                <div className="pl-6">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-500', 'text-slate-400')}>{t('cityDensity')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{mapOptions.cityDensity.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.25"
+                    max="3"
+                    step="0.25"
+                    value={mapOptions.cityDensity}
+                    onChange={(e) => onMapOptionsChange({ ...mapOptions, cityDensity: parseFloat(e.target.value) })}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                  />
+                </div>
+              )}
             </div>
 
             {activeLayers.vis && (

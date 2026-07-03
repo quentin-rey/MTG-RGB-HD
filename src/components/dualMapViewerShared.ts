@@ -59,6 +59,11 @@ export type HdEnhancementPreset = 'natural' | 'balanced' | 'punchy' | 'analyze' 
 export type ExportKind = 'vis' | 'rgb' | 'ir' | 'hd' | 'sandwich' | 'hybrid';
 export type MapOptions = {
   bordersOpacity: number;
+  /** Multiplier on the per-zoom city visibility thresholds in `getVisibleCityFeatures`
+   * (useDualMapLeaflet.ts): scales the population floor down and the on-screen city cap up as it
+   * increases, so 1 keeps the original defaults, <1 shows only the biggest cities, and >1 shows
+   * more/smaller ones. */
+  cityDensity: number;
   franceDepartmentsOpacity: number;
   showBorders: boolean;
   showCities: boolean;

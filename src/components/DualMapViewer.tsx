@@ -584,6 +584,7 @@ export default function DualMapViewer() {
   const [mapOptions, setMapOptions] = useState<MapOptions>(() => {
     const defaults: MapOptions = {
       bordersOpacity: 0.4,
+      cityDensity: 1,
       franceDepartmentsOpacity: 0.9,
       showBorders: false,
       showCities: false,

@@ -178,8 +178,16 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     if (!allCities || zoom < 4) return [];
 
     const paddedBounds = bounds.pad(0.2);
-    const minPopulation = zoom >= 8 ? 25000 : zoom >= 7 ? 60000 : zoom >= 6 ? 120000 : zoom >= 5 ? 300000 : 700000;
-    const hardLimit = zoom >= 8 ? 250 : zoom >= 6 ? 180 : 120;
+    // cityDensity (user-adjustable slider, default 1) scales both knobs in the same direction:
+    // above 1, the population floor drops (more, smaller cities qualify) and the on-screen cap
+    // rises (room to actually show them); below 1, only the biggest cities pass and fewer slots
+    // are available. Dividing/multiplying by the same factor keeps the two effects proportional
+    // instead of one dominating the other.
+    const cityDensity = Math.max(0.25, Math.min(3, mapOptions.cityDensity ?? 1));
+    const baseMinPopulation = zoom >= 8 ? 25000 : zoom >= 7 ? 60000 : zoom >= 6 ? 120000 : zoom >= 5 ? 300000 : 700000;
+    const baseHardLimit = zoom >= 8 ? 250 : zoom >= 6 ? 180 : 120;
+    const minPopulation = baseMinPopulation / cityDensity;
+    const hardLimit = Math.max(1, Math.round(baseHardLimit * cityDensity));
     // Cities near each other in real distance (e.g. the Rhine-Ruhr conurbation, or Lille/Antwerp/
     // Lyon/Turin at a wide zoom) project to only a few screen pixels apart at low/mid zoom, so
     // their dot+label pairs visually cram into each other with no cue that they're actually
