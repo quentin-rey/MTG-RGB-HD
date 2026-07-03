@@ -345,6 +345,10 @@ export default function DualMapViewer() {
     const stored = readStoredJson<ActiveLayers>(STORAGE_KEYS.activeLayers, DEFAULT_ACTIVE_LAYERS);
     return sanitizeActiveLayers(stored);
   });
+  const [fireHotspotEnabled, setFireHotspotEnabled] = useState<boolean>(() => {
+    if (typeof sharedSnapshot?.fireHotspotEnabled === 'boolean') return sharedSnapshot.fireHotspotEnabled;
+    return readStoredJson<boolean>(STORAGE_KEYS.fireHotspotEnabled, false);
+  });
   const [language, setLanguage] = useState<Language>(() => {
     if (sharedSnapshot?.language === 'fr' || sharedSnapshot?.language === 'en') {
       return sharedSnapshot.language;
@@ -370,16 +374,19 @@ export default function DualMapViewer() {
   const {
     adjustmentsRef,
     exportModalRef,
+    fireHotspotRef,
     helpRef,
     infoRef,
     isAdjustmentsOpen,
     isExportModalOpen,
+    isFireHotspotOpen,
     isHelpOpen,
     isInfoOpen,
     isOverflowMenuOpen,
     overflowMenuRef,
     setIsAdjustmentsOpen,
     setIsExportModalOpen,
+    setIsFireHotspotOpen,
     setIsHelpOpen,
     setIsInfoOpen,
     setIsOverflowMenuOpen,
@@ -389,6 +396,9 @@ export default function DualMapViewer() {
 
   const {
     autoReduceVisAtNight,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     hdEnhanceEnabled,
     hdEnhanceHighlightProtection,
     hdEnhanceLocalContrast,
@@ -416,6 +426,9 @@ export default function DualMapViewer() {
     setHdEnhanceShadowProtection,
     setHdEnhanceSharpen,
     setHdEnhanceStrength,
+    setFireHotspotMinBrightness,
+    setFireHotspotMinRedBlueDiff,
+    setFireHotspotOpacity,
     setIrStyle,
     setRgbHdOpacity,
     setRgbSaturation,
@@ -443,6 +456,15 @@ export default function DualMapViewer() {
     }
     if (typeof sharedSnapshot.sandwichOpacity === 'number') {
       setSandwichOpacity(Math.max(0.1, Math.min(1, sharedSnapshot.sandwichOpacity)));
+    }
+    if (typeof sharedSnapshot.fireHotspotOpacity === 'number') {
+      setFireHotspotOpacity(Math.max(0.1, Math.min(1, sharedSnapshot.fireHotspotOpacity)));
+    }
+    if (typeof sharedSnapshot.fireHotspotMinRedBlueDiff === 'number') {
+      setFireHotspotMinRedBlueDiff(Math.max(0, Math.min(255, sharedSnapshot.fireHotspotMinRedBlueDiff)));
+    }
+    if (typeof sharedSnapshot.fireHotspotMinBrightness === 'number') {
+      setFireHotspotMinBrightness(Math.max(0, Math.min(255, sharedSnapshot.fireHotspotMinBrightness)));
     }
     if (typeof sharedSnapshot.autoReduceVisAtNight === 'boolean') {
       setAutoReduceVisAtNight(sharedSnapshot.autoReduceVisAtNight);
@@ -489,6 +511,9 @@ export default function DualMapViewer() {
     }
   }, [
     setAutoReduceVisAtNight,
+    setFireHotspotMinBrightness,
+    setFireHotspotMinRedBlueDiff,
+    setFireHotspotOpacity,
     setHdEnhanceEnabled,
     setHdEnhanceHighlightProtection,
     setHdEnhanceLocalContrast,
@@ -511,6 +536,10 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.activeLayers, JSON.stringify(activeLayers));
   }, [activeLayers]);
+
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.fireHotspotEnabled, JSON.stringify(fireHotspotEnabled));
+  }, [fireHotspotEnabled]);
 
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.language, JSON.stringify(language));
@@ -663,6 +692,10 @@ export default function DualMapViewer() {
     autoReduceVisAtNight,
     activeLayers,
     currentTime,
+    fireHotspotEnabled,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     initialMapView,
     irStyle,
     mapOptions,
@@ -858,6 +891,10 @@ export default function DualMapViewer() {
         map: map2Instance.current,
         mapContainer: map2Ref.current,
         activeLayers,
+        fireHotspotEnabled,
+        fireHotspotMinBrightness,
+        fireHotspotMinRedBlueDiff,
+        fireHotspotOpacity,
         irStyle,
         visBrightness,
         visContrast,
@@ -924,6 +961,10 @@ export default function DualMapViewer() {
       mapContainer: map2Ref.current,
       currentTime,
       activeLayers,
+      fireHotspotEnabled,
+      fireHotspotMinBrightness,
+      fireHotspotMinRedBlueDiff,
+      fireHotspotOpacity,
       irStyle,
       visBrightness,
       visContrast,
@@ -1047,6 +1088,10 @@ export default function DualMapViewer() {
       customEndStep,
       customStartStep,
       currentTime,
+      fireHotspotEnabled,
+      fireHotspotMinBrightness,
+      fireHotspotMinRedBlueDiff,
+      fireHotspotOpacity,
       gifColorCount,
       gifDitherLevel,
       gifFinalPauseMs,
@@ -1113,6 +1158,12 @@ export default function DualMapViewer() {
         return;
       }
 
+      if (lowerKey === 'f') {
+        event.preventDefault();
+        setFireHotspotEnabled((prev) => !prev);
+        return;
+      }
+
       if (lowerKey === 'l') {
         event.preventDefault();
         handleTimeChange(getLatestAvailableTime());
@@ -1149,6 +1200,7 @@ export default function DualMapViewer() {
     handleTimeChange,
     openExportModal,
     resetAdjustments,
+    setFireHotspotEnabled,
     setIsAdjustmentsOpen,
     setIsHelpOpen,
     setIsInfoOpen,
@@ -1357,6 +1409,11 @@ export default function DualMapViewer() {
             autoReduceVisAtNight={autoReduceVisAtNight}
             effectiveHybridVisOpacity={effectiveHybridVisOpacity}
             effectiveSandwichOpacity={effectiveSandwichOpacity}
+            fireHotspotEnabled={fireHotspotEnabled}
+            fireHotspotMinBrightness={fireHotspotMinBrightness}
+            fireHotspotMinRedBlueDiff={fireHotspotMinRedBlueDiff}
+            fireHotspotOpacity={fireHotspotOpacity}
+            fireHotspotRef={fireHotspotRef}
             hdEnhanceEnabled={hdEnhanceEnabled}
             hdEnhanceHighlightProtection={hdEnhanceHighlightProtection}
             hdEnhanceLocalContrast={hdEnhanceLocalContrast}
@@ -1369,9 +1426,15 @@ export default function DualMapViewer() {
             hdEnhanceStrength={hdEnhanceStrength}
             irStyle={irStyle}
             isAdjustmentsOpen={isAdjustmentsOpen}
+            isFireHotspotOpen={isFireHotspotOpen}
             mapOptions={mapOptions}
             onActiveLayersChange={(next) => setActiveLayers(sanitizeActiveLayers(next))}
             onAutoReduceVisAtNightChange={setAutoReduceVisAtNight}
+            onFireHotspotEnabledChange={setFireHotspotEnabled}
+            onFireHotspotMinBrightnessChange={setFireHotspotMinBrightness}
+            onFireHotspotMinRedBlueDiffChange={setFireHotspotMinRedBlueDiff}
+            onFireHotspotOpacityChange={setFireHotspotOpacity}
+            onToggleFireHotspot={() => setIsFireHotspotOpen((prev) => !prev)}
             onHdEnhanceEnabledChange={setHdEnhanceEnabled}
             onHdEnhanceHighlightProtectionChange={(value) => applyHdSliderChange(() => setHdEnhanceHighlightProtection(value))}
             onHdEnhanceLocalContrastChange={(value) => applyHdSliderChange(() => setHdEnhanceLocalContrast(value))}
@@ -1485,6 +1548,7 @@ export default function DualMapViewer() {
         exportFormat={exportFormat}
         exportModalRef={exportModalRef}
         exportResolution={exportResolution}
+        fireHotspotEnabled={fireHotspotEnabled}
         exportResolutionText={(() => {
           const container = map2Ref.current;
           if (!container) return `${exportResolution}x${exportResolution}`;

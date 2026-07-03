@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import {
+  DEFAULT_FIRE_HOTSPOT_THRESHOLDS,
   type HdEnhancementPreset,
   IR_STYLES,
   STORAGE_KEYS,
@@ -13,6 +14,9 @@ import {
 
 const DEFAULTS = {
   autoReduceVisAtNight: true,
+  fireHotspotMinBrightness: DEFAULT_FIRE_HOTSPOT_THRESHOLDS.minBrightness,
+  fireHotspotMinRedBlueDiff: DEFAULT_FIRE_HOTSPOT_THRESHOLDS.minRedBlueDiff,
+  fireHotspotOpacity: 0.9,
   hdEnhanceEnabled: false,
   hdEnhanceHighlightProtection: 0.3,
   hdEnhanceLocalContrast: 0.25,
@@ -71,6 +75,15 @@ export function useImageAdjustments() {
     const saved = readStoredString(STORAGE_KEYS.irStyle, DEFAULTS.irStyle);
     return IR_STYLES.some((style) => style.id === saved) ? (saved as IrStyle) : DEFAULTS.irStyle;
   });
+  const [fireHotspotOpacity, setFireHotspotOpacity] = useState(() =>
+    readStoredNumber(STORAGE_KEYS.fireHotspotOpacity, DEFAULTS.fireHotspotOpacity),
+  );
+  const [fireHotspotMinRedBlueDiff, setFireHotspotMinRedBlueDiff] = useState(() =>
+    readStoredNumber(STORAGE_KEYS.fireHotspotMinRedBlueDiff, DEFAULTS.fireHotspotMinRedBlueDiff),
+  );
+  const [fireHotspotMinBrightness, setFireHotspotMinBrightness] = useState(() =>
+    readStoredNumber(STORAGE_KEYS.fireHotspotMinBrightness, DEFAULTS.fireHotspotMinBrightness),
+  );
 
   useEffect(() => {
     try {
@@ -99,8 +112,14 @@ export function useImageAdjustments() {
     safeSetLocalStorage(STORAGE_KEYS.sandwichOpacity, String(sandwichOpacity));
     safeSetLocalStorage(STORAGE_KEYS.autoReduceVisAtNight, String(autoReduceVisAtNight));
     safeSetLocalStorage(STORAGE_KEYS.irStyle, irStyle);
+    safeSetLocalStorage(STORAGE_KEYS.fireHotspotOpacity, String(fireHotspotOpacity));
+    safeSetLocalStorage(STORAGE_KEYS.fireHotspotMinRedBlueDiff, String(fireHotspotMinRedBlueDiff));
+    safeSetLocalStorage(STORAGE_KEYS.fireHotspotMinBrightness, String(fireHotspotMinBrightness));
   }, [
     autoReduceVisAtNight,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     hdEnhanceEnabled,
     hdEnhanceHighlightProtection,
     hdEnhanceLocalContrast,
@@ -137,6 +156,9 @@ export function useImageAdjustments() {
     setSandwichOpacity(DEFAULTS.sandwichOpacity);
     setAutoReduceVisAtNight(DEFAULTS.autoReduceVisAtNight);
     setIrStyle(DEFAULTS.irStyle);
+    setFireHotspotOpacity(DEFAULTS.fireHotspotOpacity);
+    setFireHotspotMinRedBlueDiff(DEFAULTS.fireHotspotMinRedBlueDiff);
+    setFireHotspotMinBrightness(DEFAULTS.fireHotspotMinBrightness);
   };
 
   const resetHdEnhancement = () => {
@@ -154,6 +176,9 @@ export function useImageAdjustments() {
 
   return {
     autoReduceVisAtNight,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     hdEnhanceEnabled,
     hdEnhanceHighlightProtection,
     hdEnhanceLocalContrast,
@@ -181,6 +206,9 @@ export function useImageAdjustments() {
     setHdEnhanceShadowProtection,
     setHdEnhanceSharpen,
     setHdEnhanceStrength,
+    setFireHotspotMinBrightness,
+    setFireHotspotMinRedBlueDiff,
+    setFireHotspotOpacity,
     setIrStyle,
     setRgbHdOpacity,
     setRgbSaturation,

@@ -5,11 +5,14 @@ import {
   type ActiveLayers,
   CITY_GEOJSON_URL,
   computeCloudOnlyIrRgba,
+  computeFireHotspotRgba,
   computeLayerBlendState,
   DEFAULT_FRANCE_BOUNDS,
   DEFAULT_MAP_CENTER,
+  type FireHotspotThresholds,
   FRANCE_DEPARTMENTS_GEOJSON_URL,
   getSolarElevation,
+  LAYER_FIRETEMP,
   LAYER_IR,
   LAYER_RGB,
   LAYER_VIS,
@@ -23,6 +26,10 @@ import {
 type UseDualMapLeafletArgs = {
   currentTime: string;
   activeLayers: ActiveLayers;
+  fireHotspotEnabled: boolean;
+  fireHotspotMinBrightness: number;
+  fireHotspotMinRedBlueDiff: number;
+  fireHotspotOpacity: number;
   irStyle: IrStyle;
   rgbHdOpacity: number;
   sandwichOpacity: number;
@@ -36,6 +43,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const {
     currentTime,
     activeLayers,
+    fireHotspotEnabled,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     irStyle,
     rgbHdOpacity,
     sandwichOpacity,
@@ -54,6 +65,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const visOverlayLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const irOverlayLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const irCloudOnlyLayerRef = useRef<L.GridLayer | null>(null);
+  const fireHotspotLayerRef = useRef<L.GridLayer | null>(null);
+  const fireHotspotTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const fireHotspotTileCacheOrderRef = useRef<string[]>([]);
+  const fireHotspotThresholdDebounceRef = useRef<number | null>(null);
   const map1BordersRef = useRef<L.GeoJSON | null>(null);
   const map2BordersRef = useRef<L.GeoJSON | null>(null);
   const map1DepartmentsRef = useRef<L.GeoJSON | null>(null);
@@ -86,6 +101,32 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     lat: DEFAULT_MAP_CENTER[0],
     lng: DEFAULT_MAP_CENTER[1],
   });
+  // Debounced copy of the fire hotspot thresholds: dragging those sliders fires onChange on every
+  // intermediate value, and each one would otherwise tear down and re-fetch the whole hotspot
+  // tile layer. Debouncing means the layer only rebuilds once the slider settles, instead of on
+  // every tick — the previous version rebuilt (and re-triggered the shared tile-loading indicator)
+  // dozens of times per drag, which read as "the whole map is recalculating".
+  const [debouncedFireHotspotThresholds, setDebouncedFireHotspotThresholds] = useState<FireHotspotThresholds>({
+    minRedBlueDiff: fireHotspotMinRedBlueDiff,
+    minBrightness: fireHotspotMinBrightness,
+  });
+
+  useEffect(() => {
+    if (fireHotspotThresholdDebounceRef.current !== null) {
+      window.clearTimeout(fireHotspotThresholdDebounceRef.current);
+    }
+    fireHotspotThresholdDebounceRef.current = window.setTimeout(() => {
+      setDebouncedFireHotspotThresholds({ minRedBlueDiff: fireHotspotMinRedBlueDiff, minBrightness: fireHotspotMinBrightness });
+      fireHotspotThresholdDebounceRef.current = null;
+    }, 400);
+
+    return () => {
+      if (fireHotspotThresholdDebounceRef.current !== null) {
+        window.clearTimeout(fireHotspotThresholdDebounceRef.current);
+        fireHotspotThresholdDebounceRef.current = null;
+      }
+    };
+  }, [fireHotspotMinRedBlueDiff, fireHotspotMinBrightness]);
 
   const solarElevation = getSolarElevation(new Date(currentTime + 'Z'), viewportCenter.lat, viewportCenter.lng);
   const {
@@ -456,7 +497,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         const tileCtx = tile.getContext('2d')!;
         tileCtx.drawImage(cachedTile, 0, 0);
         touchCacheKey(cacheKey);
-        done(null, tile);
+        // Leaflet's GridLayer._addTile calls createTile(coords, done) and only registers
+        // this._tiles[key] *after* createTile returns. Calling done() synchronously here (i.e.
+        // before this function returns) makes _tileReady() run while that bookkeeping doesn't
+        // exist yet, so it silently bails out (`if (!this._tiles[key]) return;`) — the tile div
+        // is still appended to the DOM, but never gets marked loaded/active or faded to visible,
+        // so it stays invisible until something else (e.g. a zoom change) forces Leaflet to
+        // rebuild its tile grid. Deferring done() by a microtask lets createTile return first, so
+        // _addTile's registration always happens before _tileReady runs.
+        Promise.resolve().then(() => done(null, tile));
         return tile;
       }
 
@@ -515,6 +564,106 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
           const outCtx = tile.getContext('2d')!;
           const outImage = outCtx.createImageData(256, 256);
           outImage.data.set(computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight: normalizedVisWeight }));
+          outCtx.putImageData(outImage, 0, 0);
+
+          const cacheCanvas = document.createElement('canvas');
+          cacheCanvas.width = 256;
+          cacheCanvas.height = 256;
+          const cacheCtx = cacheCanvas.getContext('2d')!;
+          cacheCtx.drawImage(tile, 0, 0);
+          setCachedTile(cacheKey, cacheCanvas);
+
+          done(null, tile);
+        })
+        .catch((error: Error) => {
+          done(error, tile);
+        });
+
+      return tile;
+    };
+
+    return layer;
+  };
+
+  const createFireHotspotLayer = (isoTime: string, thresholds: FireHotspotThresholds) => {
+    const FIRE_HOTSPOT_TILE_CACHE_LIMIT = 320;
+
+    const touchCacheKey = (key: string) => {
+      const idx = fireHotspotTileCacheOrderRef.current.indexOf(key);
+      if (idx >= 0) {
+        fireHotspotTileCacheOrderRef.current.splice(idx, 1);
+      }
+      fireHotspotTileCacheOrderRef.current.push(key);
+    };
+
+    const setCachedTile = (key: string, canvas: HTMLCanvasElement) => {
+      fireHotspotTileCacheRef.current.set(key, canvas);
+      touchCacheKey(key);
+
+      while (fireHotspotTileCacheOrderRef.current.length > FIRE_HOTSPOT_TILE_CACHE_LIMIT) {
+        const oldest = fireHotspotTileCacheOrderRef.current.shift();
+        if (!oldest) break;
+        fireHotspotTileCacheRef.current.delete(oldest);
+      }
+    };
+
+    const layer = L.gridLayer({
+      tileSize: 256,
+      opacity: 1,
+      zIndex: 340,
+      className: 'fire-hotspot-layer-tiles',
+    } as any);
+
+    (layer as any).createTile = (coords: L.Coords, done: (error: Error | null, tile: HTMLCanvasElement) => void) => {
+      const tile = document.createElement('canvas');
+      tile.width = 256;
+      tile.height = 256;
+
+      const cacheKey = `${isoTime}|${thresholds.minRedBlueDiff}|${thresholds.minBrightness}|${coords.z}|${coords.x}|${coords.y}`;
+      const cachedTile = fireHotspotTileCacheRef.current.get(cacheKey);
+      if (cachedTile) {
+        const tileCtx = tile.getContext('2d')!;
+        tileCtx.drawImage(cachedTile, 0, 0);
+        touchCacheKey(cacheKey);
+        // See the identical comment in createCloudOnlyIrLayer above: calling done() synchronously
+        // here — before this function returns — runs into a Leaflet GridLayer bug where
+        // _tileReady() fires before _addTile() has registered this._tiles[key], so it silently
+        // bails out and the tile never fades to visible. This was the exact cause of "toggle the
+        // fire layer off then on again and it stays blank until you zoom" — the first activation
+        // always goes through the async network-fetch path below (done() fires naturally on a
+        // later tick), but re-enabling hits already-cached tiles and took this synchronous path.
+        Promise.resolve().then(() => done(null, tile));
+        return tile;
+      }
+
+      const map = map2Instance.current;
+      if (!map) {
+        done(null, tile);
+        return tile;
+      }
+
+      const nwPoint = L.point(coords.x * 256, coords.y * 256);
+      const sePoint = nwPoint.add([256, 256]);
+      const nwLatLng = map.unproject(nwPoint, coords.z);
+      const seLatLng = map.unproject(sePoint, coords.z);
+      const nw3857 = L.CRS.EPSG3857.project(nwLatLng);
+      const se3857 = L.CRS.EPSG3857.project(seLatLng);
+      const bbox = `${nw3857.x},${se3857.y},${se3857.x},${nw3857.y}`;
+
+      const fireUrl = buildWmsTileUrl(LAYER_FIRETEMP, '', bbox, isoTime);
+
+      void loadImage(fireUrl)
+        .then((fireImage) => {
+          const fireCanvas = document.createElement('canvas');
+          fireCanvas.width = 256;
+          fireCanvas.height = 256;
+          const fireCtx = fireCanvas.getContext('2d')!;
+          fireCtx.drawImage(fireImage, 0, 0);
+          const fireData = fireCtx.getImageData(0, 0, 256, 256).data;
+
+          const outCtx = tile.getContext('2d')!;
+          const outImage = outCtx.createImageData(256, 256);
+          outImage.data.set(computeFireHotspotRgba(fireData, thresholds));
           outCtx.putImageData(outImage, 0, 0);
 
           const cacheCanvas = document.createElement('canvas');
@@ -813,6 +962,33 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     };
   }, [isCloudOnlyIrMode, isVisIrMode, currentTime, irStyle, cloudOnlyIrVisMaskWeight]);
 
+  // Fire hotspot overlay: isolated from the WMS base/overlay effect above for the same reason
+  // as the cloud-only-IR canvas layer — its thresholds are tuned live via sliders, and bundling
+  // it into the big rebuild effect would force a full tile refetch of every other layer on
+  // every threshold tweak. Thresholds are the debounced copy (see above) so dragging a slider
+  // doesn't tear the layer down on every intermediate value. Its tile loading is deliberately
+  // NOT wired into bindLayerLoading/the shared "Chargement des tuiles" indicator: that banner is
+  // meant for the base satellite imagery, and wiring this lightweight, client-side-recomputed
+  // overlay into it made every threshold tweak look like the whole map was reloading.
+  useEffect(() => {
+    const map2 = map2Instance.current;
+    if (!map2 || !fireHotspotEnabled) {
+      if (fireHotspotLayerRef.current && map2?.hasLayer(fireHotspotLayerRef.current)) {
+        fireHotspotLayerRef.current.remove();
+      }
+      return;
+    }
+
+    const isoTime = new Date(currentTime + 'Z').toISOString();
+
+    if (fireHotspotLayerRef.current && map2.hasLayer(fireHotspotLayerRef.current)) {
+      fireHotspotLayerRef.current.remove();
+    }
+    fireHotspotLayerRef.current = createFireHotspotLayer(isoTime, debouncedFireHotspotThresholds);
+    fireHotspotLayerRef.current.addTo(map2);
+    fireHotspotLayerRef.current.setOpacity(fireHotspotOpacity);
+  }, [fireHotspotEnabled, currentTime, debouncedFireHotspotThresholds]);
+
   useEffect(() => {
     const map2 = map2Instance.current;
     const visOverlayLayer = visOverlayLayerRef.current;
@@ -838,6 +1014,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     if (map2 && isCloudOnlyIrMode && irCloudOnlyLayer && map2.hasLayer(irCloudOnlyLayer)) {
       irCloudOnlyLayer.setOpacity(effectiveCloudOnlyIrOpacity);
     }
+    if (map2 && fireHotspotEnabled && fireHotspotLayerRef.current && map2.hasLayer(fireHotspotLayerRef.current)) {
+      fireHotspotLayerRef.current.setOpacity(fireHotspotOpacity);
+    }
   }, [
     baseLayer,
     activeLayers.rgb,
@@ -845,6 +1024,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     currentVisOverlayOpacity,
     effectiveCloudOnlyIrOpacity,
     effectiveHybridIrOpacity,
+    fireHotspotEnabled,
+    fireHotspotOpacity,
     isHybridMode,
     isVisIrMode,
     isRgbIrMode,

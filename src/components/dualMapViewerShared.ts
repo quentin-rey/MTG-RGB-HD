@@ -2,6 +2,7 @@ export const WMS_URL_DIRECT = 'https://view.eumetsat.int/geoserver/ows';
 export const LAYER_VIS = 'mtg_fd:vis06_hrfi';
 export const LAYER_RGB = 'mtg_fd:rgb_truecolour';
 export const LAYER_IR = 'mtg_fd:ir105_hrfi';
+export const LAYER_FIRETEMP = 'mtg_fd:rgb_firetemperature';
 export const IR_STYLES = [
   { id: 'mtg_fd:mtg_fd_ir105_hrfi_style_02', label: 'IR 10.5 - Style 02' },
   { id: 'mtg_fd:mtg_fd_ir105_hrfi_style_01', label: 'IR 10.5 - Style 01' },
@@ -17,6 +18,10 @@ export const FRANCE_DEPARTMENTS_GEOJSON_URL = 'https://raw.githubusercontent.com
 export const STORAGE_KEYS = {
   activeLayers: 'mtg_active_layers',
   autoReduceVisAtNight: 'mtg_auto_reduce_vis_night',
+  fireHotspotEnabled: 'mtg_fire_hotspot_enabled',
+  fireHotspotMinBrightness: 'mtg_fire_hotspot_min_brightness',
+  fireHotspotMinRedBlueDiff: 'mtg_fire_hotspot_min_red_blue_diff',
+  fireHotspotOpacity: 'mtg_fire_hotspot_opacity',
   hdEnhanceEnabled: 'mtg_hd_enhance_enabled',
   hdEnhanceHighlightProtection: 'mtg_hd_enhance_highlight_protection',
   hdEnhanceLocalContrast: 'mtg_hd_enhance_local_contrast',
@@ -404,6 +409,60 @@ export function computeLayerBlendState(params: {
     isIrOverlayEnabled,
     currentVisOverlayOpacity,
   };
+}
+
+export type FireHotspotThresholds = {
+  /** Minimum (red - blue) channel gap, 0-255. Fire Temperature RGB renders land/sea in blue-ish
+   * tones and fires in red/orange/yellow, so this is the primary discriminator. */
+  minRedBlueDiff: number;
+  /** Minimum brightness (max of R/G/B), 0-255. Filters out dim reddish noise (e.g. sun glint,
+   * bare soil at low sun angle) that passes the red/blue gap but isn't an actual hotspot. */
+  minBrightness: number;
+};
+
+export const DEFAULT_FIRE_HOTSPOT_THRESHOLDS: FireHotspotThresholds = {
+  minRedBlueDiff: 60,
+  minBrightness: 140,
+};
+
+/**
+ * Isolates fire hotspot pixels out of a Fire Temperature RGB tile. That WMS layer has no alpha
+ * transparency of its own (it's a full-disk composite, not sparse markers on a transparent
+ * background) and renders land/sea/cloud in blue-ish tones with fires in red-orange-to-white —
+ * but daytime bare soil/desert/coastline can also read as mildly red, so a fixed threshold would
+ * false-positive. The thresholds are therefore exposed as live-adjustable sliders
+ * (`FireHotspotThresholds`) rather than baked-in constants. Shared by the live per-tile renderer
+ * (useDualMapLeaflet) and the still/GIF export renderer (dualMapExport) for the same reason as
+ * `computeCloudOnlyIrRgba` below.
+ */
+export function computeFireHotspotRgba(
+  fireData: Uint8ClampedArray,
+  thresholds: FireHotspotThresholds,
+  alphaMultiplier = 1,
+): Uint8ClampedArray {
+  const { minRedBlueDiff, minBrightness } = thresholds;
+  const out = new Uint8ClampedArray(fireData.length);
+
+  for (let i = 0; i < out.length; i += 4) {
+    const r = fireData[i];
+    const g = fireData[i + 1];
+    const b = fireData[i + 2];
+    const brightness = Math.max(r, g, b);
+    const redBlueDiff = r - b;
+
+    if (redBlueDiff < minRedBlueDiff || brightness < minBrightness) {
+      out[i + 3] = 0;
+      continue;
+    }
+
+    const intensity = Math.max(0.55, Math.min(1, (redBlueDiff - minRedBlueDiff) / 120));
+    out[i] = r;
+    out[i + 1] = g;
+    out[i + 2] = b;
+    out[i + 3] = Math.round(255 * intensity * alphaMultiplier);
+  }
+
+  return out;
 }
 
 export type CloudOnlyIrRenderOptions = {

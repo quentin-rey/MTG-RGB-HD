@@ -3,10 +3,12 @@ import { applyPalette, GIFEncoder, nearestColorIndex, quantize } from 'gifenc';
 
 import {
   computeCloudOnlyIrRgba,
+  computeFireHotspotRgba,
   computeLayerBlendState,
   getExportBadge,
   getExportFileBaseName,
   getHdEnhancementProfile,
+  LAYER_FIRETEMP,
   LAYER_IR,
   LAYER_RGB,
   LAYER_VIS,
@@ -29,6 +31,10 @@ type DownloadSatellitePackOptions = {
   mapContainer: HTMLDivElement;
   currentTime: string;
   activeLayers: ActiveLayers;
+  fireHotspotEnabled: boolean;
+  fireHotspotMinBrightness: number;
+  fireHotspotMinRedBlueDiff: number;
+  fireHotspotOpacity: number;
   irStyle: IrStyle;
   visBrightness: number;
   visContrast: number;
@@ -507,6 +513,10 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     mapContainer,
     currentTime,
     activeLayers,
+    fireHotspotEnabled,
+    fireHotspotMinBrightness,
+    fireHotspotMinRedBlueDiff,
+    fireHotspotOpacity,
     irStyle,
     visBrightness,
     visContrast,
@@ -587,10 +597,11 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     || selectedKinds.has('hybrid')
     || (selectedKinds.has('hd') && activeLayers.rgb && activeLayers.vis && shouldPreferIrBaseAtNight);
 
-  const [imgVis, imgRgb, imgIr] = await Promise.all([
+  const [imgVis, imgRgb, imgIr, imgFiretemp] = await Promise.all([
     needsVis ? loadImage(buildWmsUrl(LAYER_VIS, '', bbox, width, height, isoTime)) : Promise.resolve(undefined),
     needsRgb ? loadImage(buildWmsUrl(LAYER_RGB, '', bbox, width, height, isoTime)) : Promise.resolve(undefined),
     needsIr ? loadImage(buildWmsUrl(LAYER_IR, irStyle, bbox, width, height, isoTime)) : Promise.resolve(undefined),
+    fireHotspotEnabled ? loadImage(buildWmsUrl(LAYER_FIRETEMP, '', bbox, width, height, isoTime)) : Promise.resolve(undefined),
   ]);
   onProgress?.(25);
 
@@ -856,6 +867,30 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   overlayCanvas.width = width;
   overlayCanvas.height = height;
   const overlayCtx = overlayCanvas.getContext('2d')!;
+
+  // Fire hotspot pixels are composited into the shared overlay canvas (like borders/city
+  // labels below) so they show up on every exported kind at once, rather than being tied to
+  // a specific ExportKind — matching the live view where the hotspot layer sits on top of
+  // whichever base layer combination is active.
+  if (fireHotspotEnabled && imgFiretemp) {
+    const fireTempCanvas = document.createElement('canvas');
+    fireTempCanvas.width = width;
+    fireTempCanvas.height = height;
+    const fireTempCtx = fireTempCanvas.getContext('2d')!;
+    fireTempCtx.drawImage(imgFiretemp, 0, 0);
+    const fireData = fireTempCtx.getImageData(0, 0, width, height).data;
+
+    const fireHotspotImage = overlayCtx.createImageData(width, height);
+    fireHotspotImage.data.set(
+      computeFireHotspotRgba(
+        fireData,
+        { minRedBlueDiff: fireHotspotMinRedBlueDiff, minBrightness: fireHotspotMinBrightness },
+        fireHotspotOpacity,
+      ),
+    );
+    overlayCtx.putImageData(fireHotspotImage, 0, 0);
+  }
+
   await drawOverlays(overlayCtx, width, height);
   onProgress?.(45);
 
