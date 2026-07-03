@@ -439,6 +439,24 @@ export default function DualMapViewer() {
     visContrast,
   } = useImageAdjustments();
 
+  // Once a shared view has been read into `sharedSnapshot` (above), strip the `view` query param
+  // from the address bar so it stops being the source of truth: without this, `initialMapView`
+  // (derived from `sharedSnapshot?.mapView` on every render) keeps winning over the user's actual
+  // panned position for reads that happen to re-run off this URL (e.g. a page refresh), which is
+  // what made the map appear to keep "snapping back" to the originally-shared spot instead of
+  // just applying it once. Runs once on mount, after the value has already been captured into
+  // state — removing the param doesn't affect the already-loaded `sharedSnapshot`.
+  useEffect(() => {
+    if (!sharedSnapshot || typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('view')) return;
+    params.delete('view');
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState(null, '', nextUrl);
+  }, [sharedSnapshot]);
+
   useEffect(() => {
     if (!sharedSnapshot) return;
 
