@@ -314,6 +314,7 @@ type ExportOverlayLocale = {
   layerLabelSingle: string;
   layerLabelPlural: string;
   dateUtcLabel: string;
+  fireHotspotSuffix: string;
 };
 
 function getExportOverlayLocale(language: Language): ExportOverlayLocale {
@@ -323,6 +324,7 @@ function getExportOverlayLocale(language: Language): ExportOverlayLocale {
       layerLabelSingle: 'LAYER',
       layerLabelPlural: 'LAYERS',
       dateUtcLabel: 'UTC DATE',
+      fireHotspotSuffix: 'FIRE',
     };
   }
 
@@ -331,6 +333,7 @@ function getExportOverlayLocale(language: Language): ExportOverlayLocale {
     layerLabelSingle: 'COUCHE',
     layerLabelPlural: 'COUCHES',
     dateUtcLabel: 'DATE UTC',
+    fireHotspotSuffix: 'FEUX',
   };
 }
 
@@ -463,13 +466,19 @@ function applyTopInfoBadges(
   layerType: string,
   locale: ExportOverlayLocale,
   scale: number,
+  fireHotspotEnabled: boolean,
 ) {
   const left = 10 * scale;
   const top = 10 * scale;
   const gap = 8 * scale;
-  const layerLabel = layerType.includes('+') ? locale.layerLabelPlural : locale.layerLabelSingle;
+  // Fire hotspots are baked into every exported kind (not tied to a specific ExportKind — see the
+  // compositing step in renderSatelliteFrames), so this is folded into the existing LAYER badge
+  // value (e.g. "RGB+VIS+FEUX") rather than a separate badge — it reads as one more layer in the
+  // composite, which is what it actually is on the rendered pixels.
+  const displayLayerType = fireHotspotEnabled ? `${layerType}+${locale.fireHotspotSuffix}` : layerType;
+  const layerLabel = displayLayerType.includes('+') ? locale.layerLabelPlural : locale.layerLabelSingle;
 
-  const layerBadge = drawInfoBadge(context, left, top, layerLabel, layerType, scale);
+  const layerBadge = drawInfoBadge(context, left, top, layerLabel, displayLayerType, scale);
   drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel, scale);
 }
 
@@ -909,7 +918,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     }
     tempCtx.drawImage(canvasObj, 0, 0);
     tempCtx.drawImage(overlayCanvas, 0, 0);
-    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale, overlayScale);
+    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale, overlayScale, fireHotspotEnabled);
     applyWatermark(tempCtx, width, height, exportOverlayLocale, overlayScale);
 
     return new Promise((resolve, reject) => {
