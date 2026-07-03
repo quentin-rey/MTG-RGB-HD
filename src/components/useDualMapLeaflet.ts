@@ -90,6 +90,17 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const loadingCycleRef = useRef(0);
   const hybridTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const hybridTileCacheOrderRef = useRef<string[]>([]);
+  // Deliberately NOT kept in sync with the `initialMapView` prop via an effect: React's
+  // useRef initial value is only honored on the very first render, so this permanently freezes
+  // the shared-link/remembered position at mount time, which is exactly the "initial" semantics
+  // the name promises. A prior version resynced it on every change via `useEffect(() => {
+  // initialMapViewRef.current = initialMapView }, [initialMapView])` — but `initialMapView` is
+  // recomputed as a brand-new object on every DualMapViewer render (sharedSnapshot?.mapView is
+  // read unconditionally for the whole session), so that effect kept re-arming this ref with the
+  // originally-shared coordinates. It's only consulted once, by the mount effect below (guarded
+  // to run once per mount), so in normal operation this was inert — but any future code path that
+  // re-triggers that guarded effect (map instances becoming null again) would silently snap the
+  // map back to the shared position instead of wherever the user had panned to.
   const initialMapViewRef = useRef<MapViewState | null>(initialMapView);
   const onMapViewChangeRef = useRef(onMapViewChange);
 
@@ -157,10 +168,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const isNightIrFallbackActive = shouldPreferIrBaseAtNight;
   const borderStrokeOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
   const departmentsStrokeOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
-
-  useEffect(() => {
-    initialMapViewRef.current = initialMapView;
-  }, [initialMapView]);
 
   useEffect(() => {
     onMapViewChangeRef.current = onMapViewChange;
