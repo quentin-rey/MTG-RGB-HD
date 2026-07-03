@@ -834,10 +834,10 @@ export function InfoModal(props: InfoModalProps) {
     <div className={`fixed inset-0 z-[500] flex items-center justify-center p-4 backdrop-blur-sm ${
       themedClass(isLight, 'bg-slate-900/35', 'bg-black/50')
     }`}>
-      <div ref={infoRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-xl w-full max-h-[85vh] overflow-y-auto ${
+      <div ref={infoRef} className={`flex flex-col border rounded-xl shadow-2xl max-w-xl w-full max-h-[85vh] overflow-hidden ${
         themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
-        <div className="flex items-center justify-between mb-4">
+        <div className="shrink-0 flex items-center justify-between px-6 pt-6 pb-4">
           <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('aboutTitle')}</h3>
           <button
             onClick={onClose}
@@ -850,7 +850,7 @@ export function InfoModal(props: InfoModalProps) {
           </button>
         </div>
 
-        <div className={`space-y-4 text-sm leading-relaxed ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
+        <div className={`ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 space-y-4 text-sm leading-relaxed ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
           <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
             <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoGoalTitle')}</h4>
             <p className="text-xs">{t('infoModalParagraph1')}</p>
@@ -899,10 +899,12 @@ export function InfoModal(props: InfoModalProps) {
             </div>
           </section>
 
-          <p className="text-xs">
+          <p className="text-xs pb-6">
             <strong className={themedClass(isLight, 'text-slate-900', 'text-white')}>{t('aboutAuthor')}</strong>
           </p>
+        </div>
 
+        <div className={`shrink-0 px-6 pb-6 pt-3 border-t ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <a
               href="https://github.com/quentin-rey/MTG-RGB-HD"
@@ -931,10 +933,10 @@ export function InfoModal(props: InfoModalProps) {
               {t('reportBug')}
             </a>
           </div>
-        </div>
 
-        <div className="mt-6 text-center text-xs text-slate-500 font-mono">
-          Version 1.4.1
+          <div className="mt-3 text-center text-xs text-slate-500 font-mono">
+            Version 1.4.1
+          </div>
         </div>
       </div>
     </div>
@@ -1210,10 +1212,10 @@ export function ExportModal(props: ExportModalProps) {
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
       themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
     }`}>
-      <div ref={exportModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
+      <div ref={exportModalRef} className={`flex flex-col border rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-hidden ${
         themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
-        <div className="flex items-center justify-between mb-4">
+        <div className="shrink-0 flex items-center justify-between px-6 pt-6 pb-4">
           <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('exportModalTitle')}</h3>
           <button
             onClick={onClose}
@@ -1225,6 +1227,8 @@ export function ExportModal(props: ExportModalProps) {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        <div className="ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 pb-4">
 
         <div className={`mb-4 grid grid-cols-2 gap-1 p-1 rounded-lg ${themedClass(isLight, 'bg-slate-100', 'bg-black/30')}`}>
           {([
@@ -1561,47 +1565,50 @@ export function ExportModal(props: ExportModalProps) {
             )}
           </div>
         )}
+        </div>
 
-        {isExportingCurrent && (
-          <div className="mt-4">
-            <div className={`flex justify-between text-xs mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-              <span>{t('generating')}</span>
-              <span className="font-mono">{currentProgress}%</span>
+        <div className={`shrink-0 px-6 pb-6 pt-3 border-t ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
+          {isExportingCurrent && (
+            <div className="mb-3">
+              <div className={`flex justify-between text-xs mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+                <span>{t('generating')}</span>
+                <span className="font-mono">{currentProgress}%</span>
+              </div>
+              <div className={`h-1.5 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
+                <div
+                  className="h-full bg-blue-500 transition-all duration-200 ease-out"
+                  style={{ width: `${currentProgress}%` }}
+                />
+              </div>
             </div>
-            <div className={`h-1.5 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
-              <div
-                className="h-full bg-blue-500 transition-all duration-200 ease-out"
-                style={{ width: `${currentProgress}%` }}
-              />
-            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onClose}
+              disabled={isExportingCurrent}
+              className={`px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                isLight
+                  ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                  : 'border-white/10 text-slate-200 hover:bg-white/10'
+              }`}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              onClick={isImageMode ? onConfirmImage : onExportGif}
+              disabled={!canConfirm || isExportingCurrent}
+              className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+                isLight
+                  ? 'bg-slate-900 text-white hover:bg-slate-700'
+                  : 'bg-white text-black hover:bg-slate-200'
+              }`}
+            >
+              {isExportingCurrent
+                ? `${t('generating')} ${currentProgress}%`
+                : isImageMode ? t('downloadSelection') : t('animationExportGif')}
+            </button>
           </div>
-        )}
-
-        <div className={`mt-6 pt-3 border-t flex items-center justify-end gap-2 ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
-          <button
-            onClick={onClose}
-            disabled={isExportingCurrent}
-            className={`px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-              isLight
-                ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                : 'border-white/10 text-slate-200 hover:bg-white/10'
-            }`}
-          >
-            {t('cancel')}
-          </button>
-          <button
-            onClick={isImageMode ? onConfirmImage : onExportGif}
-            disabled={!canConfirm || isExportingCurrent}
-            className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
-              isLight
-                ? 'bg-slate-900 text-white hover:bg-slate-700'
-                : 'bg-white text-black hover:bg-slate-200'
-            }`}
-          >
-            {isExportingCurrent
-              ? `${t('generating')} ${currentProgress}%`
-              : isImageMode ? t('downloadSelection') : t('animationExportGif')}
-          </button>
         </div>
       </div>
     </div>
@@ -1816,10 +1823,10 @@ export function HelpModal(props: HelpModalProps) {
     <div className={`fixed inset-0 z-[505] flex items-center justify-center p-4 backdrop-blur-sm ${
       themedClass(isLight, 'bg-slate-900/35', 'bg-black/50')
     }`}>
-      <div ref={helpRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
+      <div ref={helpRef} className={`flex flex-col border rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-hidden ${
         themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
-        <div className="flex items-center justify-between mb-4">
+        <div className="shrink-0 flex items-center justify-between px-6 pt-6 pb-4">
           <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('helpTitle')}</h3>
           <button
             onClick={onClose}
@@ -1832,7 +1839,7 @@ export function HelpModal(props: HelpModalProps) {
           </button>
         </div>
 
-        <div className="space-y-3 text-sm">
+        <div className="ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 pb-6 space-y-3 text-sm">
           {[
             {
               title: t('helpGroupTime'),
@@ -2108,22 +2115,6 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         </button>
       </div>
 
-      <FireHotspotPanel
-        fireHotspotEnabled={fireHotspotEnabled}
-        fireHotspotMinBrightness={fireHotspotMinBrightness}
-        fireHotspotMinRedBlueDiff={fireHotspotMinRedBlueDiff}
-        fireHotspotOpacity={fireHotspotOpacity}
-        fireHotspotRef={fireHotspotRef}
-        isOpen={isFireHotspotOpen}
-        onEnabledChange={onFireHotspotEnabledChange}
-        onMinBrightnessChange={onFireHotspotMinBrightnessChange}
-        onMinRedBlueDiffChange={onFireHotspotMinRedBlueDiffChange}
-        onOpacityChange={onFireHotspotOpacityChange}
-        onToggle={onToggleFireHotspot}
-        t={t}
-        theme={theme}
-      />
-
       <AdjustmentsPanel
         activeLayers={activeLayers}
         adjustmentsRef={adjustmentsRef}
@@ -2172,6 +2163,29 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         theme={theme}
         visBrightness={visBrightness}
         visContrast={visContrast}
+      />
+
+      {/* Last in the row on purpose: FireHotspotPanel's dropdown anchors with `right-0` on its
+          own wrapper (same pattern as AdjustmentsPanel above), which only lines up with the true
+          viewport-right margin when the wrapper itself is the rightmost element in this flex row.
+          It used to render before AdjustmentsPanel, so its ~full-viewport-width mobile dropdown
+          (`w-[calc(100vw-2rem)]`) was anchored from a point roughly one button-width left of the
+          screen's right edge, pushing its left edge off-screen by that same amount — this is what
+          read as "part of the fire panel is hidden on mobile". */}
+      <FireHotspotPanel
+        fireHotspotEnabled={fireHotspotEnabled}
+        fireHotspotMinBrightness={fireHotspotMinBrightness}
+        fireHotspotMinRedBlueDiff={fireHotspotMinRedBlueDiff}
+        fireHotspotOpacity={fireHotspotOpacity}
+        fireHotspotRef={fireHotspotRef}
+        isOpen={isFireHotspotOpen}
+        onEnabledChange={onFireHotspotEnabledChange}
+        onMinBrightnessChange={onFireHotspotMinBrightnessChange}
+        onMinRedBlueDiffChange={onFireHotspotMinRedBlueDiffChange}
+        onOpacityChange={onFireHotspotOpacityChange}
+        onToggle={onToggleFireHotspot}
+        t={t}
+        theme={theme}
       />
     </div>
   );
