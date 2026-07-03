@@ -130,22 +130,41 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const paddedBounds = bounds.pad(0.2);
     const minPopulation = zoom >= 8 ? 25000 : zoom >= 7 ? 60000 : zoom >= 6 ? 120000 : zoom >= 5 ? 300000 : 700000;
     const hardLimit = zoom >= 8 ? 250 : zoom >= 6 ? 180 : 120;
+    // Cities near each other in real distance (e.g. the Rhine-Ruhr conurbation, or Lille/Antwerp/
+    // Lyon/Turin at a wide zoom) project to only a few screen pixels apart at low/mid zoom, so
+    // their dot+label pairs visually cram into each other with no cue that they're actually
+    // distinct, correctly-placed cities — this reads as "the layer doesn't track zoom right" even
+    // though every dot is exactly on its true coordinate. Greedily keep the highest-population
+    // candidate first and drop any lower-population one that lands within this pixel radius of an
+    // already-kept city, so nearby small towns don't visually collide with a nearby major city.
+    const minSpacingPx = 40;
 
-    return allCities
+    const candidates = allCities
       .filter((feature) => {
         const [lng, lat] = feature.geometry.coordinates;
         const pop = feature.properties.POP_MAX ?? 0;
         return pop >= minPopulation && paddedBounds.contains(L.latLng(lat, lng));
       })
-      .sort((a, b) => (b.properties.POP_MAX ?? 0) - (a.properties.POP_MAX ?? 0))
-      .slice(0, hardLimit);
+      .sort((a, b) => (b.properties.POP_MAX ?? 0) - (a.properties.POP_MAX ?? 0));
+
+    const kept: CityFeature[] = [];
+    const keptPoints: L.Point[] = [];
+    for (const feature of candidates) {
+      if (kept.length >= hardLimit) break;
+      const [lng, lat] = feature.geometry.coordinates;
+      const point = L.CRS.EPSG3857.latLngToPoint(L.latLng(lat, lng), zoom);
+      if (keptPoints.some((keptPoint) => point.distanceTo(keptPoint) < minSpacingPx)) continue;
+      kept.push(feature);
+      keptPoints.push(point);
+    }
+    return kept;
   };
 
   const buildCityLabelIcon = (zoom: number, text: string): L.DivIcon => {
     const sizeClass = zoom >= 8 ? 'city-label-lg' : zoom >= 6 ? 'city-label-md' : 'city-label-sm';
     return L.divIcon({
       className: `city-label ${sizeClass}`,
-      html: text,
+      html: `<span class="city-dot"></span><span class="city-label-text">${text}</span>`,
       iconSize: undefined,
       iconAnchor: [0, 0],
     });

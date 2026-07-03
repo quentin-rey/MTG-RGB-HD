@@ -86,17 +86,43 @@ const DYNAMIC_TILE_STYLES = `
     background-color: rgba(100, 116, 139, 0.65);
   }
   .city-label {
+    /* No position override here: Leaflet's own .leaflet-marker-icon rule already sets
+       position: absolute on this element, which is what makes .city-dot's absolute
+       positioning below anchor to it. Setting position: relative here (as a prior version
+       of this rule did) overrides that to a different positioned value, which knocks the
+       marker out of Leaflet's transform-only placement and into normal document flow —
+       markers then stack top-to-bottom by DOM insertion order (roughly, population rank)
+       instead of sitting at their true lat/lng, so only the most populous cities (added
+       first, near-zero accumulated stack offset) still looked right; every city further
+       down the list drifted further from its real position, worse the lower its population
+       rank. Confirmed via getBoundingClientRect() vs the marker's own translate3d value:
+       the CSS transform was always correct, only the rendered box didn't honor it. */
     color: rgba(255, 255, 255, 0.88);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
     white-space: nowrap;
     pointer-events: none;
     font-family: Inter, system-ui, -apple-system, sans-serif;
     font-weight: 500;
+  }
+  .city-label-text {
+    display: inline-block;
     transform: translate(4px, -2px);
+  }
+  .city-dot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 3px rgba(0, 0, 0, 0.55);
   }
   .city-label-sm { font-size: 10px; opacity: 0.82; }
   .city-label-md { font-size: 11px; opacity: 0.88; }
   .city-label-lg { font-size: 12px; opacity: 0.95; }
+  .city-label-sm .city-dot { width: 3px; height: 3px; }
+  .city-label-md .city-dot { width: 4px; height: 4px; }
+  .city-label-lg .city-dot { width: 5px; height: 5px; }
   .vis-layer-tiles {
     filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
   }

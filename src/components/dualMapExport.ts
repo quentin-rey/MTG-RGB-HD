@@ -777,8 +777,8 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       }
       const zoom = Math.round(map.getZoom());
       const visibleCities = getVisibleCityFeatures(map.getBounds(), zoom);
+      const dotRadius = zoom >= 8 ? 2.5 : zoom >= 6 ? 2 : 1.5;
       context.save();
-      context.fillStyle = 'rgba(255, 255, 255, 0.88)';
       context.textAlign = 'left';
       context.textBaseline = 'middle';
       context.shadowColor = 'rgba(0, 0, 0, 0.9)';
@@ -797,6 +797,12 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
         const canvasY = yPercentage * canvasHeight;
 
         if (canvasX >= 0 && canvasX <= canvasWidth && canvasY >= 0 && canvasY <= canvasHeight) {
+          context.beginPath();
+          context.arc(canvasX, canvasY, dotRadius, 0, Math.PI * 2);
+          context.fillStyle = 'rgba(255, 255, 255, 0.95)';
+          context.fill();
+
+          context.fillStyle = 'rgba(255, 255, 255, 0.88)';
           context.fillText(name, canvasX + 4, canvasY);
         }
       });
