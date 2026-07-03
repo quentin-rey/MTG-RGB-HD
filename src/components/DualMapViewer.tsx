@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Check, Download, Film, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
+import { Check, Download, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
   getAvailableExportKindsFromLayers,
+  getExportFileBaseName,
   getHdEnhancementProfile,
   getLatestAvailableTime,
   getSolarElevation,
@@ -32,8 +33,7 @@ import {
 } from './dualMapExport';
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
-  AnimationModal,
-  DownloadModal,
+  ExportModal,
   HeaderInfoButton,
   HeaderOverflowButton,
   HeaderOverflowMenu,
@@ -334,6 +334,8 @@ export default function DualMapViewer() {
   });
   const [exportFormat, setExportFormat] = useState<StillImageFormat>('png');
   const [exportResolution, setExportResolution] = useState<1920 | 2560 | 4096>(4096);
+  const [exportMode, setExportMode] = useState<'image' | 'gif'>('image');
+  const [gifSelectedKind, setGifSelectedKind] = useState<ExportKind | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [previewImages, setPreviewImages] = useState<Partial<Record<ExportKind, string>>>({});
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -367,20 +369,17 @@ export default function DualMapViewer() {
 
   const {
     adjustmentsRef,
-    animationModalRef,
-    downloadModalRef,
+    exportModalRef,
     helpRef,
     infoRef,
     isAdjustmentsOpen,
-    isAnimationModalOpen,
-    isDownloadModalOpen,
+    isExportModalOpen,
     isHelpOpen,
     isInfoOpen,
     isOverflowMenuOpen,
     overflowMenuRef,
     setIsAdjustmentsOpen,
-    setIsAnimationModalOpen,
-    setIsDownloadModalOpen,
+    setIsExportModalOpen,
     setIsHelpOpen,
     setIsInfoOpen,
     setIsOverflowMenuOpen,
@@ -721,6 +720,9 @@ export default function DualMapViewer() {
   const visHdLegacyContrast = Math.min(2.4, visContrast * RGB_VIS_FUSION.visContrastBoost * hdPreviewVisContrastBoost);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
   const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
+  const effectiveGifKind: ExportKind = gifSelectedKind && availableExportKinds.includes(gifSelectedKind)
+    ? gifSelectedKind
+    : getAnimationExportKind(activeLayers);
 
   const handleTimeChange = (newTimeStr: string) => {
     const newTime = new Date(newTimeStr);
@@ -843,7 +845,7 @@ export default function DualMapViewer() {
 
     try {
       const { saveAs } = await import('file-saver');
-      const exportKind = getAnimationExportKind(activeLayers);
+      const exportKind = effectiveGifKind;
       const gifBlob = await exportAnimationGif({
         frameTimes: frames,
         fps: animationFps,
@@ -885,7 +887,8 @@ export default function DualMapViewer() {
 
       const safeStart = frames[0].replace('T', '_').replace(/:/g, '-');
       const safeEnd = frames[frames.length - 1].replace('T', '_').replace(/:/g, '-');
-      saveAs(gifBlob, `MTG_ANIMATION_${safeStart}_to_${safeEnd}.gif`);
+      const gifFileBaseName = getExportFileBaseName(exportKind, hdEnhanceEnabled);
+      saveAs(gifBlob, `MTG_ANIMATION_${gifFileBaseName}_${gifMaxDimension}px_${safeStart}_to_${safeEnd}.gif`);
     } catch (error) {
       console.error('GIF export failed:', error);
       alert(t('animationExportFailed'));
@@ -897,12 +900,20 @@ export default function DualMapViewer() {
   // Computed once per render (buildAnimationFrameTimes previously ran twice per render:
   // once to check for an error, once more to get the frame count).
   let computedAnimationRangeError: string | null = null;
-  let animationEstimatedFrameCount = 0;
+  let animationFrameTimesPreview: string[] = [];
   try {
-    animationEstimatedFrameCount = buildAnimationFrameTimes().length;
+    animationFrameTimesPreview = buildAnimationFrameTimes();
   } catch (error) {
     computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
   }
+  const animationEstimatedFrameCount = animationFrameTimesPreview.length;
+  const gifFileName = animationFrameTimesPreview.length > 0
+    ? `MTG_ANIMATION_${getExportFileBaseName(effectiveGifKind, hdEnhanceEnabled)}_${gifMaxDimension}px_${
+      animationFrameTimesPreview[0].replace('T', '_').replace(/:/g, '-')
+    }_to_${
+      animationFrameTimesPreview[animationFrameTimesPreview.length - 1].replace('T', '_').replace(/:/g, '-')
+    }.gif`
+    : '';
 
   const buildBaseExportOptions = () => {
     if (!map2Instance.current || !map2Ref.current) return null;
@@ -966,7 +977,7 @@ export default function DualMapViewer() {
     }
   };
 
-  const openDownloadModal = () => {
+  const openExportModal = (mode: 'image' | 'gif') => {
     const nextSelection: Record<ExportKind, boolean> = {
       vis: availableExportKinds.includes('vis'),
       rgb: availableExportKinds.includes('rgb'),
@@ -976,12 +987,13 @@ export default function DualMapViewer() {
       hybrid: availableExportKinds.includes('hybrid'),
     };
     setSelectedExports(nextSelection);
-    setIsDownloadModalOpen(true);
+    setExportMode(mode);
+    setIsExportModalOpen(true);
     void loadDownloadPreviews();
   };
 
-  const closeDownloadModal = () => {
-    setIsDownloadModalOpen(false);
+  const closeExportModal = () => {
+    setIsExportModalOpen(false);
     revokePreviewImages();
     setPreviewImages({});
   };
@@ -1091,13 +1103,13 @@ export default function DualMapViewer() {
 
       if (lowerKey === 'a') {
         event.preventDefault();
-        setIsAnimationModalOpen((prev) => !prev);
+        openExportModal('gif');
         return;
       }
 
       if (lowerKey === 'd') {
         event.preventDefault();
-        openDownloadModal();
+        openExportModal('image');
         return;
       }
 
@@ -1135,10 +1147,9 @@ export default function DualMapViewer() {
     return () => window.removeEventListener('keydown', handleGlobalShortcuts);
   }, [
     handleTimeChange,
-    openDownloadModal,
+    openExportModal,
     resetAdjustments,
     setIsAdjustmentsOpen,
-    setIsAnimationModalOpen,
     setIsHelpOpen,
     setIsInfoOpen,
     shareCurrentViewWithFeedback,
@@ -1309,28 +1320,22 @@ export default function DualMapViewer() {
           </button>
 
           <button
-            onClick={() => setIsAnimationModalOpen(true)}
-            className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors shrink-0 ${
-              resolvedTheme === 'light'
-                ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300'
-                : 'bg-[#222] text-white hover:bg-[#333] border border-white/10'
-            }`}
-          >
-            <Film className="w-4 h-4 shrink-0" />
-            <span className="hidden sm:inline">{t('animation')}</span>
-          </button>
-
-          <button
-            onClick={openDownloadModal}
-            disabled={isExporting}
+            onClick={() => openExportModal('image')}
+            disabled={isExporting || isGifExporting}
             className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
               resolvedTheme === 'light'
                 ? 'bg-slate-900 text-white hover:bg-slate-700'
                 : 'bg-white text-black hover:bg-slate-200'
             }`}
           >
-            {isExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
-            <span className="hidden sm:inline">{isExporting ? `${t('generating')} ${downloadProgress}%` : t('download')}</span>
+            {isExporting || isGifExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
+            <span className="hidden sm:inline">
+              {isExporting
+                ? `${t('generating')} ${downloadProgress}%`
+                : isGifExporting
+                  ? `${t('generating')} ${gifExportProgress}%`
+                  : t('export')}
+            </span>
           </button>
         </div>
       </div>
@@ -1455,45 +1460,6 @@ export default function DualMapViewer() {
         themeMode={themeMode}
       />
 
-      <AnimationModal
-        animationModalRef={animationModalRef}
-        customDate={customAnimationDate}
-        customEnd={customAnimationEnd}
-        customEndStep={customEndStep}
-        customLatestDate={latestAvailableDatePart}
-        customMaxStep={customDayMaxStep}
-        customStart={customAnimationStart}
-        customStartStep={customStartStep}
-        estimatedFrameCount={animationEstimatedFrameCount}
-        fps={animationFps}
-        gifColorCount={gifColorCount}
-        gifDitherLevel={gifDitherLevel}
-        gifFinalPauseMs={gifFinalPauseMs}
-        gifMaxDimension={gifMaxDimension}
-        gifPaletteMode={gifPaletteMode}
-        gifProgress={gifExportProgress}
-        isExportingGif={isGifExporting}
-        isOpen={isAnimationModalOpen}
-        onClose={() => {
-          setIsAnimationModalOpen(false);
-        }}
-        onColorCountChange={setGifColorCount}
-        onDitherLevelChange={setGifDitherLevel}
-        onFinalPauseChange={setGifFinalPauseMs}
-        onCustomDateChange={handleCustomDateChange}
-        onCustomEndStepChange={handleCustomEndStepChange}
-        onCustomStartStepChange={handleCustomStartStepChange}
-        onExportGif={() => { void exportGif(); }}
-        onFpsChange={setAnimationFps}
-        onPaletteModeChange={setGifPaletteMode}
-        onPresetChange={handleAnimationPresetChange}
-        onResolutionChange={setGifMaxDimension}
-        preset={animationPreset}
-        rangeError={computedAnimationRangeError ?? animationRangeError}
-        t={t}
-        theme={resolvedTheme}
-      />
-
       {shareToastMessage && (
         <div className={`fixed left-1/2 -translate-x-1/2 top-20 sm:top-24 z-[610] pointer-events-none px-4 py-2 text-xs rounded-md border shadow-xl backdrop-blur-md ${
           resolvedTheme === 'light'
@@ -1504,9 +1470,21 @@ export default function DualMapViewer() {
         </div>
       )}
 
-      <DownloadModal
+      <ExportModal
         availableExportKinds={availableExportKinds}
         currentTime={currentTime}
+        customDate={customAnimationDate}
+        customEnd={customAnimationEnd}
+        customEndStep={customEndStep}
+        customLatestDate={latestAvailableDatePart}
+        customMaxStep={customDayMaxStep}
+        customStart={customAnimationStart}
+        customStartStep={customStartStep}
+        downloadProgress={downloadProgress}
+        estimatedFrameCount={animationEstimatedFrameCount}
+        exportFormat={exportFormat}
+        exportModalRef={exportModalRef}
+        exportResolution={exportResolution}
         exportResolutionText={(() => {
           const container = map2Ref.current;
           if (!container) return `${exportResolution}x${exportResolution}`;
@@ -1518,27 +1496,49 @@ export default function DualMapViewer() {
           const height = Math.max(64, Math.round(rawHeight * scale));
           return `${width}x${height}`;
         })()}
-        downloadModalRef={downloadModalRef}
-        downloadProgress={downloadProgress}
-        exportFormat={exportFormat}
-        exportResolution={exportResolution}
+        fps={animationFps}
+        gifColorCount={gifColorCount}
+        gifDitherLevel={gifDitherLevel}
+        gifFileName={gifFileName}
+        gifFinalPauseMs={gifFinalPauseMs}
+        gifMaxDimension={gifMaxDimension}
+        gifPaletteMode={gifPaletteMode}
+        gifProgress={gifExportProgress}
+        gifSelectedKind={effectiveGifKind}
         hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
-        isOpen={isDownloadModalOpen}
+        isExportingGif={isGifExporting}
+        isOpen={isExportModalOpen}
         isPreviewLoading={isPreviewLoading}
-        onClose={closeDownloadModal}
-        onExportFormatChange={setExportFormat}
-        onExportResolutionChange={setExportResolution}
-        previewImages={previewImages}
-        t={t}
-        theme={resolvedTheme}
-        onConfirm={() => {
+        mode={exportMode}
+        onClose={closeExportModal}
+        onColorCountChange={setGifColorCount}
+        onConfirmImage={() => {
           if (selectedExportKinds.length === 0) return;
           void downloadPack(selectedExportKinds);
         }}
-        onToggleKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}
+        onCustomDateChange={handleCustomDateChange}
+        onCustomEndStepChange={handleCustomEndStepChange}
+        onCustomStartStepChange={handleCustomStartStepChange}
+        onDitherLevelChange={setGifDitherLevel}
+        onExportFormatChange={setExportFormat}
+        onExportGif={() => { void exportGif(); }}
+        onExportResolutionChange={setExportResolution}
+        onFinalPauseChange={setGifFinalPauseMs}
+        onFpsChange={setAnimationFps}
+        onGifKindChange={setGifSelectedKind}
+        onModeChange={setExportMode}
+        onPaletteModeChange={setGifPaletteMode}
+        onPresetChange={handleAnimationPresetChange}
+        onResolutionChange={setGifMaxDimension}
+        onToggleImageKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}
+        preset={animationPreset}
+        previewImages={previewImages}
+        rangeError={computedAnimationRangeError ?? animationRangeError}
         selectedExports={selectedExports}
         selectedExportKinds={selectedExportKinds}
+        t={t}
+        theme={resolvedTheme}
       />
 
       {/* Static stylesheet; per-render values are passed as CSS custom properties above. */}

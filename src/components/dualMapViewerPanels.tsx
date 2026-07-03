@@ -782,32 +782,107 @@ export function InfoModal(props: InfoModalProps) {
   );
 }
 
-type DownloadModalProps = {
+type ExportMode = 'image' | 'gif';
+
+type ExportKindGridProps = {
+  availableExportKinds: ExportKind[];
+  hdEnhanceEnabled: boolean;
+  isDisabled: boolean;
+  isLight: boolean;
+  isPreviewLoading: boolean;
+  previewImages: Partial<Record<ExportKind, string>>;
+  selectedKinds: ExportKind[];
+  selectionMode: 'multiple' | 'single';
+  onSelect: (kind: ExportKind, checked: boolean) => void;
+  t: Translator;
+};
+
+/** Shared by both export modes: multi-select checkboxes for still images, single-select radios for the GIF's source layer. */
+function ExportKindGrid(props: ExportKindGridProps) {
+  const { availableExportKinds, hdEnhanceEnabled, isDisabled, isLight, isPreviewLoading, previewImages, selectedKinds, selectionMode, onSelect, t } = props;
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {availableExportKinds.map((kind) => {
+        const isComposite = kind === 'hd' || kind === 'sandwich' || kind === 'hybrid';
+        const isSelected = selectedKinds.includes(kind);
+        const label = getExportLabel(kind, {
+          vis: t('exportLabelVis'),
+          rgb: t('exportLabelRgb'),
+          ir: t('exportLabelIr'),
+          hd: hdEnhanceEnabled ? t('exportLabelHd') : t('exportLabelRgbVis'),
+          hybrid: t('exportLabelHybrid'),
+          sandwich: t('exportLabelSandwich'),
+        });
+        const previewUrl = previewImages[kind];
+        return (
+          <label
+            key={kind}
+            className={`relative block h-24 rounded-lg border overflow-hidden transition-colors ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${
+              isSelected ? 'border-blue-400' : themedClass(isLight, 'border-slate-300', 'border-white/15')
+            }`}
+          >
+            <div className={`absolute inset-0 ${themedClass(isLight, 'bg-slate-200', 'bg-black/40')}`}>
+              {previewUrl && (
+                <img src={previewUrl} alt={label} className="w-full h-full object-cover" />
+              )}
+              {!previewUrl && isPreviewLoading && (
+                <div className={`w-full h-full animate-pulse ${themedClass(isLight, 'bg-slate-300', 'bg-white/5')}`} />
+              )}
+            </div>
+            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
+
+            <input
+              type={selectionMode === 'multiple' ? 'checkbox' : 'radio'}
+              name={selectionMode === 'single' ? 'export-kind-single' : undefined}
+              checked={isSelected}
+              disabled={isDisabled}
+              onChange={(e) => onSelect(kind, e.target.checked)}
+              className="absolute top-2 right-2 w-5 h-5 rounded accent-blue-500 disabled:cursor-not-allowed"
+            />
+            <span className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full border border-white/25 text-white bg-black/35 backdrop-blur-sm">
+              {isComposite ? t('downloadCompositeBadge') : t('downloadSimpleBadge')}
+            </span>
+
+            <div className="absolute bottom-0 left-0 right-0 px-3 py-2">
+              <span className="text-sm font-semibold text-white drop-shadow-sm">{label}</span>
+            </div>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+type ExportModalProps = {
+  // Shared
   availableExportKinds: ExportKind[];
   currentTime: string;
-  downloadModalRef: React.RefObject<HTMLDivElement | null>;
+  exportModalRef: React.RefObject<HTMLDivElement | null>;
+  hdEnhanceEnabled: boolean;
+  isOpen: boolean;
+  isPreviewLoading: boolean;
+  mode: ExportMode;
+  onClose: () => void;
+  onModeChange: (mode: ExportMode) => void;
+  previewImages: Partial<Record<ExportKind, string>>;
+  t: Translator;
+  theme: UiTheme;
+
+  // Image mode
   downloadProgress: number;
   exportFormat: StillImageFormat;
   exportResolution: 1920 | 2560 | 4096;
   exportResolutionText: string;
-  hdEnhanceEnabled: boolean;
   isExporting: boolean;
-  isOpen: boolean;
-  isPreviewLoading: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
+  onConfirmImage: () => void;
   onExportFormatChange: (format: StillImageFormat) => void;
   onExportResolutionChange: (value: 1920 | 2560 | 4096) => void;
-  previewImages: Partial<Record<ExportKind, string>>;
-  t: Translator;
-  theme: UiTheme;
-  onToggleKind: (kind: ExportKind, checked: boolean) => void;
+  onToggleImageKind: (kind: ExportKind, checked: boolean) => void;
   selectedExports: Record<ExportKind, boolean>;
   selectedExportKinds: ExportKind[];
-};
 
-type AnimationModalProps = {
-  animationModalRef: React.RefObject<HTMLDivElement | null>;
+  // GIF mode
   customDate: string;
   customEnd: string;
   customEndStep: number;
@@ -819,33 +894,33 @@ type AnimationModalProps = {
   fps: number;
   gifColorCount: 64 | 128 | 256;
   gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
+  gifFileName: string;
   gifFinalPauseMs: number;
   gifMaxDimension: 960 | 1280 | 1600;
   gifPaletteMode: 'per-frame' | 'global';
   gifProgress: number;
+  gifSelectedKind: ExportKind;
   isExportingGif: boolean;
-  isOpen: boolean;
-  onClose: () => void;
   onColorCountChange: (value: 64 | 128 | 256) => void;
   onCustomDateChange: (value: string) => void;
-  onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
-  onFinalPauseChange: (value: number) => void;
   onCustomEndStepChange: (value: number) => void;
   onCustomStartStepChange: (value: number) => void;
+  onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
   onExportGif: () => void;
+  onFinalPauseChange: (value: number) => void;
   onFpsChange: (value: number) => void;
+  onGifKindChange: (kind: ExportKind) => void;
   onPaletteModeChange: (value: 'per-frame' | 'global') => void;
   onPresetChange: (value: '3h' | '6h' | '12h' | 'custom') => void;
   onResolutionChange: (value: 960 | 1280 | 1600) => void;
   preset: '3h' | '6h' | '12h' | 'custom';
   rangeError: string | null;
-  t: Translator;
-  theme: UiTheme;
 };
 
-export function AnimationModal(props: AnimationModalProps) {
+export function ExportModal(props: ExportModalProps) {
   const {
-    animationModalRef,
+    availableExportKinds,
+    currentTime,
     customDate,
     customEnd,
     customEndStep,
@@ -853,30 +928,50 @@ export function AnimationModal(props: AnimationModalProps) {
     customMaxStep,
     customStart,
     customStartStep,
+    downloadProgress,
     estimatedFrameCount,
+    exportFormat,
+    exportModalRef,
+    exportResolution,
+    exportResolutionText,
     fps,
     gifColorCount,
     gifDitherLevel,
+    gifFileName,
     gifFinalPauseMs,
     gifMaxDimension,
     gifPaletteMode,
     gifProgress,
+    gifSelectedKind,
+    hdEnhanceEnabled,
+    isExporting,
     isExportingGif,
     isOpen,
+    isPreviewLoading,
+    mode,
     onClose,
     onColorCountChange,
+    onConfirmImage,
     onCustomDateChange,
     onDitherLevelChange,
     onFinalPauseChange,
     onCustomEndStepChange,
     onCustomStartStepChange,
+    onExportFormatChange,
     onExportGif,
+    onExportResolutionChange,
     onFpsChange,
+    onGifKindChange,
+    onModeChange,
     onPaletteModeChange,
     onPresetChange,
     onResolutionChange,
+    onToggleImageKind,
     preset,
+    previewImages,
     rangeError,
+    selectedExports,
+    selectedExportKinds,
     t,
     theme,
   } = props;
@@ -942,297 +1037,23 @@ export function AnimationModal(props: AnimationModalProps) {
 
   if (!isOpen) return null;
 
-  return (
-    <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
-      themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
-    }`}>
-      <div ref={animationModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-xl w-full max-h-[85vh] overflow-y-auto ${
-        themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
-      }`}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('animationTitle')}</h3>
-          <button
-            onClick={onClose}
-            className={`p-1 rounded-md transition-colors ${
-              themedClass(isLight, 'text-slate-500 hover:text-slate-900 hover:bg-slate-100', 'text-slate-400 hover:text-white hover:bg-white/10')
-            }`}
-            aria-label={t('close')}
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>{t('animationDescription')}</p>
-
-        <div className="space-y-4">
-          <div>
-            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationPreset')}</label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {([
-                ['3h', t('animationLast3h')],
-                ['6h', t('animationLast6h')],
-                ['12h', t('animationLast12h')],
-                ['custom', t('animationCustom')],
-              ] as const).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onPresetChange(value)}
-                  className={`px-2 py-1.5 rounded border text-xs transition-colors ${
-                    preset === value
-                      ? 'bg-blue-500 text-white border-blue-500'
-                      : isLight
-                        ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
-                        : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {preset === 'custom' && (
-            <div className="space-y-3">
-              <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationCustomDate')}</label>
-                <input
-                  type="date"
-                  max={customLatestDate}
-                  value={customDate}
-                  onChange={(event) => onCustomDateChange(event.target.value)}
-                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 cursor-pointer ${
-                    isLight
-                      ? 'bg-slate-100 border-slate-300 text-slate-900'
-                      : 'bg-[#222] border-white/10 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert'
-                  }`}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
-                  <div className="text-[11px] opacity-75 mb-0.5">{t('animationStart')}</div>
-                  <div className="font-mono text-xs">{customStart.replace('T', ' ')} UTC</div>
-                </div>
-                <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
-                  <div className="text-[11px] opacity-75 mb-0.5">{t('animationEnd')}</div>
-                  <div className="font-mono text-xs">{customEnd.replace('T', ' ')} UTC</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationCustomWindow')}</span>
-                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
-                </div>
-                <div
-                  ref={rangeSliderRef}
-                  onPointerDown={handleTrackPointerDown}
-                  className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${themedClass(isLight, 'bg-slate-100 border border-slate-300', 'bg-[#222] border border-white/10')}`}
-                >
-                  <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-blue-500"
-                    style={{
-                      left: `calc(12px + (100% - 24px) * ${startRatio})`,
-                      width: `calc((100% - 24px) * ${Math.max(0, endRatio - startRatio)})`,
-                    }}
-                  />
-                  <button
-                    type="button"
-                    aria-label={t('animationStart')}
-                    onPointerDown={handleKnobPointerDown('start')}
-                    className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
-                    style={{ left: `calc(12px + (100% - 24px) * ${startRatio} - 8px)` }}
-                  />
-                  <button
-                    type="button"
-                    aria-label={t('animationEnd')}
-                    onPointerDown={handleKnobPointerDown('end')}
-                    className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
-                    style={{ left: `calc(12px + (100% - 24px) * ${endRatio} - 8px)` }}
-                  />
-                </div>
-
-                <div className={`mt-2 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                  <span>{t('animationWindowStart')}: 00:00</span>
-                  <span>{t('animationWindowEnd')}: {stepToTime(sliderMax)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <div className="flex justify-between text-xs mb-1">
-              <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationFps')}</span>
-              <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{fps}</span>
-            </div>
-            <input
-              type="range"
-              min="4"
-              max="12"
-              step="1"
-              value={fps}
-              onChange={(event) => onFpsChange(parseInt(event.target.value, 10))}
-              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifResolution')}</label>
-              <select
-                value={gifMaxDimension}
-                onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
-                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                }`}
-              >
-                <option value={960}>{t('animationResolution960')}</option>
-                <option value={1280}>{t('animationResolution1280')}</option>
-                <option value={1600}>{t('animationResolution1600')}</option>
-              </select>
-            </div>
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
-              <select
-                value={gifColorCount}
-                onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
-                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                }`}
-              >
-                <option value={64}>64</option>
-                <option value={128}>128</option>
-                <option value={256}>256</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
-              <select
-                value={gifPaletteMode}
-                onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
-                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                }`}
-              >
-                <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
-                <option value="global">{t('animationPaletteModeGlobal')}</option>
-              </select>
-            </div>
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
-              <select
-                value={gifDitherLevel}
-                onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
-                className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                  themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                }`}
-              >
-                <option value="none">{t('animationDitherNone')}</option>
-                <option value="low">{t('animationDitherLow')}</option>
-                <option value="medium">{t('animationDitherMedium')}</option>
-                <option value="high">{t('animationDitherHigh')}</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex justify-between text-xs mb-1">
-              <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
-              <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
-            </div>
-            <input
-              type="range"
-              min={100}
-              max={2000}
-              step={100}
-              value={gifFinalPauseMs}
-              onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
-              className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-            />
-            <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-              <span>0.1s</span>
-              <span>1.0s</span>
-              <span>2.0s</span>
-            </div>
-          </div>
-
-          <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-            {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
-          </div>
-
-          {rangeError && (
-            <p className={`text-xs ${themedClass(isLight, 'text-rose-600', 'text-rose-300')}`}>{rangeError}</p>
-          )}
-
-          {estimatedFrameCount === 0 && !rangeError ? (
-            <p className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationNoFrames')}</p>
-          ) : null}
-
-          <div className="flex items-center justify-end">
-            <button
-              type="button"
-              onClick={onExportGif}
-              disabled={isExportingGif || estimatedFrameCount === 0}
-              className={`px-3 py-2 text-sm rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                isLight
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'bg-blue-500 text-white hover:bg-blue-400'
-              }`}
-            >
-              {isExportingGif ? `${t('animationExportingGif')} ${gifProgress}%` : t('animationExportGif')}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function DownloadModal(props: DownloadModalProps) {
-  const {
-    availableExportKinds,
-    currentTime,
-    downloadModalRef,
-    downloadProgress,
-    exportFormat,
-    exportResolution,
-    exportResolutionText,
-    hdEnhanceEnabled,
-    isExporting,
-    isOpen,
-    isPreviewLoading,
-    onClose,
-    onConfirm,
-    onExportFormatChange,
-    onExportResolutionChange,
-    previewImages,
-    t,
-    theme,
-    onToggleKind,
-    selectedExports,
-    selectedExportKinds,
-  } = props;
-  const isLight = theme === 'light';
-  const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
+  const isImageMode = mode === 'image';
+  const isExportingCurrent = isImageMode ? isExporting : isExportingGif;
+  const currentProgress = isImageMode ? downloadProgress : gifProgress;
   const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
+  const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
   const isSingleFile = selectedExportKinds.length === 1;
-
-  if (!isOpen) return null;
+  const canConfirm = isImageMode ? selectedExportKinds.length > 0 : estimatedFrameCount > 0;
 
   return (
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
       themedClass(isLight, 'bg-slate-900/35', 'bg-black/55')
     }`}>
-      <div ref={downloadModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
+      <div ref={exportModalRef} className={`ui-scrollbar border rounded-xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto ${
         themedClass(isLight, 'bg-white border-slate-300', 'bg-[#1a1a1a] border-white/10')
       }`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('preDownloadTitle')}</h3>
+          <h3 className={`text-lg font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('exportModalTitle')}</h3>
           <button
             onClick={onClose}
             className={`p-1 rounded-md transition-colors ${
@@ -1244,130 +1065,352 @@ export function DownloadModal(props: DownloadModalProps) {
           </button>
         </div>
 
-        <p className={`text-sm mb-2 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
-          {t('downloadModalDescription')}
+        <div className={`mb-4 grid grid-cols-2 gap-1 p-1 rounded-lg ${themedClass(isLight, 'bg-slate-100', 'bg-black/30')}`}>
+          {([
+            ['image', t('exportModeImage')],
+            ['gif', t('exportModeGif')],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onModeChange(value)}
+              disabled={isExportingCurrent}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:cursor-not-allowed ${
+                mode === value
+                  ? isLight ? 'bg-white text-slate-900 shadow' : 'bg-white/10 text-white shadow'
+                  : themedClass(isLight, 'text-slate-500 hover:text-slate-800', 'text-slate-400 hover:text-slate-200')
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
+          {isImageMode ? t('downloadModalDescription') : t('animationDescription')}
         </p>
-        <div className={`mb-4 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
-          {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
-        </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {availableExportKinds.map((kind) => {
-            const isComposite = kind === 'hd' || kind === 'sandwich' || kind === 'hybrid';
-            const label = getExportLabel(kind, {
-              vis: t('exportLabelVis'),
-              rgb: t('exportLabelRgb'),
-              ir: t('exportLabelIr'),
-              hd: hdEnhanceEnabled ? t('exportLabelHd') : t('exportLabelRgbVis'),
-              hybrid: t('exportLabelHybrid'),
-              sandwich: t('exportLabelSandwich'),
-            });
-            const previewUrl = previewImages[kind];
-            return (
-              <label
-                key={kind}
-                className={`relative block h-24 rounded-lg border overflow-hidden transition-colors ${isExporting ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${
-                  selectedExports[kind]
-                    ? 'border-blue-400'
-                    : themedClass(isLight, 'border-slate-300', 'border-white/15')
-                }`}
-              >
-                <div className={`absolute inset-0 ${themedClass(isLight, 'bg-slate-200', 'bg-black/40')}`}>
-                  {previewUrl && (
-                    <img src={previewUrl} alt={label} className="w-full h-full object-cover" />
-                  )}
-                  {!previewUrl && isPreviewLoading && (
-                    <div className={`w-full h-full animate-pulse ${themedClass(isLight, 'bg-slate-300', 'bg-white/5')}`} />
-                  )}
-                </div>
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
-
-                <input
-                  type="checkbox"
-                  checked={selectedExports[kind]}
-                  disabled={isExporting}
-                  onChange={(e) => onToggleKind(kind, e.target.checked)}
-                  className="absolute top-2 right-2 w-5 h-5 rounded accent-blue-500 disabled:cursor-not-allowed"
-                />
-                <span className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full border border-white/25 text-white bg-black/35 backdrop-blur-sm">
-                  {isComposite ? t('downloadCompositeBadge') : t('downloadSimpleBadge')}
-                </span>
-
-                <div className="absolute bottom-0 left-0 right-0 px-3 py-2">
-                  <span className="text-sm font-semibold text-white drop-shadow-sm">{label}</span>
-                </div>
-              </label>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <div>
-            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadFormatLabel')}</label>
-            <select
-              value={exportFormat}
-              disabled={isExporting}
-              onChange={(event) => onExportFormatChange(event.target.value as 'png' | 'jpeg')}
-              className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
-                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-              }`}
-            >
-              <option value="png">{t('downloadFormatPng')}</option>
-              <option value="jpeg">{t('downloadFormatJpeg')}</option>
-            </select>
-          </div>
-          <div>
-            <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadResolutionLabel')}</label>
-            <select
-              value={exportResolution}
-              disabled={isExporting}
-              onChange={(event) => onExportResolutionChange(parseInt(event.target.value, 10) as 1920 | 2560 | 4096)}
-              className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
-                themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-              }`}
-            >
-              <option value={1920}>{t('downloadResolution1920')}</option>
-              <option value={2560}>{t('downloadResolution2560')}</option>
-              <option value={4096}>{t('downloadResolution4096')}</option>
-            </select>
-          </div>
-        </div>
-
-        {selectedExportKinds.length > 0 && (
-          <div className={`mt-4 rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
-            <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>
-              {isSingleFile ? t('downloadFilePreview') : t('downloadZipPreview')}
+        {isImageMode ? (
+          <>
+            <div className={`mb-3 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
+              {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
             </div>
-            {isSingleFile && selectedExportKinds[0] ? (
-              <div className="font-mono break-all">
-                {getExportFileBaseName(selectedExportKinds[0], hdEnhanceEnabled)}_{exportResolutionText}_{safeZipSuffix}.{fileExtension}
+
+            <ExportKindGrid
+              availableExportKinds={availableExportKinds}
+              hdEnhanceEnabled={hdEnhanceEnabled}
+              isDisabled={isExporting}
+              isLight={isLight}
+              isPreviewLoading={isPreviewLoading}
+              previewImages={previewImages}
+              selectedKinds={selectedExportKinds}
+              selectionMode="multiple"
+              onSelect={onToggleImageKind}
+              t={t}
+            />
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadFormatLabel')}</label>
+                <select
+                  value={exportFormat}
+                  disabled={isExporting}
+                  onChange={(event) => onExportFormatChange(event.target.value as 'png' | 'jpeg')}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value="png">{t('downloadFormatPng')}</option>
+                  <option value="jpeg">{t('downloadFormatJpeg')}</option>
+                </select>
               </div>
-            ) : (
-              <div className="font-mono break-all">MTG_SATELLITE_PACK_{exportResolutionText}_{safeZipSuffix}.zip</div>
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('downloadResolutionLabel')}</label>
+                <select
+                  value={exportResolution}
+                  disabled={isExporting}
+                  onChange={(event) => onExportResolutionChange(parseInt(event.target.value, 10) as 1920 | 2560 | 4096)}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value={1920}>{t('downloadResolution1920')}</option>
+                  <option value={2560}>{t('downloadResolution2560')}</option>
+                  <option value={4096}>{t('downloadResolution4096')}</option>
+                </select>
+              </div>
+            </div>
+
+            {selectedExportKinds.length > 0 && (
+              <div className={`mt-4 rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
+                <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>
+                  {isSingleFile ? t('downloadFilePreview') : t('downloadZipPreview')}
+                </div>
+                {isSingleFile && selectedExportKinds[0] ? (
+                  <div className="font-mono break-all">
+                    {getExportFileBaseName(selectedExportKinds[0], hdEnhanceEnabled)}_{exportResolutionText}_{safeZipSuffix}.{fileExtension}
+                  </div>
+                ) : (
+                  <div className="font-mono break-all">MTG_SATELLITE_PACK_{exportResolutionText}_{safeZipSuffix}.zip</div>
+                )}
+                <div className={`mt-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('downloadZipHint')}</div>
+              </div>
             )}
-            <div className={`mt-2 ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>{t('downloadZipHint')}</div>
+          </>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('exportGifKindLabel')}</label>
+              <ExportKindGrid
+                availableExportKinds={availableExportKinds}
+                hdEnhanceEnabled={hdEnhanceEnabled}
+                isDisabled={isExportingGif}
+                isLight={isLight}
+                isPreviewLoading={isPreviewLoading}
+                previewImages={previewImages}
+                selectedKinds={[gifSelectedKind]}
+                selectionMode="single"
+                onSelect={(kind) => onGifKindChange(kind)}
+                t={t}
+              />
+            </div>
+
+            <div>
+              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationPreset')}</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {([
+                  ['3h', t('animationLast3h')],
+                  ['6h', t('animationLast6h')],
+                  ['12h', t('animationLast12h')],
+                  ['custom', t('animationCustom')],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => onPresetChange(value)}
+                    className={`px-2 py-1.5 rounded border text-xs transition-colors ${
+                      preset === value
+                        ? 'bg-blue-500 text-white border-blue-500'
+                        : isLight
+                          ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                          : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {preset === 'custom' && (
+              <div className="space-y-3">
+                <div>
+                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationCustomDate')}</label>
+                  <input
+                    type="date"
+                    max={customLatestDate}
+                    value={customDate}
+                    onChange={(event) => onCustomDateChange(event.target.value)}
+                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 cursor-pointer ${
+                      isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-900'
+                        : 'bg-[#222] border-white/10 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert'
+                    }`}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
+                    <div className="text-[11px] opacity-75 mb-0.5">{t('animationStart')}</div>
+                    <div className="font-mono text-xs">{customStart.replace('T', ' ')} UTC</div>
+                  </div>
+                  <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
+                    <div className="text-[11px] opacity-75 mb-0.5">{t('animationEnd')}</div>
+                    <div className="font-mono text-xs">{customEnd.replace('T', ' ')} UTC</div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationCustomWindow')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
+                  </div>
+                  <div
+                    ref={rangeSliderRef}
+                    onPointerDown={handleTrackPointerDown}
+                    className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${themedClass(isLight, 'bg-slate-100 border border-slate-300', 'bg-[#222] border border-white/10')}`}
+                  >
+                    <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-blue-500"
+                      style={{
+                        left: `calc(12px + (100% - 24px) * ${startRatio})`,
+                        width: `calc((100% - 24px) * ${Math.max(0, endRatio - startRatio)})`,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label={t('animationStart')}
+                      onPointerDown={handleKnobPointerDown('start')}
+                      className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
+                      style={{ left: `calc(12px + (100% - 24px) * ${startRatio} - 8px)` }}
+                    />
+                    <button
+                      type="button"
+                      aria-label={t('animationEnd')}
+                      onPointerDown={handleKnobPointerDown('end')}
+                      className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
+                      style={{ left: `calc(12px + (100% - 24px) * ${endRatio} - 8px)` }}
+                    />
+                  </div>
+
+                  <div className={`mt-2 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+                    <span>{t('animationWindowStart')}: 00:00</span>
+                    <span>{t('animationWindowEnd')}: {stepToTime(sliderMax)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationFps')}</span>
+                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{fps}</span>
+              </div>
+              <input
+                type="range"
+                min="4"
+                max="12"
+                step="1"
+                value={fps}
+                onChange={(event) => onFpsChange(parseInt(event.target.value, 10))}
+                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifResolution')}</label>
+                <select
+                  value={gifMaxDimension}
+                  onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value={960}>{t('animationResolution960')}</option>
+                  <option value={1280}>{t('animationResolution1280')}</option>
+                  <option value={1600}>{t('animationResolution1600')}</option>
+                </select>
+              </div>
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
+                <select
+                  value={gifColorCount}
+                  onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value={64}>64</option>
+                  <option value={128}>128</option>
+                  <option value={256}>256</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
+                <select
+                  value={gifPaletteMode}
+                  onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
+                  <option value="global">{t('animationPaletteModeGlobal')}</option>
+                </select>
+              </div>
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
+                <select
+                  value={gifDitherLevel}
+                  onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
+                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                  }`}
+                >
+                  <option value="none">{t('animationDitherNone')}</option>
+                  <option value="low">{t('animationDitherLow')}</option>
+                  <option value="medium">{t('animationDitherMedium')}</option>
+                  <option value="high">{t('animationDitherHigh')}</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
+                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
+              </div>
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={100}
+                value={gifFinalPauseMs}
+                onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
+                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+              />
+              <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+                <span>0.1s</span>
+                <span>1.0s</span>
+                <span>2.0s</span>
+              </div>
+            </div>
+
+            <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+              {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
+            </div>
+
+            {rangeError && (
+              <p className={`text-xs ${themedClass(isLight, 'text-rose-600', 'text-rose-300')}`}>{rangeError}</p>
+            )}
+
+            {estimatedFrameCount === 0 && !rangeError ? (
+              <p className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationNoFrames')}</p>
+            ) : null}
+
+            {estimatedFrameCount > 0 && (
+              <div className={`rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
+                <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('downloadFilePreview')}</div>
+                <div className="font-mono break-all">{gifFileName}</div>
+              </div>
+            )}
           </div>
         )}
 
-        {isExporting && (
+        {isExportingCurrent && (
           <div className="mt-4">
             <div className={`flex justify-between text-xs mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
               <span>{t('generating')}</span>
-              <span className="font-mono">{downloadProgress}%</span>
+              <span className="font-mono">{currentProgress}%</span>
             </div>
             <div className={`h-1.5 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
               <div
                 className="h-full bg-blue-500 transition-all duration-200 ease-out"
-                style={{ width: `${downloadProgress}%` }}
+                style={{ width: `${currentProgress}%` }}
               />
             </div>
           </div>
         )}
 
-        <div className="mt-6 sticky bottom-0 pt-3 flex items-center justify-end gap-2 bg-transparent">
+        <div className={`mt-6 pt-3 border-t flex items-center justify-end gap-2 ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
           <button
             onClick={onClose}
-            disabled={isExporting}
+            disabled={isExportingCurrent}
             className={`px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               isLight
                 ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
@@ -1377,15 +1420,17 @@ export function DownloadModal(props: DownloadModalProps) {
             {t('cancel')}
           </button>
           <button
-            onClick={onConfirm}
-            disabled={selectedExportKinds.length === 0 || isExporting}
+            onClick={isImageMode ? onConfirmImage : onExportGif}
+            disabled={!canConfirm || isExportingCurrent}
             className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
               isLight
                 ? 'bg-slate-900 text-white hover:bg-slate-700'
                 : 'bg-white text-black hover:bg-slate-200'
             }`}
           >
-            {isExporting ? `${t('generating')} ${downloadProgress}%` : t('downloadSelection')}
+            {isExportingCurrent
+              ? `${t('generating')} ${currentProgress}%`
+              : isImageMode ? t('downloadSelection') : t('animationExportGif')}
           </button>
         </div>
       </div>
