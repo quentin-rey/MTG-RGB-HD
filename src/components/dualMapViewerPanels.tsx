@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, Github, Info, Monitor, Moon, Sliders, Sun, Wrench, X } from 'lucide-react';
+import { Bug, CircleHelp, Clock, Github, Info, Loader2, Monitor, Moon, Sliders, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -21,6 +21,7 @@ type UiTheme = 'dark' | 'light';
 
 type TimeDockProps = {
   currentTime: string;
+  isSyncingLatest: boolean;
   t: Translator;
   theme: UiTheme;
   onLatest: () => void;
@@ -28,7 +29,7 @@ type TimeDockProps = {
 };
 
 export function TimeDock(props: TimeDockProps) {
-  const { currentTime, onLatest, onTimeChange, t, theme } = props;
+  const { currentTime, isSyncingLatest, onLatest, onTimeChange, t, theme } = props;
   const isLight = theme === 'light';
   const [isMobileActionsExpanded, setIsMobileActionsExpanded] = useState(false);
   const [datePart, timePart] = currentTime.split('T');
@@ -173,12 +174,15 @@ export function TimeDock(props: TimeDockProps) {
             </button>
             <button
               onClick={onLatest}
-              className={`border rounded-md px-2 py-1 text-[11px] transition-colors ${
+              disabled={isSyncingLatest}
+              title={t('latestSyncingHint')}
+              className={`flex items-center justify-center gap-1 border rounded-md px-2 py-1 text-[11px] transition-colors disabled:opacity-70 disabled:cursor-wait ${
                 isLight
                   ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
                   : 'bg-[#333] hover:bg-[#444] border-white/10 text-white'
               }`}
             >
+              {isSyncingLatest && <Loader2 className="w-3 h-3 animate-spin shrink-0" />}
               {t('latest')}
             </button>
           </div>

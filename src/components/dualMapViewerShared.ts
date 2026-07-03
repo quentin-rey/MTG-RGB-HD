@@ -225,6 +225,70 @@ export function getLatestAvailableTime(): string {
   return now.toISOString().slice(0, 16);
 }
 
+/**
+ * Fetches a single layer's own latest-published time from its scoped WMS capabilities endpoint
+ * (`/geoserver/<workspace>/<layer>/ows`, much lighter than the full-workspace GetCapabilities
+ * document). Returns null on any network/parse failure so callers can fall back safely.
+ */
+async function fetchLayerLatestAvailableTime(layer: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    const scopedBase = `${WMS_URL_DIRECT.replace(/\/ows$/, '')}/${layer.replace(':', '/')}/ows`;
+    const response = await fetch(`${scopedBase}?service=WMS&request=GetCapabilities&version=1.3.0`, { signal });
+    if (!response.ok) return null;
+
+    const xmlText = await response.text();
+    const dimension = new DOMParser().parseFromString(xmlText, 'text/xml').querySelector('Dimension[name="time"]');
+    const defaultTime = dimension?.getAttribute('default');
+    if (!defaultTime) return null;
+
+    const parsed = new Date(defaultTime);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `getLatestAvailableTime()` assumes every layer is published within the same fixed buffer, but
+ * EUMETSAT's WMS time dimensions are configured with `nearestValue="1"` (confirmed via each
+ * layer's own scoped GetCapabilities) — GeoServer silently snaps an unavailable requested `time`
+ * to that *individual* layer's nearest actual acquisition, with no indication in the GetMap
+ * response of what time was actually served. When RGB and VIS have a momentary publishing-delay
+ * gap that doesn't align (one has already-published data at the naive "latest" timestamp, the
+ * other doesn't yet), each layer silently snaps to a different real instant — the two renders
+ * then show genuinely different moments even though the app requested the identical `time=`
+ * value for both, which is what "VIS and RGB aren't synced" actually is. This probes each
+ * currently-active layer's own true latest-published time and returns the earliest of them, so
+ * the requested timestamp is guaranteed to genuinely exist for every active layer (sidestepping
+ * nearest-value snapping for this specific "jump to latest" action rather than guessing a shared
+ * buffer). Falls back to the synchronous heuristic above if any probe fails, times out (4s), or
+ * would land later than the heuristic already produces.
+ */
+export async function fetchSyncedLatestAvailableTime(activeLayers: ActiveLayers): Promise<string> {
+  const fallback = getLatestAvailableTime();
+  const layers: string[] = [];
+  if (activeLayers.rgb) layers.push(LAYER_RGB);
+  if (activeLayers.vis) layers.push(LAYER_VIS);
+  if (activeLayers.ir) layers.push(LAYER_IR);
+  if (layers.length === 0) return fallback;
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+
+  try {
+    const results = await Promise.all(layers.map((layer) => fetchLayerLatestAvailableTime(layer, controller.signal)));
+    const validTimes = results.filter((value): value is string => value !== null);
+    if (validTimes.length !== layers.length) return fallback;
+
+    const earliestAcrossLayers = validTimes.reduce((min, value) => (value < min ? value : min));
+    return earliestAcrossLayers < fallback ? earliestAcrossLayers : fallback;
+  } catch {
+    return fallback;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
 const toDegrees = (radians: number) => (radians * 180) / Math.PI;

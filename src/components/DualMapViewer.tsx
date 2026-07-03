@@ -3,6 +3,7 @@ import 'leaflet/dist/leaflet.css';
 import { Check, Download, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
+  fetchSyncedLatestAvailableTime,
   getAvailableExportKindsFromLayers,
   getExportFileBaseName,
   getHdEnhancementProfile,
@@ -788,6 +789,25 @@ export default function DualMapViewer() {
     }
   };
 
+  const [isJumpingToLatest, setIsJumpingToLatest] = useState(false);
+
+  // The plain `getLatestAvailableTime()` heuristic (now minus a fixed buffer) assumes every WMS
+  // layer publishes within that same margin, but RGB/VIS/IR can each lag independently — see
+  // `fetchSyncedLatestAvailableTime`'s comment for why that silently desyncs RGB and VIS at the
+  // exact instant this button is meant to guarantee freshness. Probes each active layer's real
+  // latest-published time first (briefly, with its own fallback/timeout) so "jump to latest"
+  // actually lands on a timestamp every active layer genuinely has data for.
+  const jumpToLatest = async () => {
+    if (isJumpingToLatest) return;
+    setIsJumpingToLatest(true);
+    try {
+      const syncedLatest = await fetchSyncedLatestAvailableTime(activeLayers);
+      handleTimeChange(syncedLatest);
+    } finally {
+      setIsJumpingToLatest(false);
+    }
+  };
+
   useEffect(() => {
     const latestAvailable = getLatestAvailableTime();
     const requested = new Date(currentTime + 'Z');
@@ -1185,7 +1205,7 @@ export default function DualMapViewer() {
 
       if (lowerKey === 'l') {
         event.preventDefault();
-        handleTimeChange(getLatestAvailableTime());
+        void jumpToLatest();
         return;
       }
 
@@ -1217,6 +1237,7 @@ export default function DualMapViewer() {
     return () => window.removeEventListener('keydown', handleGlobalShortcuts);
   }, [
     handleTimeChange,
+    jumpToLatest,
     openExportModal,
     resetAdjustments,
     setFireHotspotEnabled,
@@ -1488,7 +1509,8 @@ export default function DualMapViewer() {
 
           <TimeDock
             currentTime={currentTime}
-            onLatest={() => handleTimeChange(getLatestAvailableTime())}
+            isSyncingLatest={isJumpingToLatest}
+            onLatest={() => { void jumpToLatest(); }}
             onTimeChange={handleTimeChange}
             t={t}
             theme={resolvedTheme}
