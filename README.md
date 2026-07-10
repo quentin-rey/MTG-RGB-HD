@@ -12,6 +12,19 @@ is centered on France; the map can be freely panned over Europe and Africa.
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Performance Optimizations](#performance-optimizations)
+- [Tech Stack](#tech-stack)
+- [Installation & Setup](#installation--setup)
+- [Usage Guide](#usage-guide)
+- [Satellite Data Reference](#satellite-data-reference)
+- [Credits & Attribution](#credits--attribution)
+- [License](#license)
+
+---
+
 ## Features
 
 ### Layer Control
