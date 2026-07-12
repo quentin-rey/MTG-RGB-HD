@@ -301,7 +301,7 @@ export function AdjustmentsPanel(props: AdjustmentsPanelProps) {
       : mapOptions.franceDepartmentsOpacity;
 
   return (
-    <div className="relative" ref={adjustmentsRef}>
+    <div ref={adjustmentsRef}>
       <button
         onClick={onToggle}
         className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border text-xs font-medium shadow-xl transition-colors backdrop-blur-md ${
@@ -718,7 +718,7 @@ export function FireHotspotPanel(props: FireHotspotPanelProps) {
   const isLight = theme === 'light';
 
   return (
-    <div className="relative" ref={fireHotspotRef}>
+    <div ref={fireHotspotRef}>
       <button
         onClick={onToggle}
         className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border text-xs font-medium shadow-xl transition-colors backdrop-blur-md ${
@@ -1912,7 +1912,7 @@ export function Map2TitleBadge(props: Map2TitleBadgeProps) {
   const isLight = theme === 'light';
 
   return (
-    <div className="absolute top-4 left-4 z-[400] pointer-events-none">
+    <div className="pointer-events-none">
       <div className={`backdrop-blur-md px-3 py-1.5 rounded text-xs font-mono font-medium border shadow-xl ${
         themedClass(isLight, 'bg-white/95 border-slate-300 text-slate-900', 'bg-black/60 border-white/10 text-white')
       }`}>
@@ -2070,7 +2070,7 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
   };
 
   return (
-    <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
+    <div className="relative ml-auto pointer-events-auto flex items-center gap-2 flex-wrap justify-end">
       <div className={`flex items-center gap-1 backdrop-blur-md p-1 rounded-md border shadow-xl ${
         themedClass(isLight, 'bg-white/95 border-slate-300', 'bg-black/60 border-white/10')
       }`}>
@@ -2165,13 +2165,15 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         visContrast={visContrast}
       />
 
-      {/* Last in the row on purpose: FireHotspotPanel's dropdown anchors with `right-0` on its
-          own wrapper (same pattern as AdjustmentsPanel above), which only lines up with the true
-          viewport-right margin when the wrapper itself is the rightmost element in this flex row.
-          It used to render before AdjustmentsPanel, so its ~full-viewport-width mobile dropdown
-          (`w-[calc(100vw-2rem)]`) was anchored from a point roughly one button-width left of the
-          screen's right edge, pushing its left edge off-screen by that same amount — this is what
-          read as "part of the fire panel is hidden on mobile". */}
+      {/* AdjustmentsPanel and FireHotspotPanel both render `absolute right-0 top-20 w-[calc(100vw-2rem)]`
+          dropdowns, but neither has its own `position: relative` wrapper anymore — that wrapper used
+          to be each button's own ~40px box, so only whichever of the two was last in this row had its
+          `right-0` actually coincide with the row's true right edge; the other's ~full-viewport-width
+          dropdown was anchored one button-width too far left, pushing its own left edge off-screen
+          (this is what read as "part of the panel is hidden on mobile" — reordering once "fixed" it
+          for whichever panel happened to move last, silently reintroducing it on the other). Both
+          dropdowns now resolve against the shared `relative` row container above instead, so render
+          order here no longer affects either one's anchoring. */}
       <FireHotspotPanel
         fireHotspotEnabled={fireHotspotEnabled}
         fireHotspotMinBrightness={fireHotspotMinBrightness}

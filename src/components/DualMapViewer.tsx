@@ -1441,6 +1441,7 @@ export default function DualMapViewer() {
             aria-hidden="true"
           />
 
+          <div className="absolute top-4 left-4 right-4 z-[400] flex flex-wrap items-start gap-2 pointer-events-none">
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
           <Map2ControlBar
@@ -1504,6 +1505,7 @@ export default function DualMapViewer() {
             visBrightness={visBrightness}
             visContrast={visContrast}
           />
+          </div>
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
 
