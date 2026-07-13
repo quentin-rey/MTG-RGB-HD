@@ -1035,6 +1035,43 @@ export async function generateExportPreviews(
   return files.map(({ descriptor, blob }) => ({ kind: descriptor.kind, url: URL.createObjectURL(blob) }));
 }
 
+type RenderAnimationFramesOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime' | 'onProgress'> & {
+  frameTimes: string[];
+  kind: ExportKind;
+  maxDimension: number;
+  onFrameProgress?: (fraction: number) => void;
+};
+
+/**
+ * Renders one still image per `frameTimes` entry via the same WMS-fetch + composite pipeline as
+ * a single still export. Shared by both `exportAnimationGif` and `exportAnimationWebm` — a video
+ * export here is a fixed sequence of pre-rendered stills replayed at `fps`, not a live capture of
+ * a continuously-redrawing map, since each frame requires its own round-trip to the WMS endpoint.
+ */
+async function renderAnimationFrameBlobs(options: RenderAnimationFramesOptions): Promise<Blob[]> {
+  const { frameTimes, kind, maxDimension, onFrameProgress, ...shared } = options;
+  const frameBlobs: Blob[] = [];
+
+  for (let index = 0; index < frameTimes.length; index += 1) {
+    const time = frameTimes[index];
+    const frame = await renderSatelliteFrames({
+      ...shared,
+      currentTime: time,
+      requestedKinds: [kind],
+      maxDimension,
+    });
+
+    if (frame.files.length === 0) {
+      throw new Error(`No render output for frame at ${time}`);
+    }
+
+    frameBlobs.push(frame.files[0].blob);
+    onFrameProgress?.((index + 1) / frameTimes.length);
+  }
+
+  return frameBlobs;
+}
+
 export async function exportAnimationGif(options: ExportAnimationGifOptions): Promise<Blob> {
   const {
     frameTimes,
@@ -1064,27 +1101,13 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
 
   let targetWidth = 0;
   let targetHeight = 0;
-  const frameBlobs: Blob[] = [];
-
-  for (let index = 0; index < frameTimes.length; index += 1) {
-    const time = frameTimes[index];
-    const frame = await renderSatelliteFrames({
-      ...shared,
-      currentTime: time,
-      requestedKinds: [kind],
-      maxDimension,
-    });
-
-    if (frame.files.length === 0) {
-      throw new Error(`No render output for frame at ${time}`);
-    }
-
-    frameBlobs.push(frame.files[0].blob);
-
-    if (onProgress) {
-      onProgress(Math.round(((index + 1) / frameTimes.length) * 45));
-    }
-  }
+  const frameBlobs = await renderAnimationFrameBlobs({
+    ...shared,
+    frameTimes,
+    kind,
+    maxDimension,
+    onFrameProgress: (fraction) => onProgress?.(Math.round(fraction * 45)),
+  });
 
   if (frameBlobs.length === 0) {
     throw new Error('No rendered frames available for GIF export');
@@ -1160,4 +1183,110 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
 
   gif.finish();
   return new Blob([gif.bytesView()], { type: 'image/gif' });
+}
+
+type ExportAnimationWebmOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime' | 'imageFormat'> & {
+  frameTimes: string[];
+  fps: number;
+  kind: ExportKind;
+  quality?: number;
+  maxDimension?: number;
+  onProgress?: (progress: number) => void;
+};
+
+const WEBM_MIME_CANDIDATES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+
+function pickSupportedWebmMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  return WEBM_MIME_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+/**
+ * Records the same frame sequence used by `exportAnimationGif` as a WebM video via
+ * `MediaRecorder` + `canvas.captureStream()`, instead of GIF-encoding it. Frames are rendered
+ * up front (0-45% progress, same WMS pipeline as the GIF export) then replayed into a canvas at
+ * `fps`, one `MediaRecorder` chunk per browser-driven capture interval (45-100%). Throws if the
+ * browser has no WebM `MediaRecorder` support at all (notably some Safari versions).
+ *
+ * Frames are rendered as opaque JPEG (`imageFormat: 'jpeg'`), not PNG like the GIF export: PNG
+ * frames keep an alpha channel wherever the map is panned past WMS coverage, and VP8/VP9 has no
+ * alpha channel — compositing a transparent frame onto the canvas without first clearing to an
+ * opaque color would let stale pixels from the previous frame show through at those edges.
+ */
+export async function exportAnimationWebm(options: ExportAnimationWebmOptions): Promise<Blob> {
+  const {
+    frameTimes,
+    fps,
+    kind,
+    onProgress,
+    quality = 0.8,
+    maxDimension = 1280,
+    ...shared
+  } = options;
+
+  if (frameTimes.length === 0) {
+    throw new Error('No frame times provided for WebM export');
+  }
+
+  const mimeType = pickSupportedWebmMimeType();
+  if (!mimeType) {
+    throw new Error('webm-unsupported');
+  }
+
+  const frameBlobs = await renderAnimationFrameBlobs({
+    ...shared,
+    frameTimes,
+    kind,
+    maxDimension,
+    imageFormat: 'jpeg',
+    onFrameProgress: (fraction) => onProgress?.(Math.round(fraction * 45)),
+  });
+
+  const firstBitmap = await createImageBitmap(frameBlobs[0]);
+  const targetWidth = firstBitmap.width;
+  const targetHeight = firstBitmap.height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    firstBitmap.close();
+    throw new Error('Cannot create WebM rendering context');
+  }
+  ctx.drawImage(firstBitmap, 0, 0);
+  firstBitmap.close();
+
+  const safeQuality = Math.max(0, Math.min(1, quality));
+  const videoBitsPerSecond = Math.round(1_000_000 + safeQuality * 7_000_000);
+  const stream = canvas.captureStream(fps);
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  const stopped = new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+  });
+
+  recorder.start();
+
+  const frameDelayMs = Math.max(1, Math.round(1000 / Math.max(1, fps)));
+  for (let index = 0; index < frameBlobs.length; index += 1) {
+    const frameBitmap = await createImageBitmap(frameBlobs[index]);
+    ctx.clearRect(0, 0, targetWidth, targetHeight);
+    ctx.drawImage(frameBitmap, 0, 0, targetWidth, targetHeight);
+    frameBitmap.close();
+
+    if (onProgress) {
+      onProgress(45 + Math.round(((index + 1) / frameBlobs.length) * 50));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, frameDelayMs));
+  }
+
+  recorder.stop();
+  await stopped;
+  onProgress?.(100);
+  return new Blob(chunks, { type: 'video/webm' });
 }

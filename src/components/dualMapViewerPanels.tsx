@@ -943,7 +943,7 @@ export function InfoModal(props: InfoModalProps) {
   );
 }
 
-type ExportMode = 'image' | 'gif';
+type ExportMode = 'image' | 'gif' | 'webm';
 
 type ExportKindGridProps = {
   availableExportKinds: ExportKind[];
@@ -1063,20 +1063,25 @@ type ExportModalProps = {
   gifProgress: number;
   gifSelectedKind: ExportKind;
   isExportingGif: boolean;
+  isExportingWebm: boolean;
   onColorCountChange: (value: 64 | 128 | 256) => void;
   onCustomDateChange: (value: string) => void;
   onCustomEndStepChange: (value: number) => void;
   onCustomStartStepChange: (value: number) => void;
   onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
   onExportGif: () => void;
+  onExportWebm: () => void;
   onFinalPauseChange: (value: number) => void;
   onFpsChange: (value: number) => void;
   onGifKindChange: (kind: ExportKind) => void;
   onPaletteModeChange: (value: 'per-frame' | 'global') => void;
   onPresetChange: (value: '3h' | '6h' | '12h' | 'custom') => void;
   onResolutionChange: (value: 960 | 1280 | 1600) => void;
+  onWebmQualityChange: (value: number) => void;
   preset: '3h' | '6h' | '12h' | 'custom';
   rangeError: string | null;
+  webmProgress: number;
+  webmQuality: number;
 };
 
 export function ExportModal(props: ExportModalProps) {
@@ -1109,6 +1114,7 @@ export function ExportModal(props: ExportModalProps) {
     hdEnhanceEnabled,
     isExporting,
     isExportingGif,
+    isExportingWebm,
     isOpen,
     isPreviewLoading,
     mode,
@@ -1123,6 +1129,7 @@ export function ExportModal(props: ExportModalProps) {
     onExportFormatChange,
     onExportGif,
     onExportResolutionChange,
+    onExportWebm,
     onFpsChange,
     onGifKindChange,
     onModeChange,
@@ -1130,6 +1137,7 @@ export function ExportModal(props: ExportModalProps) {
     onPresetChange,
     onResolutionChange,
     onToggleImageKind,
+    onWebmQualityChange,
     preset,
     previewImages,
     rangeError,
@@ -1137,6 +1145,8 @@ export function ExportModal(props: ExportModalProps) {
     selectedExportKinds,
     t,
     theme,
+    webmProgress,
+    webmQuality,
   } = props;
   const isLight = theme === 'light';
   const sliderMin = 0;
@@ -1201,8 +1211,10 @@ export function ExportModal(props: ExportModalProps) {
   if (!isOpen) return null;
 
   const isImageMode = mode === 'image';
-  const isExportingCurrent = isImageMode ? isExporting : isExportingGif;
-  const currentProgress = isImageMode ? downloadProgress : gifProgress;
+  const isGifMode = mode === 'gif';
+  const isWebmMode = mode === 'webm';
+  const isExportingCurrent = isImageMode ? isExporting : isGifMode ? isExportingGif : isExportingWebm;
+  const currentProgress = isImageMode ? downloadProgress : isGifMode ? gifProgress : webmProgress;
   const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
   const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
   const isSingleFile = selectedExportKinds.length === 1;
@@ -1230,10 +1242,11 @@ export function ExportModal(props: ExportModalProps) {
 
         <div className="ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 pb-4">
 
-        <div className={`mb-4 grid grid-cols-2 gap-1 p-1 rounded-lg ${themedClass(isLight, 'bg-slate-100', 'bg-black/30')}`}>
+        <div className={`mb-4 grid grid-cols-3 gap-1 p-1 rounded-lg ${themedClass(isLight, 'bg-slate-100', 'bg-black/30')}`}>
           {([
             ['image', t('exportModeImage')],
             ['gif', t('exportModeGif')],
+            ['webm', t('exportModeWebm')],
           ] as const).map(([value, label]) => (
             <button
               key={value}
@@ -1464,7 +1477,7 @@ export function ExportModal(props: ExportModalProps) {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifResolution')}</label>
+                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{isGifMode ? t('animationGifResolution') : t('animationResolution')}</label>
                 <select
                   value={gifMaxDimension}
                   onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
@@ -1477,73 +1490,96 @@ export function ExportModal(props: ExportModalProps) {
                   <option value={1600}>{t('animationResolution1600')}</option>
                 </select>
               </div>
-              <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
-                <select
-                  value={gifColorCount}
-                  onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
-                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                  }`}
-                >
-                  <option value={64}>64</option>
-                  <option value={128}>128</option>
-                  <option value={256}>256</option>
-                </select>
-              </div>
+              {isGifMode ? (
+                <div>
+                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
+                  <select
+                    value={gifColorCount}
+                    onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
+                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                    }`}
+                  >
+                    <option value={64}>64</option>
+                    <option value={128}>128</option>
+                    <option value={256}>256</option>
+                  </select>
+                </div>
+              ) : null}
+              {isWebmMode ? (
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationWebmQuality')}</span>
+                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(webmQuality * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={1}
+                    step={0.1}
+                    value={webmQuality}
+                    onChange={(event) => onWebmQualityChange(parseFloat(event.target.value))}
+                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                  />
+                </div>
+              ) : null}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
-                <select
-                  value={gifPaletteMode}
-                  onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
-                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                  }`}
-                >
-                  <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
-                  <option value="global">{t('animationPaletteModeGlobal')}</option>
-                </select>
+            {isGifMode && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
+                  <select
+                    value={gifPaletteMode}
+                    onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
+                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                    }`}
+                  >
+                    <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
+                    <option value="global">{t('animationPaletteModeGlobal')}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
+                  <select
+                    value={gifDitherLevel}
+                    onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
+                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
+                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
+                    }`}
+                  >
+                    <option value="none">{t('animationDitherNone')}</option>
+                    <option value="low">{t('animationDitherLow')}</option>
+                    <option value="medium">{t('animationDitherMedium')}</option>
+                    <option value="high">{t('animationDitherHigh')}</option>
+                  </select>
+                </div>
               </div>
-              <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
-                <select
-                  value={gifDitherLevel}
-                  onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
-                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                  }`}
-                >
-                  <option value="none">{t('animationDitherNone')}</option>
-                  <option value="low">{t('animationDitherLow')}</option>
-                  <option value="medium">{t('animationDitherMedium')}</option>
-                  <option value="high">{t('animationDitherHigh')}</option>
-                </select>
-              </div>
-            </div>
+            )}
 
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
-                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
+            {isGifMode && (
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
+                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
+                </div>
+                <input
+                  type="range"
+                  min={100}
+                  max={2000}
+                  step={100}
+                  value={gifFinalPauseMs}
+                  onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
+                  className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
+                />
+                <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+                  <span>0.1s</span>
+                  <span>1.0s</span>
+                  <span>2.0s</span>
+                </div>
               </div>
-              <input
-                type="range"
-                min={100}
-                max={2000}
-                step={100}
-                value={gifFinalPauseMs}
-                onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-              />
-              <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                <span>0.1s</span>
-                <span>1.0s</span>
-                <span>2.0s</span>
-              </div>
-            </div>
+            )}
 
             <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
               {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
@@ -1596,7 +1632,7 @@ export function ExportModal(props: ExportModalProps) {
               {t('cancel')}
             </button>
             <button
-              onClick={isImageMode ? onConfirmImage : onExportGif}
+              onClick={isImageMode ? onConfirmImage : isGifMode ? onExportGif : onExportWebm}
               disabled={!canConfirm || isExportingCurrent}
               className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                 isLight
@@ -1606,7 +1642,7 @@ export function ExportModal(props: ExportModalProps) {
             >
               {isExportingCurrent
                 ? `${t('generating')} ${currentProgress}%`
-                : isImageMode ? t('downloadSelection') : t('animationExportGif')}
+                : isImageMode ? t('downloadSelection') : isGifMode ? t('animationExportGif') : t('animationExportWebm')}
             </button>
           </div>
         </div>

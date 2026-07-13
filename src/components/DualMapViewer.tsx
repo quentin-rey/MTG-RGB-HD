@@ -26,6 +26,7 @@ import { getTranslator, type Language } from './i18n';
 import {
   downloadSatellitePack,
   exportAnimationGif,
+  exportAnimationWebm,
   generateExportPreviews,
   type GifDitherLevel,
   type GifFinalPauseMs,
@@ -335,7 +336,8 @@ export default function DualMapViewer() {
   });
   const [exportFormat, setExportFormat] = useState<StillImageFormat>('png');
   const [exportResolution, setExportResolution] = useState<1920 | 2560 | 4096>(4096);
-  const [exportMode, setExportMode] = useState<'image' | 'gif'>('image');
+  const [exportMode, setExportMode] = useState<'image' | 'gif' | 'webm'>('image');
+  const [webmQuality, setWebmQuality] = useState(0.8);
   const [gifSelectedKind, setGifSelectedKind] = useState<ExportKind | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [previewImages, setPreviewImages] = useState<Partial<Record<ExportKind, string>>>({});
@@ -636,6 +638,8 @@ export default function DualMapViewer() {
   });
   const [isGifExporting, setIsGifExporting] = useState(false);
   const [gifExportProgress, setGifExportProgress] = useState(0);
+  const [isWebmExporting, setIsWebmExporting] = useState(false);
+  const [webmExportProgress, setWebmExportProgress] = useState(0);
   const [animationRangeError, setAnimationRangeError] = useState<string | null>(null);
   const latestAvailableTime = getLatestAvailableTime();
   const latestAvailableDatePart = latestAvailableTime.split('T')[0];
@@ -973,6 +977,76 @@ export default function DualMapViewer() {
     }
   };
 
+  const exportWebm = async () => {
+    if (!map2Instance.current || !map2Ref.current || isWebmExporting) return;
+
+    let frames: string[] = [];
+    try {
+      frames = buildAnimationFrameTimes();
+    } catch (error) {
+      setAnimationRangeError(mapAnimationErrorCode(error instanceof Error ? error.message : ''));
+      return;
+    }
+
+    setAnimationRangeError(null);
+    setIsWebmExporting(true);
+    setWebmExportProgress(0);
+
+    try {
+      const { saveAs } = await import('file-saver');
+      const exportKind = effectiveGifKind;
+      const webmBlob = await exportAnimationWebm({
+        frameTimes: frames,
+        fps: animationFps,
+        kind: exportKind,
+        maxDimension: gifMaxDimension,
+        quality: webmQuality,
+        map: map2Instance.current,
+        mapContainer: map2Ref.current,
+        activeLayers,
+        fireHotspotEnabled,
+        fireHotspotMinBrightness,
+        fireHotspotMinRedBlueDiff,
+        fireHotspotOpacity,
+        irStyle,
+        visBrightness,
+        visContrast,
+        hdEnhanceEnabled,
+        hdEnhanceHighlightProtection,
+        hdEnhanceLocalContrast,
+        hdEnhanceNoiseReduction,
+        hdEnhancePreset,
+        hdEnhanceRadius,
+        hdEnhanceSaturationAdjust,
+        hdEnhanceShadowProtection,
+        hdEnhanceSharpen,
+        hdEnhanceStrength,
+        rgbSaturation,
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        exportSolarElevation: solarElevation,
+        mapOptions,
+        language,
+        map1BordersLayer: map1BordersRef.current,
+        map1DepartmentsLayer: map1DepartmentsRef.current,
+        cityLoadPromise: cityLoadPromiseRef.current,
+        getVisibleCityFeatures,
+        onProgress: setWebmExportProgress,
+      });
+
+      const safeStart = frames[0].replace('T', '_').replace(/:/g, '-');
+      const safeEnd = frames[frames.length - 1].replace('T', '_').replace(/:/g, '-');
+      const webmFileBaseName = getExportFileBaseName(exportKind, hdEnhanceEnabled);
+      saveAs(webmBlob, `MTG_ANIMATION_${webmFileBaseName}_${gifMaxDimension}px_${safeStart}_to_${safeEnd}.webm`);
+    } catch (error) {
+      console.error('WebM export failed:', error);
+      alert(error instanceof Error && error.message === 'webm-unsupported' ? t('animationExportWebmUnsupported') : t('animationExportWebmFailed'));
+    } finally {
+      setIsWebmExporting(false);
+    }
+  };
+
   // Computed once per render (buildAnimationFrameTimes previously ran twice per render:
   // once to check for an error, once more to get the frame count).
   let computedAnimationRangeError: string | null = null;
@@ -983,12 +1057,13 @@ export default function DualMapViewer() {
     computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
   }
   const animationEstimatedFrameCount = animationFrameTimesPreview.length;
+  const animationFileExtension = exportMode === 'webm' ? 'webm' : 'gif';
   const gifFileName = animationFrameTimesPreview.length > 0
     ? `MTG_ANIMATION_${getExportFileBaseName(effectiveGifKind, hdEnhanceEnabled)}_${gifMaxDimension}px_${
       animationFrameTimesPreview[0].replace('T', '_').replace(/:/g, '-')
     }_to_${
       animationFrameTimesPreview[animationFrameTimesPreview.length - 1].replace('T', '_').replace(/:/g, '-')
-    }.gif`
+    }.${animationFileExtension}`
     : '';
 
   const buildBaseExportOptions = () => {
@@ -1413,20 +1488,22 @@ export default function DualMapViewer() {
 
           <button
             onClick={() => openExportModal('image')}
-            disabled={isExporting || isGifExporting}
+            disabled={isExporting || isGifExporting || isWebmExporting}
             className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
               resolvedTheme === 'light'
                 ? 'bg-slate-900 text-white hover:bg-slate-700'
                 : 'bg-white text-black hover:bg-slate-200'
             }`}
           >
-            {isExporting || isGifExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
+            {isExporting || isGifExporting || isWebmExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
             <span className="hidden sm:inline">
               {isExporting
                 ? `${t('generating')} ${downloadProgress}%`
                 : isGifExporting
                   ? `${t('generating')} ${gifExportProgress}%`
-                  : t('export')}
+                  : isWebmExporting
+                    ? `${t('generating')} ${webmExportProgress}%`
+                    : t('export')}
             </span>
           </button>
         </div>
@@ -1615,6 +1692,7 @@ export default function DualMapViewer() {
         hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
         isExportingGif={isGifExporting}
+        isExportingWebm={isWebmExporting}
         isOpen={isExportModalOpen}
         isPreviewLoading={isPreviewLoading}
         mode={exportMode}
@@ -1631,6 +1709,7 @@ export default function DualMapViewer() {
         onExportFormatChange={setExportFormat}
         onExportGif={() => { void exportGif(); }}
         onExportResolutionChange={setExportResolution}
+        onExportWebm={() => { void exportWebm(); }}
         onFinalPauseChange={setGifFinalPauseMs}
         onFpsChange={setAnimationFps}
         onGifKindChange={setGifSelectedKind}
@@ -1639,12 +1718,15 @@ export default function DualMapViewer() {
         onPresetChange={handleAnimationPresetChange}
         onResolutionChange={setGifMaxDimension}
         onToggleImageKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}
+        onWebmQualityChange={setWebmQuality}
         preset={animationPreset}
         previewImages={previewImages}
         rangeError={computedAnimationRangeError ?? animationRangeError}
         selectedExports={selectedExports}
         selectedExportKinds={selectedExportKinds}
         t={t}
+        webmProgress={webmExportProgress}
+        webmQuality={webmQuality}
         theme={resolvedTheme}
       />
 
