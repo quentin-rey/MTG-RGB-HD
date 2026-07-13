@@ -97,13 +97,17 @@ Enhance your view with map overlays:
   otherwise all selected formats are bundled into one ZIP
 - **Progress bar** covering the whole pipeline (WMS fetch → compositing →
   per-file encoding → ZIP packaging when applicable)
-- **GIF animation export** with advanced controls:
+- **Animation export**, as either a **GIF** or a **WebM video**, sharing the
+  same time-range picker:
   - Custom UTC day selection with bounded start/end range on a single timeline
   - Fixed 10-minute sampling (no frame skipping)
   - Up to **73 frames** (full 12-hour window)
-  - GIF color count (64 / 128 / 256)
-  - Palette mode: per-frame or global palette
-  - Dithering levels: none / low / medium / high
+  - Configurable FPS and output resolution for both formats
+  - GIF-specific: color count (64 / 128 / 256), palette mode (per-frame or
+    global), dithering levels (none / low / medium / high)
+  - WebM-specific: adjustable video quality (bitrate), recorded via
+    `MediaRecorder`/`canvas.captureStream()` from the same rendered frames
+    (requires browser WebM support — most Safari versions don't have it)
   - Export progress integrated in the export button
 - **Bilingual export labels** (French/English)
 - **Overlay integration** – borders, departments, cities, the fire hotspot
@@ -124,7 +128,7 @@ Enhance your view with map overlays:
   - Left/Right: -/+ 10 minutes · Shift + Left/Right: -/+ 30 minutes ·
     Ctrl/Cmd + Left/Right: -/+ 60 minutes
   - `L`: jump to the latest available time
-  - `A`: toggle the animation (GIF) modal
+  - `A`: toggle the animation (GIF/WebM) modal
   - `D`: open the download modal
   - `F`: toggle the fire hotspot overlay on/off
   - `S`: toggle the adjustments panel
@@ -162,7 +166,7 @@ Enhance your view with map overlays:
 | **Build** | Vite 6 |
 | **Server** | Express (Vite middleware in dev, static + SPA fallback in production) |
 | **Maps** | Leaflet (WMS tile layers), driven imperatively — no react-leaflet |
-| **Export** | JSZip + file-saver + Canvas API + gifenc (GIF encoding) |
+| **Export** | JSZip + file-saver + Canvas API + gifenc (GIF encoding) + MediaRecorder (WebM video) |
 | **Styling** | Tailwind CSS v4 (`@tailwindcss/vite`, no config file) |
 | **Icons** | Lucide Icons |
 
