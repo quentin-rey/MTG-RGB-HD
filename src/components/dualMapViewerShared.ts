@@ -399,6 +399,8 @@ export type LayerBlendState = {
   isCloudOnlyIrMode: boolean;
   effectiveCloudOnlyIrOpacity: number;
   cloudOnlyIrVisMaskWeight: number;
+  /** Floor applied to the cloud-detection alpha in VIS+IR-only mode so IR doesn't vanish at night. */
+  cloudOnlyIrNightFloor: number;
   isVisOverlayEnabled: boolean;
   isIrOverlayEnabled: boolean;
   currentVisOverlayOpacity: number;
@@ -439,7 +441,13 @@ export function computeLayerBlendState(params: {
   const isHybridMode = activeLayers.rgb && activeLayers.vis && activeLayers.ir;
   const isRgbIrMode = activeLayers.rgb && activeLayers.ir && !activeLayers.vis;
   const isVisIrMode = activeLayers.vis && activeLayers.ir && !activeLayers.rgb;
-  const shouldPreferIrBaseAtNight = activeLayers.rgb && (activeLayers.vis || activeLayers.ir) && solarElevation < 1.5;
+  // VIS+IR-only mode has no RGB layer to fall back on, but it has the exact same problem as
+  // RGB+IR/RGB+VIS+IR at night: its "cloud-only IR" composite (see cloudOnlyIrNightFloor below)
+  // uses `mix-blend-mode: color`, which takes its luminosity from the VIS backdrop — once VIS
+  // goes dark, that crushes the composite to black no matter how visible the IR overlay itself
+  // is. So VIS+IR must switch to the same raw-IR base fallback as the RGB combos once the sun
+  // is low, not just the RGB ones.
+  const shouldPreferIrBaseAtNight = (activeLayers.rgb || isVisIrMode) && (activeLayers.vis || activeLayers.ir) && solarElevation < 1.5;
   const baseLayer: 'rgb' | 'ir' | 'vis' = shouldPreferIrBaseAtNight
     ? 'ir'
     : activeLayers.rgb
@@ -451,11 +459,35 @@ export function computeLayerBlendState(params: {
     ? Math.max(0, Math.min(1, (1.5 - solarElevation) / 12))
     : 0;
   const isRgbBasedCloudOnlyMode = baseLayer === 'rgb' && (isHybridMode || isRgbIrMode);
-  const isCloudOnlyIrMode = isVisIrMode || isRgbBasedCloudOnlyMode;
+  // Once baseLayer has switched to raw 'ir' (night fallback above), the base layer already *is*
+  // full-opacity IR — the cloud-only-IR composite would just be redundant work on top of it (and,
+  // since it's still keyed off isVisIrMode alone, would layer a VIS overlay underneath too).
+  const isCloudOnlyIrMode = (isVisIrMode && baseLayer !== 'ir') || isRgbBasedCloudOnlyMode;
+  // In VIS+IR-only mode there's no independent RGB signal to fall back on (unlike hybrid
+  // mode, whose rgbCloudMask uses a real RGB fetch): the cloud-detection mask is 100% derived
+  // from VIS luminosity, which collapses to ~0 at dusk/night regardless of actual cloud cover.
+  // Without this floor, `computeCloudOnlyIrRgba`'s alpha follows it to 0 and the whole IR
+  // layer fades out in the evening even though the sky is still full of (unlit) clouds.
+  // Ramped over [1.5, 12] rather than daylightVisFactor's own [-6, 12] range so it reaches 1
+  // (fully opaque) exactly at solarElevation===1.5 — the instant `shouldPreferIrBaseAtNight`
+  // hard-switches the base layer to raw, full-opacity IR. Using daylightVisFactor directly left
+  // the composite only ~58% opaque right up to that switch, so the swap to the 100%-opaque raw
+  // IR base was a visible pop; ramping to 1 by the same threshold makes both sides of the switch
+  // land at full opacity, leaving only the (much smaller) blend-mode/filter difference visible.
+  const cloudOnlyIrNightFloor = isVisIrMode
+    ? Math.max(0, Math.min(1, (12 - solarElevation) / 10.5))
+    : 0;
   const effectiveCloudOnlyIrOpacity = isRgbBasedCloudOnlyMode
     ? effectiveHybridIrOpacity * (1 - rgbToIrTransition)
-    : isVisIrMode
-      ? sandwichOpacity
+    : isVisIrMode && baseLayer !== 'ir'
+      // sandwichOpacity is the user's daytime "how strong should the IR tint be over VIS" slider
+      // (defaults to a subtle 0.4) — left alone in full daylight, but that same 40% layer opacity
+      // made the whole composite nearly invisible once VIS itself started dimming toward dusk (a
+      // faint tint over an already-dim backdrop reads as "gone", not "subtle"). Ramp the layer's
+      // own opacity up to fully opaque in step with cloudOnlyIrNightFloor so it actually reaches
+      // full strength by the time baseLayer hard-switches to raw IR, instead of staying capped at
+      // the user's daytime preference all the way through dusk.
+      ? Math.max(sandwichOpacity, cloudOnlyIrNightFloor)
       : 0;
   const hybridVisMaskWeight = Math.min(0.35, Math.max(0, (daylightVisFactor - 0.35) / 0.65));
   const cloudOnlyIrVisMaskWeight = isHybridMode ? hybridVisMaskWeight : isVisIrMode ? 1 : 0;
@@ -486,6 +518,7 @@ export function computeLayerBlendState(params: {
     isCloudOnlyIrMode,
     effectiveCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight,
+    cloudOnlyIrNightFloor,
     isVisOverlayEnabled,
     isIrOverlayEnabled,
     currentVisOverlayOpacity,
@@ -549,6 +582,8 @@ export function computeFireHotspotRgba(
 export type CloudOnlyIrRenderOptions = {
   visMaskWeight: number;
   alphaMultiplier?: number;
+  /** Minimum cloud-detection alpha (0-1), used to keep IR visible in VIS+IR-only mode at night. */
+  nightFloor?: number;
 };
 
 /**
@@ -562,8 +597,9 @@ export function computeCloudOnlyIrRgba(
   irData: Uint8ClampedArray,
   options: CloudOnlyIrRenderOptions,
 ): Uint8ClampedArray {
-  const { visMaskWeight, alphaMultiplier = 1 } = options;
+  const { visMaskWeight, alphaMultiplier = 1, nightFloor = 0 } = options;
   const normalizedVisWeight = Math.max(0, Math.min(1, visMaskWeight));
+  const normalizedNightFloor = Math.max(0, Math.min(1, nightFloor));
   const visThresholdBase = 90;
   const visThresholdSpan = 100;
   const rgbThresholdBase = 120;
@@ -581,7 +617,7 @@ export function computeCloudOnlyIrRgba(
     const refinedCloudMask = rgbCloudMask * (1 - normalizedVisWeight) + visCloudMask * normalizedVisWeight;
     // RGB floor increases only when VIS becomes unreliable (dusk/night).
     const rgbFloorFactor = (1 - normalizedVisWeight) * 0.85;
-    const cloudMask = Math.max(rgbCloudMask * rgbFloorFactor, refinedCloudMask);
+    const cloudMask = Math.max(rgbCloudMask * rgbFloorFactor, refinedCloudMask, normalizedNightFloor);
 
     if (cloudMask < 0.02) {
       out[i + 3] = 0;

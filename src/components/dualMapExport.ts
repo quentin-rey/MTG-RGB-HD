@@ -8,6 +8,7 @@ import {
   getExportBadge,
   getExportFileBaseName,
   getHdEnhancementProfile,
+  getSolarElevation,
   LAYER_FIRETEMP,
   LAYER_IR,
   LAYER_RGB,
@@ -52,7 +53,6 @@ type DownloadSatellitePackOptions = {
   rgbHdOpacity: number;
   sandwichOpacity: number;
   autoReduceVisAtNight: boolean;
-  exportSolarElevation: number;
   mapOptions: MapOptions;
   language: Language;
   map1BordersLayer: L.GeoJSON | null;
@@ -543,7 +543,6 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     rgbHdOpacity,
     sandwichOpacity,
     autoReduceVisAtNight,
-    exportSolarElevation,
     mapOptions,
     language,
     map1BordersLayer,
@@ -556,6 +555,15 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
 
   if (requestedKinds.length === 0) return { width: 0, height: 0, files: [] };
 
+  // Computed fresh from this call's own `currentTime` (rather than passed in once by the
+  // caller) so animation exports get each frame's own correct day/night state — this function
+  // is called once per frame (see renderAnimationFrameBlobs), and reusing a single solar
+  // elevation captured from whatever time the live view happened to show when the export was
+  // triggered meant every frame in the animation inherited that one moment's day/night verdict.
+  // A GIF spanning both daytime and post-dusk hours would render either all-composite or
+  // all-raw-IR throughout, depending on what time it was on screen when you clicked export.
+  const mapCenter = map.getCenter();
+  const exportSolarElevation = getSolarElevation(new Date(currentTime + 'Z'), mapCenter.lat, mapCenter.lng);
   const exportBounds = map.getBounds();
   const ne = L.CRS.EPSG3857.project(exportBounds.getNorthEast());
   const sw = L.CRS.EPSG3857.project(exportBounds.getSouthWest());
@@ -587,6 +595,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     effectiveHybridIrOpacity: exportHybridIrOpacity,
     effectiveCloudOnlyIrOpacity: exportCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight: hybridVisMaskWeight,
+    cloudOnlyIrNightFloor,
     rgbVisOnlyNightBrightness,
   } = computeLayerBlendState({
     activeLayers,
@@ -684,6 +693,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     irData: Uint8ClampedArray,
     visMaskWeight: number,
     overlayOpacity: number,
+    nightFloor = 0,
   ) => {
     const cloudOnlyIrCanvas = document.createElement('canvas');
     cloudOnlyIrCanvas.width = width;
@@ -691,7 +701,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     const cloudOnlyIrCtx = cloudOnlyIrCanvas.getContext('2d')!;
     const cloudOnlyIrImage = cloudOnlyIrCtx.createImageData(width, height);
     cloudOnlyIrImage.data.set(
-      computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight, alphaMultiplier: overlayOpacity }),
+      computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight, alphaMultiplier: overlayOpacity, nightFloor }),
     );
 
     cloudOnlyIrCtx.putImageData(cloudOnlyIrImage, 0, 0);
@@ -751,8 +761,22 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     outputCanvas.height = height;
     const outputCtx = outputCanvas.getContext('2d')!;
 
+    // The cloud-only composite below uses `color` blend, which takes its luminosity from the
+    // VIS backdrop — once VIS goes dark (night), that crushes the composite to black regardless
+    // of the IR overlay's own alpha. Once the live view's night fallback (shouldPreferIrBaseAtNight)
+    // kicks in, mirror it here: show the raw IR image directly instead of the VIS-luminance-carried
+    // composite, matching what the map itself renders (see baseLayer in computeLayerBlendState).
+    if (shouldPreferIrBaseAtNight && imgIr) {
+      // Matches the live view's `.ir-base-layer-tiles-vis-ir-fallback` CSS filter (DualMapViewer.tsx)
+      // so the export doesn't look flatter/darker than what's on screen for the same night view.
+      outputCtx.filter = 'brightness(1.35) contrast(1.15) saturate(1.5)';
+      outputCtx.drawImage(irTempCanvas, 0, 0);
+      outputCtx.filter = 'none';
+      return outputCanvas;
+    }
+
     outputCtx.drawImage(visTempCanvas, 0, 0);
-    const cloudOnlyIrCanvas = createCloudOnlyIrCanvas(visRawData, null, irRawData, 1, sandwichOpacity);
+    const cloudOnlyIrCanvas = createCloudOnlyIrCanvas(visRawData, null, irRawData, 1, sandwichOpacity, cloudOnlyIrNightFloor);
     outputCtx.globalCompositeOperation = 'color';
     outputCtx.drawImage(cloudOnlyIrCanvas, 0, 0);
     outputCtx.globalCompositeOperation = 'source-over';
