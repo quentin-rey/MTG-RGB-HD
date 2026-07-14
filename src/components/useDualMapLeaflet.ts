@@ -150,6 +150,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     isCloudOnlyIrMode,
     effectiveCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight,
+    cloudOnlyIrNightFloor,
     isVisOverlayEnabled,
     isIrOverlayEnabled,
     currentVisOverlayOpacity,
@@ -250,7 +251,24 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     });
   };
 
-  const createSecondaryBaseLayer = (base: 'rgb' | 'ir' | 'vis', isoTime: string, nextIrStyle: IrStyle) => {
+  const createSecondaryBaseLayer = (
+    base: 'rgb' | 'ir' | 'vis',
+    isoTime: string,
+    nextIrStyle: IrStyle,
+    isVisIrNightFallback: boolean,
+  ) => {
+    // VIS+IR's night fallback (raw IR standing in for the VIS-luminance-dependent cloud-only
+    // composite, see shouldPreferIrBaseAtNight/isCloudOnlyIrMode) used the plain, unenhanced
+    // `ir-base-layer-tiles` class — the same one plain standalone-IR mode uses. But the composite
+    // it replaces boosts saturation/contrast both in `computeCloudOnlyIrRgba` (satBoost) and via
+    // `.ir-cloud-only-layer-tiles`'s own CSS filter, so the raw fallback looked visibly flatter and
+    // darker by comparison, both at the moment of the switch and generally at night. Give it its
+    // own class with a matching boost instead of reusing standalone IR's untouched one.
+    const className = base === 'rgb'
+      ? 'rgb-layer-tiles'
+      : base === 'ir'
+        ? (isVisIrNightFallback ? 'ir-base-layer-tiles-vis-ir-fallback' : 'ir-base-layer-tiles')
+        : 'vis-layer-tiles';
     return L.tileLayer.wms(WMS_URL_DIRECT, {
       layers: base === 'rgb' ? LAYER_RGB : base === 'ir' ? LAYER_IR : LAYER_VIS,
       styles: base === 'ir' ? nextIrStyle : '',
@@ -260,7 +278,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       time: isoTime,
       keepBuffer: 2,
       updateWhenIdle: true,
-      className: base === 'rgb' ? 'rgb-layer-tiles' : base === 'ir' ? 'ir-base-layer-tiles' : 'vis-layer-tiles',
+      className,
       zIndex: 200,
     } as any);
   };
@@ -463,6 +481,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     nextIrStyle: IrStyle,
     visMaskWeight: number,
     useRgbMaskInCloudDetection: boolean,
+    nightFloor: number,
   ) => {
     const HYBRID_TILE_CACHE_LIMIT = 320;
 
@@ -505,8 +524,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       // elevation while panning, so a finer cache key would mint a near-duplicate entry for
       // almost every pan tick and starve the LRU cache of real hits. A 0.1 step is visually
       // indistinguishable in this blend but cuts key churn ~10x.
+      const normalizedNightFloor = Math.max(0, Math.min(1, nightFloor));
       const cacheWeightBucket = (Math.round(normalizedVisWeight * 10) / 10).toFixed(1);
-      const cacheKey = `${isoTime}|${nextIrStyle}|w${cacheWeightBucket}|${coords.z}|${coords.x}|${coords.y}`;
+      const cacheNightFloorBucket = (Math.round(normalizedNightFloor * 10) / 10).toFixed(1);
+      const cacheKey = `${isoTime}|${nextIrStyle}|w${cacheWeightBucket}|n${cacheNightFloorBucket}|${coords.z}|${coords.x}|${coords.y}`;
       const cachedTile = hybridTileCacheRef.current.get(cacheKey);
       if (cachedTile) {
         const tileCtx = tile.getContext('2d')!;
@@ -578,7 +599,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
           const outCtx = tile.getContext('2d')!;
           const outImage = outCtx.createImageData(256, 256);
-          outImage.data.set(computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight: normalizedVisWeight }));
+          outImage.data.set(computeCloudOnlyIrRgba(visMaskData, rgbMaskData, irData, { visMaskWeight: normalizedVisWeight, nightFloor: normalizedNightFloor }));
           outCtx.putImageData(outImage, 0, 0);
 
           const cacheCanvas = document.createElement('canvas');
@@ -735,7 +756,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     const initialIsoTime = new Date(currentTime + 'Z').toISOString();
     beginLoadingCycle();
-    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, initialIsoTime, irStyle).addTo(map2);
+    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, initialIsoTime, irStyle, isVisIrMode).addTo(map2);
     visOverlayLayerRef.current = createVisOverlayLayer(
       initialIsoTime,
       isHybridMode,
@@ -841,7 +862,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     const isoTime = new Date(currentTime + 'Z').toISOString();
     secondaryBaseLayerRef.current?.remove();
-    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle).addTo(map2);
+    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle, isVisIrMode).addTo(map2);
 
     if (irFallbackBaseLayerRef.current && map2.hasLayer(irFallbackBaseLayerRef.current)) {
       irFallbackBaseLayerRef.current.remove();
@@ -850,6 +871,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     if (baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && rgbToIrTransition > 0.01) {
       irFallbackBaseLayerRef.current.addTo(map2);
       irFallbackBaseLayerRef.current.setOpacity(rgbToIrTransition);
+    } else if (isVisIrMode && baseLayer !== 'ir' && cloudOnlyIrNightFloor > 0.01) {
+      // Crossfades a bright raw-IR layer in underneath the cloud-only composite as dusk
+      // approaches: the composite is blended in `mix-blend-mode: color`, which takes its
+      // luminosity from the VIS backdrop, so it necessarily dims as VIS does. Brightening the
+      // backdrop itself here (rather than just the composite's own alpha) is what lets the
+      // whole stack ramp up smoothly instead of jumping the moment baseLayer hard-switches to
+      // raw IR (see shouldPreferIrBaseAtNight) — by then cloudOnlyIrNightFloor is already 1, so
+      // this layer is already at full opacity and looks identical to the post-switch base layer.
+      // Kept in sync with further solar-elevation-driven changes (panning) by the dedicated
+      // cloud-only-IR effect below, not here — this effect only runs on mode/time/style changes.
+      irFallbackBaseLayerRef.current.addTo(map2);
+      irFallbackBaseLayerRef.current.setOpacity(cloudOnlyIrNightFloor);
     }
 
     if (visOverlayLayerRef.current && map2.hasLayer(visOverlayLayerRef.current)) {
@@ -967,15 +1000,29 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     if (irCloudOnlyLayerRef.current && map2.hasLayer(irCloudOnlyLayerRef.current)) {
       irCloudOnlyLayerRef.current.remove();
     }
-    irCloudOnlyLayerRef.current = createCloudOnlyIrLayer(isoTime, irStyle, cloudOnlyIrVisMaskWeight, !isVisIrMode);
+    irCloudOnlyLayerRef.current = createCloudOnlyIrLayer(isoTime, irStyle, cloudOnlyIrVisMaskWeight, !isVisIrMode, cloudOnlyIrNightFloor);
     const unbindHybridLoading = bindLayerLoading(irCloudOnlyLayerRef.current);
     irCloudOnlyLayerRef.current.addTo(map2);
     irCloudOnlyLayerRef.current.setOpacity(effectiveCloudOnlyIrOpacity);
 
+    // Keep the dusk crossfade layer (mounted by the effect above, which doesn't re-run on pan)
+    // in sync with cloudOnlyIrNightFloor as solar elevation drifts while panning.
+    const irFallback = irFallbackBaseLayerRef.current;
+    if (isVisIrMode && irFallback) {
+      if (cloudOnlyIrNightFloor > 0.01) {
+        if (!map2.hasLayer(irFallback)) {
+          irFallback.addTo(map2);
+        }
+        irFallback.setOpacity(cloudOnlyIrNightFloor);
+      } else if (map2.hasLayer(irFallback)) {
+        irFallback.remove();
+      }
+    }
+
     return () => {
       unbindHybridLoading();
     };
-  }, [isCloudOnlyIrMode, isVisIrMode, currentTime, irStyle, cloudOnlyIrVisMaskWeight]);
+  }, [isCloudOnlyIrMode, isVisIrMode, currentTime, irStyle, cloudOnlyIrVisMaskWeight, cloudOnlyIrNightFloor]);
 
   // Fire hotspot overlay: isolated from the WMS base/overlay effect above for the same reason
   // as the cloud-only-IR canvas layer — its thresholds are tuned live via sliders, and bundling
