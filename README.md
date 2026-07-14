@@ -15,7 +15,6 @@ is centered on France; the map can be freely panned over Europe and Africa.
 ## Table of Contents
 
 - [Features](#features)
-- [Performance Optimizations](#performance-optimizations)
 - [Tech Stack](#tech-stack)
 - [Installation & Setup](#installation--setup)
 - [Usage Guide](#usage-guide)
@@ -29,132 +28,63 @@ is centered on France; the map can be freely panned over Europe and Africa.
 
 ### Layer Control
 
-- **Independent layer toggles** for RGB, VIS (0.6 µm), and IR (10.5 µm)
-- **7 visualization modes**:
-  - RGB (True Color)
-  - VIS (Visible/Reflective)
-  - IR (Thermal/Infrared)
-  - RGB + VIS (HD – luminosity blend)
-  - VIS + IR (Sandwich mode)
-  - RGB + IR (Cloud-only)
-  - RGB + VIS + IR (Hybrid)
-- **Fire hotspot overlay** (Fire Temperature RGB, 500 m resolution): an
-  independent, always-on-top layer toggled from its own 🔥 button, separate
-  from the RGB/VIS/IR combination in use. It isolates the hottest pixels of
-  EUMETSAT's Fire Temperature RGB product (intense fires read yellow-white,
-  cooler/smaller ones red) via live-adjustable thresholds — opacity,
-  detection sensitivity (red/blue channel gap), and minimum brightness —
-  rather than a fixed cutoff, since bare soil and deserts can also read
-  red-ish in that product depending on sun angle
+- Independent RGB, VIS (0.6 µm), and IR (10.5 µm) toggles across **7
+  visualization modes**: RGB, VIS, IR, RGB+VIS (HD), Sandwich (VIS+IR),
+  Cloud-only (RGB+IR), and Hybrid (RGB+VIS+IR)
+- **Fire hotspot overlay** (Fire Temperature RGB): an independent,
+  always-on-top layer with live-adjustable detection thresholds (opacity,
+  sensitivity, minimum brightness), toggled separately from the main layer
+  combination
 
 ### Adjustments & Refinement
 
-Context-aware image adjustments panel — each control is only shown when it
-actually affects the currently active layer combination:
+A context-aware panel — each control only shows up when it actually affects
+the current layer combination:
 
-- VIS contrast and brightness fine-tuning
-- RGB color saturation control
-- Algorithmic HD enhancement for RGB+VIS, with 4 presets (**Natural**,
-  **Balanced**, **Punchy**, **Analyze**) plus a fully **Custom** mode exposing
-  sharpen, local contrast, highlight/shadow protection, noise reduction, and
-  saturation as individual sliders
-- VIS contribution weighting (when blending with RGB)
-- IR/Sandwich intensity modulation
-- IR visualization style (Style 01, Style 02, Grayscale)
-- Automatic VIS attenuation during night hours, based on real solar elevation
-  at the map's center
-- One-click reset to defaults (adjustments panel or the `R` shortcut)
+- VIS contrast/brightness, RGB saturation, IR style, VIS/IR blend weighting
+- Algorithmic HD enhancement for RGB+VIS, with 4 presets (Natural, Balanced,
+  Punchy, Analyze) plus a fully custom mode
+- Automatic night-time VIS attenuation based on real solar elevation
+- One-click reset (`R`)
 
 ### Geographic Overlays
 
-Enhance your view with map overlays:
-
-- **Country borders** (white lines, adjustable opacity)
-- **France departments** (light blue lines for administrative divisions)
-- **City labels**: major European cities rendered as an exact-position dot
-  plus name, with a zoom- and population-aware decluttering pass so nearby
-  conurbations (e.g. Lille/Antwerp, the Rhine-Ruhr area) don't overlap into
-  unreadable clutter
+Country borders, France departments, and city labels — with a
+population-aware decluttering pass so dense regions (Benelux, the Rhine-Ruhr
+area) stay readable instead of turning into overlapping clutter.
 
 ### Export & Download
 
-- **Still image export** with smart preselection based on the active layer
-  combination:
-  - VIS 0.6 µm single layer
-  - RGB True Color single layer
-  - RGB + VIS composite (luminosity blend), optionally with HD enhancement
-    applied
-  - Sandwich (VIS + IR) and Hybrid (RGB + VIS + IR), when those layers are
-    active
-- **Pre-export preview thumbnails** for every selected format, rendered from
-  the exact same pipeline as the final export (not an approximation), shown
-  as large cards with the layer badge and label overlaid
-- **Format choice**: PNG (lossless) or JPEG (quality 92%)
-- **Resolution choice**: 1920 / 2560 / 4096 px on the longer side — this is a
-  genuine WMS re-render at the requested size, not a browser-side upscale, so
-  higher resolutions carry real extra detail
-- **Direct single-file download** when exactly one format is selected;
-  otherwise all selected formats are bundled into one ZIP
-- **Progress bar** covering the whole pipeline (WMS fetch → compositing →
-  per-file encoding → ZIP packaging when applicable)
-- **Animation export**, as either a **GIF** or a **WebM video**, sharing the
-  same time-range picker:
-  - Custom UTC day selection with bounded start/end range on a single timeline
-  - Fixed 10-minute sampling (no frame skipping)
-  - Up to **73 frames** (full 12-hour window)
-  - Configurable FPS and output resolution for both formats
-  - GIF-specific: color count (64 / 128 / 256), palette mode (per-frame or
-    global), dithering levels (none / low / medium / high)
-  - WebM-specific: adjustable video quality (bitrate), recorded via
-    `MediaRecorder`/`canvas.captureStream()` from the same rendered frames
-    (requires browser WebM support — most Safari versions don't have it)
-  - Export progress integrated in the export button
-- **Bilingual export labels** (French/English)
-- **Overlay integration** – borders, departments, cities, the fire hotspot
-  layer (when enabled), a date/layer info badge, and a source watermark are
-  rendered directly into exported images, scaled to stay legible at every
-  export resolution
-- **Resolution- and timestamp-tagged filenames** (e.g.
-  `RGB_VIS_2560x1312_2026-07-03_08-10.png`) — the filename preview shown in
-  the download modal always matches the file you actually get
+- **Still images** (PNG/JPEG, up to 4096px) — a genuine WMS re-render at the
+  requested resolution, not a browser-side upscale — with live preview
+  thumbnails and automatic ZIP bundling for multi-format selections
+- **Animations** as GIF or WebM video, sharing the same time-range picker:
+  up to 73 frames (a full 12h window), configurable FPS and resolution, plus
+  format-specific controls (GIF palette/dithering, WebM quality)
+- Borders, departments, cities, the fire hotspot layer, and a source
+  watermark are baked directly into every export, at every resolution
+- Resolution- and timestamp-tagged filenames that always match what you get
 
 ### User Experience
 
-- **Real-time time selection** in 10-minute UTC increments
-- **Map memory**: last map position (center/zoom) is restored after refresh/revisit
-- **Share button** to generate a URL that reopens the same view (time, map
-  position, active layers, all adjustment values, theme, and language)
+- 10-minute UTC time navigation, map position memory across visits, and a
+  share button that reopens the exact same view (time, layers, adjustments,
+  theme, language) via URL
+- Light/Dark/Auto theme, bilingual FR/EN interface, mobile-responsive layout
 - **Keyboard shortcuts**:
-  - Left/Right: -/+ 10 minutes · Shift + Left/Right: -/+ 30 minutes ·
-    Ctrl/Cmd + Left/Right: -/+ 60 minutes
-  - `L`: jump to the latest available time
-  - `A`: toggle the animation (GIF/WebM) modal
-  - `D`: open the download modal
-  - `F`: toggle the fire hotspot overlay on/off
-  - `S`: toggle the adjustments panel
-  - `I`: toggle the info modal
-  - `R`: reset adjustments to defaults
-  - `Shift` + `S`: copy a share link
-  - `?`: toggle the help modal
-- **Quick help modal** with shortcut and HD enhancement guidance
-- **Tile loading progress indicator** with percentage and pending tile count
-- **Light/Dark/Auto theme support**
-- **Bilingual interface** (FR/EN)
-- **Responsive, mobile-first design**: the header collapses to a compact
-  two-row layout on phones, with secondary controls (language, theme,
-  help/info) tucked behind a single overflow menu; touch targets are sized to
-  Apple's 44px HIG minimum on mobile
 
----
-
-## Performance Optimizations
-
-- Initial map view constrained to France to minimize tile loading
-- Dedicated export map instance isolates tile requests from the display map
-- Leaflet `keepBuffer` and `updateWhenIdle` enabled for smoother interaction
-- LRU cache for cloud-only IR tiles (hybrid-related modes)
-- City labels rendered only on visible map
-- Efficient canvas compositing for multi-layer exports
+  | Key | Action |
+  | --- | --- |
+  | `←` `→` | ±10 min (Shift: ±30 min, Ctrl/Cmd: ±60 min) |
+  | `L` | Jump to latest available time |
+  | `A` | Toggle animation export (GIF/WebM) |
+  | `D` | Toggle image download |
+  | `F` | Toggle fire hotspot overlay |
+  | `S` | Toggle adjustments panel |
+  | `I` | Toggle info modal |
+  | `R` | Reset adjustments |
+  | `Shift` + `S` | Copy share link |
+  | `?` | Toggle help modal |
 
 ---
 
