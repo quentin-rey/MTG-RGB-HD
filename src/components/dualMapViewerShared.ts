@@ -261,8 +261,19 @@ async function fetchLayerLatestAvailableTime(layer: string, signal: AbortSignal)
  * currently-active layer's own true latest-published time and returns the earliest of them, so
  * the requested timestamp is guaranteed to genuinely exist for every active layer (sidestepping
  * nearest-value snapping for this specific "jump to latest" action rather than guessing a shared
- * buffer). Falls back to the synchronous heuristic above if any probe fails, times out (4s), or
- * would land later than the heuristic already produces.
+ * buffer). Falls back to the synchronous heuristic above if any probe fails or times out (4s).
+ *
+ * The verified probe result is trusted whenever every active layer answered — it is NOT clamped
+ * against `fallback`. An earlier version returned `min(earliestAcrossLayers, fallback)`, on the
+ * reasoning that the older of the two is the "safer" pick; in practice real per-layer publishing
+ * lag is almost always well under `fallback`'s fixed 20-minute buffer, so `earliestAcrossLayers`
+ * (verified, guaranteed to exist for every active layer) was almost always *newer* than
+ * `fallback` and got silently discarded in favor of the unverified heuristic — reintroducing the
+ * exact "assumes a shared fixed buffer" bug this function exists to replace, which is why RGB/VIS
+ * could still visibly desync after this fix. The one real failure mode worth guarding against is
+ * a capabilities `default` attribute pointing into the future (clock skew, a stale cached
+ * response advertising a not-yet-real slot) — that's clamped against actual wall-clock "now"
+ * instead, which `fallback`'s 20-minute margin was never a meaningful proxy for.
  */
 export async function fetchSyncedLatestAvailableTime(activeLayers: ActiveLayers): Promise<string> {
   const fallback = getLatestAvailableTime();
@@ -281,7 +292,8 @@ export async function fetchSyncedLatestAvailableTime(activeLayers: ActiveLayers)
     if (validTimes.length !== layers.length) return fallback;
 
     const earliestAcrossLayers = validTimes.reduce((min, value) => (value < min ? value : min));
-    return earliestAcrossLayers < fallback ? earliestAcrossLayers : fallback;
+    const nowIso = new Date().toISOString().slice(0, 16);
+    return earliestAcrossLayers > nowIso ? fallback : earliestAcrossLayers;
   } catch {
     return fallback;
   } finally {
