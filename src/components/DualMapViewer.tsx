@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
 import { Check, Download, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
@@ -820,6 +820,36 @@ export default function DualMapViewer() {
       setCurrentTime(latestAvailable);
     }
   }, [currentTime]);
+
+  // `currentTime`'s initial state (above) is seeded with the same synchronous
+  // `getLatestAvailableTime()` heuristic that `fetchSyncedLatestAvailableTime` exists to correct
+  // for "jump to latest" (see that function's comment) — RGB/VIS/IR can each lag independently,
+  // so the naive guess can silently land on a timestamp only some active layers actually have
+  // data for. That's the intermittent RGB/VIS desync users still see on a fresh page load (no
+  // share link): the "jump to latest" fix only covered the L shortcut/"Dernier" button, not this
+  // initial mount. Re-probes once on mount and snaps to the genuinely-synced timestamp — but only
+  // if the user hasn't already navigated away from the initial guess while the probe (up to 4s)
+  // was in flight, so this can't clobber an intentional time change.
+  const initialCurrentTimeRef = useRef(currentTime);
+  useEffect(() => {
+    if (sharedSnapshot?.currentTime) return;
+    let cancelled = false;
+    setIsJumpingToLatest(true);
+    fetchSyncedLatestAvailableTime(activeLayers)
+      .then((synced) => {
+        if (cancelled) return;
+        setCurrentTime((prev) => (prev === initialCurrentTimeRef.current ? synced : prev));
+      })
+      .finally(() => {
+        if (!cancelled) setIsJumpingToLatest(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally mount-only: this re-probes the initial guess exactly once, not on every
+    // activeLayers/sharedSnapshot change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleAnimationPresetChange = (value: AnimationPreset) => {
     setAnimationPreset(value);
