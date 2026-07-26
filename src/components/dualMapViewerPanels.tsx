@@ -2155,28 +2155,24 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
         </button>
       </div>
 
-      <div className={`flex items-center gap-1 backdrop-blur-md p-1 rounded-md border shadow-xl ${
-        themedClass(isLight, 'bg-white/95 border-slate-300', 'bg-black/60 border-white/10')
-      }`}>
-        <button
-          onClick={onZoomIn}
-          className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded transition-colors ${
-            isLight ? 'text-slate-700 hover:bg-slate-200' : 'text-slate-200 hover:bg-white/10'
-          }`}
-          title={t('zoomIn')}
-        >
-          <Plus className="w-4 h-4" />
-        </button>
-        <button
-          onClick={onZoomOut}
-          className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded transition-colors ${
-            isLight ? 'text-slate-700 hover:bg-slate-200' : 'text-slate-200 hover:bg-white/10'
-          }`}
-          title={t('zoomOut')}
-        >
-          <Minus className="w-4 h-4" />
-        </button>
-      </div>
+      <button
+        onClick={onZoomIn}
+        className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border shadow-xl transition-colors backdrop-blur-md ${
+          themedClass(isLight, 'bg-white/90 hover:bg-white border-slate-300 text-slate-700', 'bg-black/60 hover:bg-black/80 border-white/10 text-white')
+        }`}
+        title={t('zoomIn')}
+      >
+        <Plus className="w-4 h-4" />
+      </button>
+      <button
+        onClick={onZoomOut}
+        className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border shadow-xl transition-colors backdrop-blur-md ${
+          themedClass(isLight, 'bg-white/90 hover:bg-white border-slate-300 text-slate-700', 'bg-black/60 hover:bg-black/80 border-white/10 text-white')
+        }`}
+        title={t('zoomOut')}
+      >
+        <Minus className="w-4 h-4" />
+      </button>
 
       <AdjustmentsPanel
         activeLayers={activeLayers}
