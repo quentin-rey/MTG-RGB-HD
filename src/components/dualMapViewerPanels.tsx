@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, Github, Info, Loader2, Monitor, Moon, Sliders, Sun, Wrench, X } from 'lucide-react';
+import { Bug, CircleHelp, Clock, Github, Info, Loader2, Minus, Monitor, Moon, Plus, Sliders, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -2025,6 +2025,8 @@ type Map2ControlBarProps = {
   onResetHdEnhancement: () => void;
   onVisBrightnessChange: (value: number) => void;
   onVisContrastChange: (value: number) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
   rgbHdOpacity: number;
   rgbSaturation: number;
   sandwichOpacity: number;
@@ -2088,6 +2090,8 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
     onResetHdEnhancement,
     onVisBrightnessChange,
     onVisContrastChange,
+    onZoomIn,
+    onZoomOut,
     rgbHdOpacity,
     rgbSaturation,
     sandwichOpacity,
@@ -2148,6 +2152,29 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
           title={t('toggleIr')}
         >
           IR
+        </button>
+      </div>
+
+      <div className={`flex items-center gap-1 backdrop-blur-md p-1 rounded-md border shadow-xl ${
+        themedClass(isLight, 'bg-white/95 border-slate-300', 'bg-black/60 border-white/10')
+      }`}>
+        <button
+          onClick={onZoomIn}
+          className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded transition-colors ${
+            isLight ? 'text-slate-700 hover:bg-slate-200' : 'text-slate-200 hover:bg-white/10'
+          }`}
+          title={t('zoomIn')}
+        >
+          <Plus className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onZoomOut}
+          className={`flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded transition-colors ${
+            isLight ? 'text-slate-700 hover:bg-slate-200' : 'text-slate-200 hover:bg-white/10'
+          }`}
+          title={t('zoomOut')}
+        >
+          <Minus className="w-4 h-4" />
         </button>
       </div>
 

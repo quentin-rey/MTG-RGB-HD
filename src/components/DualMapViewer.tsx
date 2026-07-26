@@ -1617,6 +1617,8 @@ export default function DualMapViewer() {
             onResetHdEnhancement={resetHdEnhancement}
             onVisBrightnessChange={setVisBrightness}
             onVisContrastChange={setVisContrast}
+            onZoomIn={() => map2Instance.current?.zoomIn()}
+            onZoomOut={() => map2Instance.current?.zoomOut()}
             rgbHdOpacity={rgbHdOpacity}
             rgbSaturation={rgbSaturation}
             sandwichOpacity={sandwichOpacity}
