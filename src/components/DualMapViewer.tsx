@@ -43,6 +43,7 @@ import {
   Map2ControlBar,
   Map2TitleBadge,
   TimeDock,
+  ZoomControl,
 } from './dualMapViewerPanels';
 import { useImageAdjustments } from './useImageAdjustments';
 import { useViewerPanelsState } from './useViewerPanelsState';
@@ -1562,7 +1563,8 @@ export default function DualMapViewer() {
             aria-hidden="true"
           />
 
-          <div className="absolute top-4 left-4 right-4 z-[400] flex flex-wrap items-start gap-2 pointer-events-none">
+          <div className="absolute top-4 left-4 right-4 z-[400] flex flex-col gap-2 pointer-events-none">
+          <div className="flex flex-wrap items-start gap-2">
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
           <Map2ControlBar
@@ -1626,6 +1628,16 @@ export default function DualMapViewer() {
             visBrightness={visBrightness}
             visContrast={visContrast}
           />
+          </div>
+
+          <div className="flex justify-end">
+            <ZoomControl
+              onZoomIn={() => map2Instance.current?.zoomIn()}
+              onZoomOut={() => map2Instance.current?.zoomOut()}
+              t={t}
+              theme={resolvedTheme}
+            />
+          </div>
           </div>
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />

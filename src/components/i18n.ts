@@ -210,6 +210,8 @@ const translations = {
     visContrastClouds: 'Contraste VIS (Nuages)',
     visContributionOnRgb: 'Apport VIS sur RGB',
     visContributionOnRgbIr: 'Apport VIS sur RGB + IR',
+    zoomIn: 'Zoom avant',
+    zoomOut: 'Zoom arrière',
   },
   en: {
     aboutTitle: 'About',
@@ -420,6 +422,8 @@ const translations = {
     visContrastClouds: 'VIS contrast (Clouds)',
     visContributionOnRgb: 'VIS contribution on RGB',
     visContributionOnRgbIr: 'VIS contribution on RGB + IR',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
   },
 } as const;
 

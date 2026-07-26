@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, Github, Info, Loader2, Monitor, Moon, Sliders, Sun, Wrench, X } from 'lucide-react';
+import { Bug, CircleHelp, Clock, Github, Info, Loader2, Minus, Monitor, Moon, Plus, Sliders, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -1969,6 +1969,32 @@ export function Map2TitleBadge(props: Map2TitleBadgeProps) {
           {t('fallbackIrNightActive')}
         </div>
       )}
+    </div>
+  );
+}
+
+type ZoomControlProps = {
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  t: Translator;
+  theme: UiTheme;
+};
+
+export function ZoomControl(props: ZoomControlProps) {
+  const { onZoomIn, onZoomOut, t, theme } = props;
+  const isLight = theme === 'light';
+  const buttonClass = `flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 rounded-md border shadow-xl transition-colors backdrop-blur-md ${
+    themedClass(isLight, 'bg-white/90 hover:bg-white border-slate-300 text-slate-700', 'bg-black/60 hover:bg-black/80 border-white/10 text-white')
+  }`;
+
+  return (
+    <div className="pointer-events-auto flex flex-col gap-2">
+      <button onClick={onZoomIn} className={buttonClass} title={t('zoomIn')}>
+        <Plus className="w-4 h-4" />
+      </button>
+      <button onClick={onZoomOut} className={buttonClass} title={t('zoomOut')}>
+        <Minus className="w-4 h-4" />
+      </button>
     </div>
   );
 }
