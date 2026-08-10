@@ -625,8 +625,18 @@ export default function DualMapViewer() {
     safeSetLocalStorage(STORAGE_KEYS.lastMapView, JSON.stringify(mapViewState));
   }, [mapViewState]);
 
-  // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer)
-  const [currentTime, setCurrentTime] = useState(() => sharedSnapshot?.currentTime ?? getLatestAvailableTime());
+  // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer).
+  // Priority: share-link snapshot > last time the user viewed (persisted below) > "latest available".
+  const hadRestoredCurrentTimeRef = useRef(
+    Boolean(sharedSnapshot?.currentTime) || Boolean(readStoredJson<string | null>(STORAGE_KEYS.currentTime, null)),
+  );
+  const [currentTime, setCurrentTime] = useState(
+    () => sharedSnapshot?.currentTime ?? readStoredJson<string | null>(STORAGE_KEYS.currentTime, null) ?? getLatestAvailableTime(),
+  );
+
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.currentTime, JSON.stringify(currentTime));
+  }, [currentTime]);
   const [animationPreset, setAnimationPreset] = useState<AnimationPreset>(() => {
     const preset = sharedSnapshot?.animationPreset;
     return preset === '3h' || preset === '6h' || preset === '12h' || preset === 'custom' ? preset : '3h';
@@ -845,13 +855,16 @@ export default function DualMapViewer() {
   // for "jump to latest" (see that function's comment) — RGB/VIS/IR can each lag independently,
   // so the naive guess can silently land on a timestamp only some active layers actually have
   // data for. That's the intermittent RGB/VIS desync users still see on a fresh page load (no
-  // share link): the "jump to latest" fix only covered the L shortcut/"Dernier" button, not this
-  // initial mount. Re-probes once on mount and snaps to the genuinely-synced timestamp — but only
-  // if the user hasn't already navigated away from the initial guess while the probe (up to 4s)
-  // was in flight, so this can't clobber an intentional time change.
+  // share link, no persisted time either): the "jump to latest" fix only covered the L
+  // shortcut/"Dernier" button, not this initial mount. Re-probes once on mount and snaps to the
+  // genuinely-synced timestamp — but only if the user hasn't already navigated away from the
+  // initial guess while the probe (up to 4s) was in flight, so this can't clobber an intentional
+  // time change. Also skipped entirely whenever the initial time came from a share link or from
+  // localStorage (`hadRestoredCurrentTimeRef`, set above) — otherwise this would silently snap a
+  // deliberately-restored past time back to "latest" a few seconds after every reload.
   const initialCurrentTimeRef = useRef(currentTime);
   useEffect(() => {
-    if (sharedSnapshot?.currentTime) return;
+    if (hadRestoredCurrentTimeRef.current) return;
     let cancelled = false;
     setIsJumpingToLatest(true);
     fetchSyncedLatestAvailableTime(activeLayers)
