@@ -140,6 +140,29 @@ directly from EUMETSAT's public WMS endpoint, and all state lives client-side
 
 ---
 
+## Scripted exports (no UI)
+
+`npm run export:composite` downloads a composite RGB+VIS(+IR) animation (GIF
+or WebM) for a given UTC time range without clicking through the app. It
+drives a real (headless) browser against the app via the same share-link
+mechanism as "Copier lien", so it reuses the app's actual compositing/export
+pipeline instead of reimplementing it — see [scripts/export-composite.ts](scripts/export-composite.ts).
+
+```bash
+npx playwright install chromium   # one-time browser download
+
+npm run export:composite -- \
+  --start 2026-08-12T19:00 --end 2026-08-12T22:00 \
+  --layers rgb,vis --center 40,-10 --zoom 4 \
+  --out eclipse-12aug.gif
+```
+
+Run with `--help` for the full option list (layers, format, fps, map
+center/zoom, GIF/WebM quality settings). Note: since it depends on
+EUMETSAT's WMS data, it can only export times that have already happened.
+
+---
+
 ## Usage Guide
 
 1. **Select Date & Time**: Use the UTC time picker at the top to choose your
