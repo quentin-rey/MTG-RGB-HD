@@ -1206,7 +1206,10 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
   }
 
   gif.finish();
-  return new Blob([gif.bytesView()], { type: 'image/gif' });
+  // Wrapped in `new Uint8Array(...)` to guarantee a plain-ArrayBuffer-backed view: gifenc's own
+  // type shim declares `bytesView()` as a generic Uint8Array, which TS's DOM lib no longer
+  // accepts as a BlobPart (BlobPart requires the buffer can't be a SharedArrayBuffer).
+  return new Blob([new Uint8Array(gif.bytesView())], { type: 'image/gif' });
 }
 
 type ExportAnimationWebmOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime' | 'imageFormat'> & {
