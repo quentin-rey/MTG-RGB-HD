@@ -31,6 +31,17 @@ const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 
+// Mirrors HD_PRESET_SLIDER_VALUES in DualMapViewer.tsx: picking --hd-preset alone only changes the
+// enhancement profile's multipliers (sharpen/contrast/saturation), not the underlying sliders — to
+// faithfully reproduce what clicking that preset button in the UI does, the individual hdEnhance*
+// fields below are seeded from this table before any --hd-* override is applied on top.
+const HD_PRESET_SLIDER_VALUES = {
+  natural: { highlightProtection: 0.38, localContrast: 0.18, noiseReduction: 0.18, radius: 1.2, saturationAdjust: 4, shadowProtection: 0.28, sharpen: 0.28, strength: 0.28 },
+  balanced: { highlightProtection: 0.3, localContrast: 0.25, noiseReduction: 0.1, radius: 1.4, saturationAdjust: 8, shadowProtection: 0.2, sharpen: 0.4, strength: 0.35 },
+  punchy: { highlightProtection: 0.2, localContrast: 0.42, noiseReduction: 0.08, radius: 1.65, saturationAdjust: 16, shadowProtection: 0.16, sharpen: 0.62, strength: 0.52 },
+  analyze: { highlightProtection: 0.15, localContrast: 0.5, noiseReduction: 0.06, radius: 1.85, saturationAdjust: 2, shadowProtection: 0.1, sharpen: 0.72, strength: 0.62 },
+} as const;
+
 const DEFAULT_APP_URL = 'https://quentin-rey.github.io/MTG-RGB-HD/';
 const GIF_MAX_DIMENSIONS = [960, 1280, 1600] as const;
 const GIF_COLOR_COUNTS = [64, 128, 256] as const;
@@ -53,6 +64,18 @@ Options:
   --center <lat,lng>                   Map center override, e.g. "40,-10" (default: app's own default view)
   --zoom <n>                           Map zoom override (default: app's own default view)
   --hd-enhance                         Enable HD enhancement (default: off)
+  --hd-preset <natural|balanced|punchy|analyze>  (default: balanced)
+  --hd-strength <0-1>                  Overall HD enhancement amount (default: preset's)
+  --hd-highlight-protection <0-1>      Pulls down blown-out/flat-white highlights (default: preset's)
+  --hd-shadow-protection <0-1>         Lifts crushed shadows (default: preset's)
+  --hd-local-contrast <0-1>            Local contrast / detail (default: preset's)
+  --hd-sharpen <0-1>                   Sharpen amount (default: preset's)
+  --hd-saturation-adjust <-20..30>     (default: preset's)
+  --hd-noise-reduction <0-1>           (default: preset's)
+  --hd-radius <0.5-3>                  Enhancement blur radius (default: preset's)
+  --vis-brightness <0.6-1.8>           VIS layer brightness (default: app default 1.05)
+  --vis-contrast <0.6-2>               VIS layer contrast (default: app default 1.15)
+  --rgb-saturation <0.5-2>             RGB layer saturation (default: app default 1.15)
   --gif-max-dimension <${GIF_MAX_DIMENSIONS.join('|')}>    (default: 1280)
   --gif-colors <${GIF_COLOR_COUNTS.join('|')}>              (default: 128)
   --gif-dither <${GIF_DITHER_LEVELS.join('|')}>       (default: none)
@@ -86,6 +109,18 @@ function parseCliArgs() {
       center: { type: 'string' },
       zoom: { type: 'string' },
       'hd-enhance': { type: 'boolean', default: false },
+      'hd-preset': { type: 'string', default: 'balanced' },
+      'hd-strength': { type: 'string' },
+      'hd-highlight-protection': { type: 'string' },
+      'hd-shadow-protection': { type: 'string' },
+      'hd-local-contrast': { type: 'string' },
+      'hd-sharpen': { type: 'string' },
+      'hd-saturation-adjust': { type: 'string' },
+      'hd-noise-reduction': { type: 'string' },
+      'hd-radius': { type: 'string' },
+      'vis-brightness': { type: 'string' },
+      'vis-contrast': { type: 'string' },
+      'rgb-saturation': { type: 'string' },
       'gif-max-dimension': { type: 'string', default: '1280' },
       'gif-colors': { type: 'string', default: '128' },
       'gif-dither': { type: 'string', default: 'none' },
@@ -215,6 +250,33 @@ async function main() {
     fail('--zoom requires --center to also be set');
   }
 
+  const HD_PRESETS = ['natural', 'balanced', 'punchy', 'analyze'] as const;
+  if (!HD_PRESETS.includes(args['hd-preset'] as (typeof HD_PRESETS)[number])) {
+    fail(`--hd-preset must be one of: ${HD_PRESETS.join(', ')}`);
+  }
+  const numOrUndefined = (flagName: string, raw: string | undefined): number | undefined => {
+    if (raw === undefined) return undefined;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) fail(`--${flagName} must be a number (got "${raw}")`);
+    return parsed;
+  };
+  const presetDefaults = HD_PRESET_SLIDER_VALUES[args['hd-preset'] as keyof typeof HD_PRESET_SLIDER_VALUES];
+  const hdOverrides = {
+    hdEnhanceStrength: numOrUndefined('hd-strength', args['hd-strength']) ?? presetDefaults.strength,
+    hdEnhanceHighlightProtection: numOrUndefined('hd-highlight-protection', args['hd-highlight-protection']) ?? presetDefaults.highlightProtection,
+    hdEnhanceShadowProtection: numOrUndefined('hd-shadow-protection', args['hd-shadow-protection']) ?? presetDefaults.shadowProtection,
+    hdEnhanceLocalContrast: numOrUndefined('hd-local-contrast', args['hd-local-contrast']) ?? presetDefaults.localContrast,
+    hdEnhanceSharpen: numOrUndefined('hd-sharpen', args['hd-sharpen']) ?? presetDefaults.sharpen,
+    hdEnhanceSaturationAdjust: numOrUndefined('hd-saturation-adjust', args['hd-saturation-adjust']) ?? presetDefaults.saturationAdjust,
+    hdEnhanceNoiseReduction: numOrUndefined('hd-noise-reduction', args['hd-noise-reduction']) ?? presetDefaults.noiseReduction,
+    hdEnhanceRadius: numOrUndefined('hd-radius', args['hd-radius']) ?? presetDefaults.radius,
+  };
+  const adjustmentOverrides = {
+    visBrightness: numOrUndefined('vis-brightness', args['vis-brightness']),
+    visContrast: numOrUndefined('vis-contrast', args['vis-contrast']),
+    rgbSaturation: numOrUndefined('rgb-saturation', args['rgb-saturation']),
+  };
+
   const snapshot: Record<string, unknown> = {
     activeLayers,
     animationPreset: 'custom',
@@ -228,9 +290,12 @@ async function main() {
     gifDitherLevel,
     gifFinalPauseMs,
     hdEnhanceEnabled: Boolean(args['hd-enhance']),
+    hdEnhancePreset: args['hd-preset'],
     language: 'fr',
     themeMode: 'dark',
     ...(mapView ? { mapView } : {}),
+    ...Object.fromEntries(Object.entries(hdOverrides).filter(([, v]) => v !== undefined)),
+    ...Object.fromEntries(Object.entries(adjustmentOverrides).filter(([, v]) => v !== undefined)),
   };
   const url = `${args.url}?view=${encodeShareSnapshot(snapshot)}`;
 

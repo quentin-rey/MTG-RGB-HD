@@ -161,6 +161,45 @@ Run with `--help` for the full option list (layers, format, fps, map
 center/zoom, GIF/WebM quality settings). Note: since it depends on
 EUMETSAT's WMS data, it can only export times that have already happened.
 
+### Image quality & file size
+
+By default, RGB+VIS composites can come out with flat, overexposed clouds:
+the RGB+VIS blend applies a fixed +20% brightness/contrast boost to the VIS
+layer before any other setting, which clips cloud tops toward pure white.
+`--hd-enhance` turns on the app's own HD enhancement pipeline (same
+`highlightProtection` control as the "Adjustments" panel) to pull that back
+down and reveal texture — but it needs a less-clipped starting point to have
+something to recover, so pair it with lower `--vis-brightness`/
+`--vis-contrast`:
+
+```bash
+npm run export:composite -- \
+  --start 2026-08-10T08:00 --end 2026-08-10T12:00 \
+  --layers rgb,vis --center 46.6,1.9 --zoom 6 \
+  --hd-enhance --hd-preset natural \
+  --vis-brightness 0.85 --vis-contrast 1.0 \
+  --gif-max-dimension 960 \
+  --out france.gif
+```
+
+The `--hd-preset analyze` preset looks like the obvious choice for "more
+detail" but is too aggressive in practice — it over-sharpens and introduces
+colored fringing at cloud edges without actually recovering texture, since
+the real problem is upstream clipping, not a lack of sharpening. `natural`
+(gentler, higher highlight-protection ratio) combined with a lower
+`--vis-brightness`/`--vis-contrast` is the better starting point; all
+individual HD sliders (`--hd-strength`, `--hd-highlight-protection`,
+`--hd-shadow-protection`, `--hd-local-contrast`, `--hd-sharpen`,
+`--hd-saturation-adjust`, `--hd-noise-reduction`, `--hd-radius`) and
+`--rgb-saturation` are also exposed for fine-tuning beyond the presets.
+
+For file size, prefer lowering `--gif-max-dimension` over `--gif-colors`:
+on a 25-frame test clip, 1280px→960px cut the file by ~40% with no visible
+quality loss, while 128→64 colors only saved ~23% and introduced visible
+banding on smooth gradients (terrain, ocean). `--gif-dither` trades the
+opposite way — it can reduce banding at a low color count, but adds noise
+that *increases* file size, so it's not a size-reduction lever.
+
 ---
 
 ## Usage Guide
