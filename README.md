@@ -17,6 +17,7 @@ is centered on France; the map can be freely panned over Europe and Africa.
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Installation & Setup](#installation--setup)
+- [Scripted Exports (no UI)](#scripted-exports-no-ui)
 - [Usage Guide](#usage-guide)
 - [Satellite Data Reference](#satellite-data-reference)
 - [Credits & Attribution](#credits--attribution)
@@ -99,6 +100,7 @@ area) stay readable instead of turning into overlapping clutter.
 | **Export** | JSZip + file-saver + Canvas API + gifenc (GIF encoding) + MediaRecorder (WebM video) |
 | **Styling** | Tailwind CSS v4 (`@tailwindcss/vite`, no config file) |
 | **Icons** | Lucide Icons |
+| **Scripting** | Playwright (headless-browser-driven exports, see [Scripted Exports](#scripted-exports-no-ui)) |
 
 ---
 
