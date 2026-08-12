@@ -87,6 +87,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const mapIsLoadingRef = useRef(false);
   const loadingIdleTimeoutRef = useRef<number | null>(null);
   const loadingNoStartTimeoutRef = useRef<number | null>(null);
+  const loadingStuckTimeoutRef = useRef<number | null>(null);
   const loadingCycleRef = useRef(0);
   const hybridTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const hybridTileCacheOrderRef = useRef<string[]>([]);
@@ -360,6 +361,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       window.clearTimeout(loadingNoStartTimeoutRef.current);
       loadingNoStartTimeoutRef.current = null;
     }
+    if (loadingStuckTimeoutRef.current !== null) {
+      window.clearTimeout(loadingStuckTimeoutRef.current);
+      loadingStuckTimeoutRef.current = null;
+    }
 
     const cycleId = loadingCycleRef.current;
     loadingNoStartTimeoutRef.current = window.setTimeout(() => {
@@ -371,6 +376,20 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       }
       loadingNoStartTimeoutRef.current = null;
     }, 900);
+
+    // Safety net for the opposite case: tiles that DID start but whose `tileload`/`tileerror`
+    // counterpart never fires (e.g. Leaflet drops a tile mid-request when a rapid time change —
+    // slider scrubbing — redraws the layer before the previous request resolves), which would
+    // otherwise leave pendingTilesRef stuck above 0 and the modal open forever. Generous timeout
+    // so it never masks a genuinely slow WMS response; only kicks in for a cycle that's truly
+    // wedged.
+    loadingStuckTimeoutRef.current = window.setTimeout(() => {
+      if (loadingCycleRef.current !== cycleId) return;
+      setLoadingProgress(100);
+      setLoadingTileCount(0);
+      setIsMapLoading(false);
+      loadingStuckTimeoutRef.current = null;
+    }, 12000);
   };
 
   const maybeFinishLoading = () => {
@@ -385,6 +404,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       setLoadingProgress(100);
       setIsMapLoading(false);
       loadingIdleTimeoutRef.current = null;
+      if (loadingStuckTimeoutRef.current !== null) {
+        window.clearTimeout(loadingStuckTimeoutRef.current);
+        loadingStuckTimeoutRef.current = null;
+      }
     }, 180);
   };
 
@@ -836,12 +859,26 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         window.clearTimeout(loadingNoStartTimeoutRef.current);
         loadingNoStartTimeoutRef.current = null;
       }
+      if (loadingStuckTimeoutRef.current !== null) {
+        window.clearTimeout(loadingStuckTimeoutRef.current);
+        loadingStuckTimeoutRef.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
     try {
       const isoTime = new Date(currentTime + 'Z').toISOString();
+      // `setParams` makes Leaflet redraw every tile immediately, abandoning whatever was still
+      // in flight for the previous time — those abandoned tiles' `tileloadstart` already
+      // incremented `pendingTilesRef` (bindLayerLoading, above) but their `tileload`/`tileerror`
+      // counterpart never fires once Leaflet drops the tile, so without this reset the pending
+      // count could never return to 0 again. That left the "Chargement des tuiles" modal stuck
+      // open indefinitely on repeated/rapid time changes (scrubbing the time slider) until some
+      // unrelated change (e.g. toggling a layer, which does call beginLoadingCycle() below)
+      // happened to reset it. beginLoadingCycle() is idempotent — safe to call on every time
+      // change, including the initial one right after the mount effect already called it.
+      beginLoadingCycle();
       secondaryBaseLayerRef.current?.setParams({ time: isoTime } as any);
       irFallbackBaseLayerRef.current?.setParams({ time: isoTime, styles: irStyle } as any);
       visOverlayLayerRef.current?.setParams({ time: isoTime } as any);
