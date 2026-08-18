@@ -4,7 +4,12 @@
  */
 
 import DualMapViewer from './components/DualMapViewer';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export default function App() {
-  return <DualMapViewer />;
+  return (
+    <ErrorBoundary>
+      <DualMapViewer />
+    </ErrorBoundary>
+  );
 }

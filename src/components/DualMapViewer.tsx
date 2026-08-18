@@ -10,6 +10,9 @@ import {
   getExportFileBaseName,
   getHdEnhancementProfile,
   getLatestAvailableTime,
+  sanitizeMapOptions,
+  sanitizeUtcDateValue,
+  sanitizeUtcMinuteValue,
   IR_STYLES,
   sanitizeActiveLayers,
   STORAGE_KEYS,
@@ -614,8 +617,8 @@ export default function DualMapViewer() {
       showCities: false,
       showFranceDepartments: false,
     };
-    const stored = readStoredJson<MapOptions>(STORAGE_KEYS.mapOptions, defaults);
-    return { ...defaults, ...stored, ...(sharedSnapshot?.mapOptions ?? {}) };
+    const stored = sanitizeMapOptions(readStoredJson<unknown>(STORAGE_KEYS.mapOptions, defaults), defaults);
+    return sanitizeMapOptions({ ...stored, ...(sharedSnapshot?.mapOptions ?? {}) }, stored);
   });
 
   useEffect(() => {
@@ -629,12 +632,14 @@ export default function DualMapViewer() {
 
   // Initialize time to current time (rounded to nearest 10 mins as MTG is every 10 min, with buffer).
   // Priority: share-link snapshot > last time the user viewed (persisted below) > "latest available".
-  const hadRestoredCurrentTimeRef = useRef(
-    Boolean(sharedSnapshot?.currentTime) || Boolean(readStoredJson<string | null>(STORAGE_KEYS.currentTime, null)),
-  );
-  const [currentTime, setCurrentTime] = useState(
-    () => sharedSnapshot?.currentTime ?? readStoredJson<string | null>(STORAGE_KEYS.currentTime, null) ?? getLatestAvailableTime(),
-  );
+  // Both sources are validated rather than trusted: an unusable value is treated as absent, so a
+  // malformed share link or a corrupted storage entry degrades to "start at latest" instead of
+  // throwing on `currentTime.split('T')` and blanking the app (see sanitizeUtcMinuteValue).
+  const sharedCurrentTime = sanitizeUtcMinuteValue(sharedSnapshot?.currentTime);
+  const restoredCurrentTime = sharedCurrentTime
+    ?? sanitizeUtcMinuteValue(readStoredJson<unknown>(STORAGE_KEYS.currentTime, null));
+  const hadRestoredCurrentTimeRef = useRef(restoredCurrentTime !== null);
+  const [currentTime, setCurrentTime] = useState(() => restoredCurrentTime ?? getLatestAvailableTime());
 
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.currentTime, JSON.stringify(currentTime));
@@ -700,7 +705,7 @@ export default function DualMapViewer() {
   // export renderers did before their blending math was centralised into
   // `computeLayerBlendState` (dualMapViewerShared.ts).
   const isAtLatest = currentTime >= latestAvailableTime;
-  const [customAnimationDate, setCustomAnimationDate] = useState(() => sharedSnapshot?.customAnimationDate ?? currentTime.split('T')[0]);
+  const [customAnimationDate, setCustomAnimationDate] = useState(() => sanitizeUtcDateValue(sharedSnapshot?.customAnimationDate) ?? currentTime.split('T')[0]);
   const [customStartStep, setCustomStartStep] = useState(() => {
     if (typeof sharedSnapshot?.customStartStep === 'number') {
       return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)));
@@ -1005,7 +1010,7 @@ export default function DualMapViewer() {
   const initialCurrentTimeRef = useRef(currentTime);
   const autoUpdateEnabledOnMountRef = useRef(autoUpdateEnabled);
   useEffect(() => {
-    const shouldFollowLatestOnMount = autoUpdateEnabledOnMountRef.current && !sharedSnapshot?.currentTime;
+    const shouldFollowLatestOnMount = autoUpdateEnabledOnMountRef.current && !sharedCurrentTime;
     if (hadRestoredCurrentTimeRef.current && !shouldFollowLatestOnMount) return;
     let cancelled = false;
     setIsJumpingToLatest(true);
