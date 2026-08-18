@@ -80,10 +80,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const isSyncing = useRef(false);
   const overlayFadeInTimeoutRef = useRef<number | null>(null);
   const overlayFadeOutTimeoutRef = useRef<number | null>(null);
-  const pendingTilesRef = useRef(0);
+  // Per-layer tile-loading bookkeeping, one entry per live bindLayerLoading() binding. The
+  // "how many tiles are still in flight" and "how many layers are still loading" numbers that
+  // gate the loading indicator are *derived* from these (countPendingTiles/countLoadingLayers)
+  // rather than kept as standalone +1/-1 counters. Both used to be counters, and both leaked the
+  // same way (issue #49): any tile or layer whose end-event Leaflet never emits left the counter
+  // permanently above zero, wedging the modal open with no way back down. Deriving them means a
+  // missed event can only ever cost one stale entry, and clearing/removing an entry always fully
+  // reconciles the total.
+  type LayerLoadState = { pendingKeys: Set<string>; isLoading: boolean };
+  const layerLoadStatesRef = useRef<Set<LayerLoadState>>(new Set());
   const startedTilesRef = useRef(0);
   const completedTilesRef = useRef(0);
-  const activeLayerLoadsRef = useRef(0);
   const mapIsLoadingRef = useRef(false);
   const loadingIdleTimeoutRef = useRef<number | null>(null);
   const loadingNoStartTimeoutRef = useRef<number | null>(null);
@@ -342,12 +350,30 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     } as any);
   };
 
+  const countPendingTiles = () => {
+    let total = 0;
+    layerLoadStatesRef.current.forEach((state) => {
+      total += state.pendingKeys.size;
+    });
+    return total;
+  };
+
+  const countLoadingLayers = () => {
+    let total = 0;
+    layerLoadStatesRef.current.forEach((state) => {
+      if (state.isLoading) total += 1;
+    });
+    return total;
+  };
+
   const beginLoadingCycle = () => {
     loadingCycleRef.current += 1;
-    pendingTilesRef.current = 0;
+    layerLoadStatesRef.current.forEach((state) => {
+      state.pendingKeys.clear();
+      state.isLoading = false;
+    });
     startedTilesRef.current = 0;
     completedTilesRef.current = 0;
-    activeLayerLoadsRef.current = 0;
     mapIsLoadingRef.current = false;
     setLoadingTileCount(0);
     setLoadingProgress(0);
@@ -369,7 +395,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const cycleId = loadingCycleRef.current;
     loadingNoStartTimeoutRef.current = window.setTimeout(() => {
       if (loadingCycleRef.current !== cycleId) return;
-      if (startedTilesRef.current === 0 && activeLayerLoadsRef.current === 0 && !mapIsLoadingRef.current) {
+      if (startedTilesRef.current === 0 && countLoadingLayers() === 0 && !mapIsLoadingRef.current) {
         setLoadingProgress(100);
         setLoadingTileCount(0);
         setIsMapLoading(false);
@@ -380,7 +406,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     // Safety net for the opposite case: tiles that DID start but whose `tileload`/`tileerror`
     // counterpart never fires (e.g. Leaflet drops a tile mid-request when a rapid time change —
     // slider scrubbing — redraws the layer before the previous request resolves), which would
-    // otherwise leave pendingTilesRef stuck above 0 and the modal open forever. Generous timeout
+    // otherwise leave tiles counted as pending and the modal open forever. Generous timeout
     // so it never masks a genuinely slow WMS response; only kicks in for a cycle that's truly
     // wedged.
     loadingStuckTimeoutRef.current = window.setTimeout(() => {
@@ -393,8 +419,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   };
 
   const maybeFinishLoading = () => {
-    if (pendingTilesRef.current !== 0) return;
-    if (activeLayerLoadsRef.current !== 0) return;
+    if (countPendingTiles() !== 0) return;
+    if (countLoadingLayers() !== 0) return;
     if (mapIsLoadingRef.current) return;
 
     if (loadingIdleTimeoutRef.current !== null) {
@@ -416,16 +442,26 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const anyLayer = layer as any;
     if (typeof anyLayer.on !== 'function' || typeof anyLayer.off !== 'function') return () => undefined;
 
-    // Tiles that have started (tileloadstart) but not yet resolved (tileload/tileerror), keyed by
-    // coordinate, scoped to this one layer instance (a fresh Set per bindLayerLoading call, since
-    // two layers can legitimately be loading the same x/y/z tile coordinate at once). Needed
-    // because zooming or panning makes Leaflet prune/replace tiles that are still in flight —
-    // Leaflet fires 'tileunload' for those, but never their 'tileload'/'tileerror', so without
-    // tracking which specific tiles are still outstanding, pendingTilesRef could only ever grow
-    // on repeated zoom/pan, permanently blocking maybeFinishLoading() and leaving the "Chargement
-    // des tuiles" modal open (see #49 — the time-change case was fixed by resetting the counters
-    // per cycle, but zoom/pan don't go through a "cycle" at all, so that fix didn't cover them).
-    const pendingKeys = new Set<string>();
+    // Tiles that started ('tileloadstart') but haven't resolved yet, keyed by coordinate and
+    // scoped to this one layer instance (a fresh Set per bindLayerLoading call, since two layers
+    // can legitimately be loading the same x/y/z tile at once).
+    //
+    // A tile that starts loading has FOUR possible ends in Leaflet, and every one of them must be
+    // accounted for or the pending-tile count never returns to 0 and the "Chargement des tuiles" modal
+    // stays up forever (issue #49):
+    //   - 'tileload'  — it loaded;
+    //   - 'tileerror' — it failed;
+    //   - 'tileunload' — it was removed while still in flight (GridLayer._removeTile);
+    //   - 'tileabort' — Leaflet's zoom handler called GridLayer._abortLoading(), which drops every
+    //     in-flight tile from a now-stale zoom level. This is the one that made zooming break:
+    //     _abortLoading deletes the tile from `_tiles` *directly* rather than through
+    //     _removeTile (so NO 'tileunload') and overwrites the img's onload/onerror with
+    //     falseFn (so NO 'tileload'/'tileerror' either). 'tileabort' is the only signal these
+    //     tiles ever emit. Measured on a 20-gesture zoom burst: 204 starts, 49 loads and
+    //     155 aborts — those 155 were exactly the count the modal stayed wedged on.
+    const state: LayerLoadState = { pendingKeys: new Set<string>(), isLoading: false };
+    layerLoadStatesRef.current.add(state);
+    const { pendingKeys } = state;
     const tileKey = (coords: { x: number; y: number; z: number }) => `${coords.x}:${coords.y}:${coords.z}`;
 
     const onLoading = () => {
@@ -438,12 +474,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         loadingIdleTimeoutRef.current = null;
       }
 
-      activeLayerLoadsRef.current += 1;
+      state.isLoading = true;
       setIsMapLoading(true);
     };
 
     const onLoad = () => {
-      activeLayerLoadsRef.current = Math.max(0, activeLayerLoadsRef.current - 1);
+      state.isLoading = false;
       maybeFinishLoading();
     };
 
@@ -456,10 +492,16 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         window.clearTimeout(loadingIdleTimeoutRef.current);
         loadingIdleTimeoutRef.current = null;
       }
-      if (e?.coords) pendingKeys.add(tileKey(e.coords));
+      if (e?.coords) {
+        // Same coordinate starting again while still pending counts as one outstanding tile,
+        // not two — there is only ever one resolution event coming for it.
+        const key = tileKey(e.coords);
+        if (pendingKeys.has(key)) return;
+        pendingKeys.add(key);
+      }
+      state.isLoading = true;
       startedTilesRef.current += 1;
-      pendingTilesRef.current += 1;
-      setLoadingTileCount(pendingTilesRef.current);
+      setLoadingTileCount(countPendingTiles());
       if (startedTilesRef.current > 0) {
         const progress = Math.max(0, Math.min(99, Math.round((completedTilesRef.current / startedTilesRef.current) * 100)));
         setLoadingProgress(progress);
@@ -468,15 +510,20 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     };
 
     const resolveTile = (e: any) => {
-      // Guard against double-resolving the same tile (e.g. tileerror followed by a stray
-      // tileunload for that same tile) — only the first event to see this key counts.
+      // Only the first of the four end-events to name this tile counts. A tile that already
+      // loaded and is later unloaded during normal cache housekeeping is no longer in the set,
+      // so this is a no-op for it rather than a double decrement.
       if (e?.coords) {
         const key = tileKey(e.coords);
         if (!pendingKeys.delete(key)) return false;
       }
       completedTilesRef.current += 1;
-      pendingTilesRef.current = Math.max(0, pendingTilesRef.current - 1);
-      setLoadingTileCount(pendingTilesRef.current);
+      // Leaflet only emits the layer-level 'load' from _tileReady, which aborted tiles never
+      // reach — so a layer whose last in-flight tiles were all aborted would stay "loading"
+      // forever even with zero pending tiles. Nothing is outstanding here, so settle it now and
+      // let a later 'loading'/'tileloadstart' flip it back on.
+      if (pendingKeys.size === 0) state.isLoading = false;
+      setLoadingTileCount(countPendingTiles());
 
       if (startedTilesRef.current > 0) {
         const progress = Math.max(
@@ -490,20 +537,13 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       return true;
     };
 
-    const onUnload = (e: any) => {
-      // Only tiles still in pendingKeys were mid-flight when pruned (zoom/pan discarding an
-      // off-screen or superseded tile); a tile that already finished loading and is now being
-      // unloaded during normal cache housekeeping won't be in the set, so resolveTile() is a
-      // no-op for it (already resolved via onEnd, no double count).
-      resolveTile(e);
-    };
-
     anyLayer.on('loading', onLoading);
     anyLayer.on('load', onLoad);
     anyLayer.on('tileloadstart', onStart);
     anyLayer.on('tileload', resolveTile);
     anyLayer.on('tileerror', resolveTile);
-    anyLayer.on('tileunload', onUnload);
+    anyLayer.on('tileunload', resolveTile);
+    anyLayer.on('tileabort', resolveTile);
 
     return () => {
       anyLayer.off('loading', onLoading);
@@ -511,7 +551,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       anyLayer.off('tileloadstart', onStart);
       anyLayer.off('tileload', resolveTile);
       anyLayer.off('tileerror', resolveTile);
-      anyLayer.off('tileunload', onUnload);
+      anyLayer.off('tileunload', resolveTile);
+      anyLayer.off('tileabort', resolveTile);
+
+      // This layer instance is going away (recreated by an effect, or the map torn down):
+      // whatever it still had in flight will never resolve, so drop its bookkeeping entirely
+      // instead of leaving it counted as pending forever.
+      layerLoadStatesRef.current.delete(state);
+      setLoadingTileCount(countPendingTiles());
+      maybeFinishLoading();
     };
   };
 
@@ -901,7 +949,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       const isoTime = new Date(currentTime + 'Z').toISOString();
       // `setParams` makes Leaflet redraw every tile immediately, abandoning whatever was still
       // in flight for the previous time — those abandoned tiles' `tileloadstart` already
-      // incremented `pendingTilesRef` (bindLayerLoading, above) but their `tileload`/`tileerror`
+      // marked tiles pending (bindLayerLoading, above) but their `tileload`/`tileerror`
       // counterpart never fires once Leaflet drops the tile, so without this reset the pending
       // count could never return to 0 again. That left the "Chargement des tuiles" modal stuck
       // open indefinitely on repeated/rapid time changes (scrubbing the time slider) until some
