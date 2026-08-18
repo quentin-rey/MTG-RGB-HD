@@ -1100,8 +1100,14 @@ export default function DualMapViewer() {
       startDate = parsedStart;
       endDate = parsedEnd;
     } else {
+      // Anchored to the time being viewed, not to the newest image. "Dernières 3h" while you are
+      // looking at a past date means the three hours leading up to *that* moment — anchoring to
+      // the latest image instead silently exported a completely different day, with nothing in
+      // the UI to say so. Still clamped to the latest available, so at the live edge (where
+      // currentTime is the latest slot) the behaviour is unchanged.
       const durationHours = animationPreset === '3h' ? 3 : animationPreset === '6h' ? 6 : 12;
-      endDate = latestAvailable;
+      const viewedTime = parseUtcInputValue(currentTime);
+      endDate = viewedTime && viewedTime < latestAvailable ? viewedTime : latestAvailable;
       startDate = new Date(endDate.getTime() - durationHours * 60 * 60 * 1000);
     }
 
