@@ -692,6 +692,30 @@ export default function DualMapViewer() {
   const [latestAvailableTime, setLatestAvailableTime] = useState(() => getLatestAvailableTime());
   const latestAvailableDatePart = latestAvailableTime.split('T')[0];
 
+  // Single place where a verified probe result is committed, shared by the refresh poll,
+  // "Dernier" and the mount-time sync — they each applied their own copy of this comparison and
+  // could drift apart.
+  //
+  // The seeded value above is the *unverified* heuristic, and that heuristic regularly overshoots
+  // reality: its fixed 20-minute buffer is shorter than real publishing lag (RGB was measured at
+  // ~28min while VIS/IR sat at ~18min). So the first verified probe is usually *older* than the
+  // seed. Refusing to move backwards from it — which is what the plain monotonic guard did —
+  // kept an invented timestamp until real publishing caught up ten-odd minutes later, showing a
+  // "past image" badge while the view was on the newest image that exists, and stalling
+  // auto-update for that whole window (issue #66). Monotonicity only makes sense between two
+  // verified values, where a regression could only be noise; it must never protect a guess.
+  const latestIsVerifiedRef = useRef(false);
+  const commitVerifiedLatest = (verifiedTime: string, options?: { mayGoBackwards?: boolean }) => {
+    // Read (and set) the flag before queueing the update: the updater below runs later, by which
+    // point the ref would already say "verified" and the first probe would lose its exemption.
+    const hadVerifiedValue = latestIsVerifiedRef.current;
+    latestIsVerifiedRef.current = true;
+    setLatestAvailableTime((previous) => {
+      if (!hadVerifiedValue || options?.mayGoBackwards) return verifiedTime;
+      return verifiedTime > previous ? verifiedTime : previous;
+    });
+  };
+
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(
     () => readStoredJson<boolean>(STORAGE_KEYS.autoUpdate, false),
   );
@@ -837,7 +861,7 @@ export default function DualMapViewer() {
       // desync itself. Keeping the last known-good value and waiting for the next probe is always
       // the safer failure mode: at worst the badge is a few minutes conservative.
       if (!probe.verified) return;
-      setLatestAvailableTime((previous) => (mayGoBackwards || probe.time > previous ? probe.time : previous));
+      commitVerifiedLatest(probe.time, { mayGoBackwards });
     };
 
     void refreshLatest(layerSetChanged);
@@ -973,7 +997,7 @@ export default function DualMapViewer() {
       // verified time newer than what polling has seen would be clamped straight back down by
       // handleTimeChange, and "Dernier" would refuse to reach the actual latest image.
       if (probe.verified) {
-        setLatestAvailableTime((previous) => (target > previous ? target : previous));
+        commitVerifiedLatest(probe.time);
       }
       setIsBackgroundRefresh(false);
       setCurrentTime(target);
@@ -1021,7 +1045,7 @@ export default function DualMapViewer() {
         // probe failed, leave the heuristic seed alone rather than committing to another guess —
         // the polling effect will correct it as soon as one probe succeeds.
         if (!probe.verified) return;
-        setLatestAvailableTime((previous) => (probe.time > previous ? probe.time : previous));
+        commitVerifiedLatest(probe.time);
         setCurrentTime((prev) => (prev === initialCurrentTimeRef.current ? probe.time : prev));
       })
       .finally(() => {
