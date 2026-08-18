@@ -6,7 +6,6 @@ import {
   type ActiveLayers,
   getExportFileBaseName,
   getExportLabel,
-  getLatestAvailableTime,
   getSinglePanelTitle,
   IR_STYLES,
   themedClass,
@@ -155,7 +154,7 @@ export function TimeDock(props: TimeDockProps) {
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <input
             type="date"
-            max={getLatestAvailableTime().split('T')[0]}
+            max={latestAvailableTime.split('T')[0]}
             value={datePart}
             onChange={(e) => {
               if (e.target.value) onTimeChange(`${e.target.value}T${timePart}`);
