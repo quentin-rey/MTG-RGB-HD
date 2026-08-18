@@ -218,6 +218,56 @@ export function safeSetLocalStorage(key: string, value: string) {
   }
 }
 
+/**
+ * Validators for the two untrusted entry points: the `?view=` share payload and localStorage.
+ * Both are deserialised with a bare `as` cast, which is a compile-time assertion and checks
+ * nothing at runtime — so whatever a URL or a corrupted storage entry happens to contain arrives
+ * in state with its declared type. Numeric snapshot fields were already clamped one by one at the
+ * call sites, but the string fields were not, and `currentTime` is consumed structurally
+ * (`currentTime.split('T')` in TimeDock). A value of `""`, `12345` or `"2026-08-18 12:00"`
+ * therefore threw during render and, with no error boundary, blanked the whole app — permanently
+ * so from localStorage, since every reload replayed it and no UI could clear the entry.
+ *
+ * Both return null rather than a default so callers can distinguish "absent or unusable" from a
+ * real restored value — `hadRestoredCurrentTimeRef` depends on exactly that distinction.
+ */
+const UTC_MINUTE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const UTC_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export function sanitizeUtcMinuteValue(value: unknown): string | null {
+  if (typeof value !== 'string' || !UTC_MINUTE_PATTERN.test(value)) return null;
+  const parsed = new Date(`${value}Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  // Round-trip so values the pattern allows but that are not real instants (2026-02-31T25:99,
+  // which Date silently rolls over into another day) are rejected rather than quietly shifted.
+  return parsed.toISOString().slice(0, 16) === value ? value : null;
+}
+
+export function sanitizeUtcDateValue(value: unknown): string | null {
+  if (typeof value !== 'string' || !UTC_DATE_PATTERN.test(value)) return null;
+  const parsed = new Date(`${value}T00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10) === value ? value : null;
+}
+
+export function sanitizeMapOptions(value: unknown, defaults: MapOptions): MapOptions {
+  const input = (value && typeof value === 'object' ? value : {}) as Partial<Record<keyof MapOptions, unknown>>;
+  const num = (raw: unknown, fallback: number, min: number, max: number) => {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+  };
+  const bool = (raw: unknown, fallback: boolean) => (typeof raw === 'boolean' ? raw : fallback);
+
+  return {
+    bordersOpacity: num(input.bordersOpacity, defaults.bordersOpacity, 0, 1),
+    cityDensity: num(input.cityDensity, defaults.cityDensity, 0.2, 3),
+    franceDepartmentsOpacity: num(input.franceDepartmentsOpacity, defaults.franceDepartmentsOpacity, 0, 1),
+    showBorders: bool(input.showBorders, defaults.showBorders),
+    showCities: bool(input.showCities, defaults.showCities),
+    showFranceDepartments: bool(input.showFranceDepartments, defaults.showFranceDepartments),
+  };
+}
+
 export function getLatestAvailableTime(): string {
   const now = new Date();
   now.setMinutes(now.getMinutes() - 20);
