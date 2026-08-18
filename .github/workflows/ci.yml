@@ -24,3 +24,58 @@ jobs:
 
       - name: Type check
         run: npm run lint
+
+  # `npm run build` used to run only in deploy.yml, which triggers on push to main — i.e. after
+  # merge. A change that type-checked but did not build therefore passed every required check and
+  # broke the deployment, leaving main red and the site stale. tsc sees none of the bundler's
+  # module resolution, the Vite plugins or the asset pipeline, and Dependabot regularly proposes
+  # majors on that very toolchain (Vite, @vitejs/plugin-react, esbuild).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Type checking cannot catch a server that builds and then dies on startup: Express 5
+      # rejecting the old `app.get('*', ...)` wildcard did exactly that, cleanly type-checked.
+      # Booting the built bundle and asking it for one page is the cheapest guard against that
+      # whole class of failure.
+      - name: Smoke test the built server
+        run: |
+          NODE_ENV=production node dist/server.cjs &
+          SERVER_PID=$!
+          ANSWERED=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:3000/ -o /tmp/smoke.html; then
+              echo "Server answered after ${i}s"
+              ANSWERED=1
+              break
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "::error::Server process exited before answering"
+              exit 1
+            fi
+            sleep 1
+          done
+          kill "$SERVER_PID" 2>/dev/null || true
+          if [ "$ANSWERED" -ne 1 ]; then
+            echo "::error::Server never answered on port 3000 within 20s"
+            exit 1
+          fi
+          if ! grep -qi '<div id="root"' /tmp/smoke.html; then
+            echo "::error::Server did not return the built index.html"
+            cat /tmp/smoke.html || true
+            exit 1
+          fi
