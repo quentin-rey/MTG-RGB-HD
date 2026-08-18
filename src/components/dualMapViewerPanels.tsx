@@ -956,6 +956,21 @@ export function InfoModal(props: InfoModalProps) {
             <p className="text-xs mt-1.5">{t('infoModalParagraph2')}</p>
           </section>
 
+          {/* The `infoFeature*` strings existed in both languages but were rendered nowhere, so
+              this section was invisible: features with no keyboard shortcut (auto-update, the
+              freshness cue) had no in-app explanation beyond their button tooltip. */}
+          <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
+            <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoFeaturesTitle')}</h4>
+            <ul className="text-xs space-y-1 list-disc pl-4">
+              <li>{t('infoFeatureAutoUpdate')}</li>
+              <li>{t('infoFeatureFreshness')}</li>
+              <li>{t('infoFeatureMemory')}</li>
+              <li>{t('infoFeatureShare')}</li>
+              <li>{t('infoFeatureGif')}</li>
+              <li>{t('infoFeatureShortcuts')}</li>
+            </ul>
+          </section>
+
           <section className={`rounded-lg border p-3 ${themedClass(isLight, 'border-slate-200 bg-slate-50', 'border-white/10 bg-black/20')}`}>
             <h4 className={`text-sm font-semibold mb-2 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('infoLayersTitle')}</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
