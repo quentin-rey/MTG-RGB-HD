@@ -296,7 +296,7 @@ export function getRenderedWmsLayers(params: {
   blendState: Pick<
     LayerBlendState,
     'baseLayer' | 'isVisOverlayEnabled' | 'isIrOverlayEnabled' | 'isCloudOnlyIrMode'
-    | 'isRgbBasedCloudOnlyMode' | 'cloudOnlyIrVisMaskWeight' | 'rgbToIrTransition'
+    | 'isRgbBasedCloudOnlyMode' | 'cloudOnlyIrVisMaskWeight'
   >;
   fireHotspotEnabled: boolean;
 }): string[] {
@@ -311,10 +311,6 @@ export function getRenderedWmsLayers(params: {
   if (blendState.isIrOverlayEnabled) layers.add(LAYER_IR);
 
   // RGB→IR dusk transition: an IR base is faded in underneath the RGB one.
-  if (blendState.baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && blendState.rgbToIrTransition > 0) {
-    layers.add(LAYER_IR);
-  }
-
   // Cloud-only-IR composite: always IR, plus whichever layers feed its cloud-detection mask.
   if (blendState.isCloudOnlyIrMode) {
     layers.add(LAYER_IR);
@@ -509,7 +505,6 @@ export type LayerBlendState = {
   isVisIrMode: boolean;
   shouldPreferIrBaseAtNight: boolean;
   baseLayer: 'rgb' | 'ir' | 'vis';
-  rgbToIrTransition: number;
   isRgbBasedCloudOnlyMode: boolean;
   isCloudOnlyIrMode: boolean;
   effectiveCloudOnlyIrOpacity: number;
@@ -570,9 +565,6 @@ export function computeLayerBlendState(params: {
       : activeLayers.vis
         ? 'vis'
         : 'ir';
-  const rgbToIrTransition = activeLayers.rgb && activeLayers.ir
-    ? Math.max(0, Math.min(1, (1.5 - solarElevation) / 12))
-    : 0;
   const isRgbBasedCloudOnlyMode = baseLayer === 'rgb' && (isHybridMode || isRgbIrMode);
   // Once baseLayer has switched to raw 'ir' (night fallback above), the base layer already *is*
   // full-opacity IR — the cloud-only-IR composite would just be redundant work on top of it (and,
@@ -589,21 +581,36 @@ export function computeLayerBlendState(params: {
   // the composite only ~58% opaque right up to that switch, so the swap to the 100%-opaque raw
   // IR base was a visible pop; ramping to 1 by the same threshold makes both sides of the switch
   // land at full opacity, leaving only the (much smaller) blend-mode/filter difference visible.
+  //
+  // The same collapse happens in the RGB-based cloud-only modes (RGB+IR, RGB+VIS+IR): there the
+  // mask leans on `rgbCloudMask`, which needs a luminance above its 120 threshold, and unlit
+  // clouds at dusk no longer clear it. Those modes had no floor at all, so their IR contribution
+  // faded to roughly half its coverage through twilight and then cut out entirely at the
+  // hard switch — measured 54% -> 26% scene coverage between 15° and 2° of solar elevation,
+  // while VIS+IR (which had the floor) climbed to 100% over the same range (issue #69).
+  //
+  // They get a later ramp than VIS+IR on purpose. VIS+IR needs the early [1.5, 12] start because
+  // its own VIS backdrop dims from high elevation; the RGB base stays informative much longer, so
+  // flooring the whole scene with IR that early would wash out usable daylight imagery. Ramping
+  // over [1.5, 6] confines it to civil twilight while still reaching 1 at the switch point.
   const cloudOnlyIrNightFloor = isVisIrMode
     ? Math.max(0, Math.min(1, (12 - solarElevation) / 10.5))
-    : 0;
-  const effectiveCloudOnlyIrOpacity = isRgbBasedCloudOnlyMode
-    ? effectiveHybridIrOpacity * (1 - rgbToIrTransition)
-    : isVisIrMode && baseLayer !== 'ir'
-      // sandwichOpacity is the user's daytime "how strong should the IR tint be over VIS" slider
-      // (defaults to a subtle 0.4) — left alone in full daylight, but that same 40% layer opacity
-      // made the whole composite nearly invisible once VIS itself started dimming toward dusk (a
-      // faint tint over an already-dim backdrop reads as "gone", not "subtle"). Ramp the layer's
-      // own opacity up to fully opaque in step with cloudOnlyIrNightFloor so it actually reaches
-      // full strength by the time baseLayer hard-switches to raw IR, instead of staying capped at
-      // the user's daytime preference all the way through dusk.
-      ? Math.max(sandwichOpacity, cloudOnlyIrNightFloor)
+    : isRgbBasedCloudOnlyMode
+      ? Math.max(0, Math.min(1, (6 - solarElevation) / 4.5))
       : 0;
+  // sandwichOpacity is the user's daytime "how strong should the IR tint be" slider (defaults to
+  // a subtle 0.4) — left alone in full daylight, but that same 40% layer opacity made the whole
+  // composite nearly invisible once the backdrop started dimming toward dusk (a faint tint over
+  // an already-dim backdrop reads as "gone", not "subtle"). Ramping the layer's own opacity up in
+  // step with cloudOnlyIrNightFloor is what gets it to full strength by the time baseLayer
+  // hard-switches to raw IR, instead of staying capped at the user's daytime preference all the
+  // way through dusk. One expression for every cloud-only mode: this used to apply only to
+  // VIS+IR, while the RGB-based branch multiplied by `(1 - rgbToIrTransition)` — a factor that
+  // was provably always 1, since it needed `baseLayer === 'rgb'` and a solar elevation below the
+  // threshold that forces `baseLayer` to 'ir' (issue #69).
+  const effectiveCloudOnlyIrOpacity = isCloudOnlyIrMode
+    ? Math.max(effectiveHybridIrOpacity, cloudOnlyIrNightFloor)
+    : 0;
   const hybridVisMaskWeight = Math.min(0.35, Math.max(0, (daylightVisFactor - 0.35) / 0.65));
   const cloudOnlyIrVisMaskWeight = isHybridMode ? hybridVisMaskWeight : isVisIrMode ? 1 : 0;
   const isVisOverlayEnabled = activeLayers.vis && baseLayer !== 'vis';
@@ -628,7 +635,6 @@ export function computeLayerBlendState(params: {
     isVisIrMode,
     shouldPreferIrBaseAtNight,
     baseLayer,
-    rgbToIrTransition,
     isRgbBasedCloudOnlyMode,
     isCloudOnlyIrMode,
     effectiveCloudOnlyIrOpacity,

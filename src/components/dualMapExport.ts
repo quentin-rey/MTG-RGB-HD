@@ -589,7 +589,6 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const isoTime = new Date(currentTime + 'Z').toISOString();
   const {
     shouldPreferIrBaseAtNight,
-    rgbToIrTransition,
     effectiveRgbVisOnlyVisOpacity: exportRgbVisOnlyVisOpacity,
     effectiveHybridOnlyVisOpacity: exportHybridVisOpacity,
     effectiveHybridIrOpacity: exportHybridIrOpacity,
