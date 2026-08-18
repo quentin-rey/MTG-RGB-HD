@@ -1919,6 +1919,8 @@ export default function DualMapViewer() {
         customStartStep={customStartStep}
         downloadProgress={downloadProgress}
         estimatedFrameCount={animationEstimatedFrameCount}
+        resolvedRangeStart={animationFrameTimesPreview[0] ?? ''}
+        resolvedRangeEnd={animationFrameTimesPreview[animationFrameTimesPreview.length - 1] ?? ''}
         exportFormat={exportFormat}
         exportModalRef={exportModalRef}
         exportResolution={exportResolution}

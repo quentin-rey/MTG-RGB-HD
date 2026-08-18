@@ -1167,6 +1167,8 @@ type ExportModalProps = {
   customStart: string;
   customStartStep: number;
   estimatedFrameCount: number;
+  resolvedRangeStart: string;
+  resolvedRangeEnd: string;
   fps: number;
   gifColorCount: 64 | 128 | 256;
   gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
@@ -1211,6 +1213,8 @@ export function ExportModal(props: ExportModalProps) {
     customStartStep,
     downloadProgress,
     estimatedFrameCount,
+    resolvedRangeStart,
+    resolvedRangeEnd,
     exportFormat,
     exportModalRef,
     exportResolution,
@@ -1698,6 +1702,20 @@ export function ExportModal(props: ExportModalProps) {
             <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
               {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
             </div>
+
+            {/* The range the presets actually resolve to. Without it the only clue was the
+                filename preview further down, which meant a preset pointing at the wrong moment
+                stayed invisible until the export came back (see #73, where the presets were
+                anchored to the latest image instead of the time on screen). */}
+            {estimatedFrameCount > 0 && (
+              <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+                {t('animationResolvedRange')}:{' '}
+                <span className="font-mono">{resolvedRangeStart.replace('T', ' ')}</span>
+                {' → '}
+                <span className="font-mono">{resolvedRangeEnd.replace('T', ' ')}</span>
+                {' UTC'}
+              </div>
+            )}
 
             {rangeError && (
               <p className={`text-xs ${themedClass(isLight, 'text-rose-600', 'text-rose-300')}`}>{rangeError}</p>
