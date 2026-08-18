@@ -71,6 +71,16 @@ area) stay readable instead of turning into overlapping clutter.
 - 10-minute UTC time navigation, map position memory across visits, and a
   share button that reopens the exact same view (time, layers, adjustments,
   theme, language) via URL
+- **Auto-update**: an optional toggle that follows the newest imagery as it is
+  published. It only advances while you are on the latest slot, so scrubbing
+  back into the past pauses it rather than dragging you forward, and its
+  refreshes are silent — no loading modal interrupting a passive view
+- **Freshness cue**: because the app deliberately restores the time you left
+  on, an amber "past image" badge shows how far behind the view is whenever
+  it isn't the latest available, and doubles as a shortcut back to live
+- Every layer on screen is requested at a timestamp verified to exist for all
+  of them, so RGB, VIS and IR always show the same instant even when they
+  publish at different delays
 - Light/Dark/Auto theme, bilingual FR/EN interface, mobile-responsive layout
 - **Keyboard shortcuts**:
 
@@ -78,8 +88,8 @@ area) stay readable instead of turning into overlapping clutter.
   | --- | --- |
   | `←` `→` | ±10 min (Shift: ±30 min, Ctrl/Cmd: ±60 min) |
   | `L` | Jump to latest available time |
-  | `A` | Toggle animation export (GIF/WebM) |
-  | `D` | Toggle image download |
+  | `A` | Open Export on the animation tab (GIF/WebM) |
+  | `D` | Open Export on the still-image tab |
   | `F` | Toggle fire hotspot overlay |
   | `S` | Toggle adjustments panel |
   | `I` | Toggle info modal |
@@ -94,7 +104,7 @@ area) stay readable instead of turning into overlapping clutter.
 | Layer | Technology |
 | --- | --- |
 | **Frontend** | React 19 + TypeScript (strict mode) |
-| **Build** | Vite 6 |
+| **Build** | Vite 8 (Rolldown-based bundler) |
 | **Server** | Express (Vite middleware in dev, static + SPA fallback in production) |
 | **Maps** | Leaflet (WMS tile layers), driven imperatively — no react-leaflet |
 | **Export** | JSZip + file-saver + Canvas API + gifenc (GIF encoding) + MediaRecorder (WebM video) |
@@ -122,7 +132,8 @@ npm install
 # Development server
 npm run dev
 
-# Type checking (the only correctness check — there's no separate test suite)
+# Type checking (there's no unit-test suite; CI additionally builds the app
+# and boots the built server to check it answers — see below)
 npm run lint
 
 # Production build (client + server bundle) and run
@@ -139,6 +150,20 @@ There is no backend or database: the Express server only serves the app (Vite
 middleware in dev, static files in production) — all satellite imagery comes
 directly from EUMETSAT's public WMS endpoint, and all state lives client-side
 (`localStorage` plus the URL query string for shared links).
+
+### Continuous integration
+
+Every pull request must pass two required checks before it can be merged:
+
+| Check | What it does |
+| --- | --- |
+| `lint` | `tsc --noEmit` — type checking, in strict mode |
+| `build` | `npm run build`, then boots the built server and verifies it answers with the built page |
+
+The `build` check exists because type checking sees none of the bundler's
+module resolution, the Vite plugins or the asset pipeline — and because a
+server can build cleanly and still die on startup, which has happened here
+before. Pushes to `main` additionally deploy to GitHub Pages.
 
 ---
 
@@ -206,8 +231,10 @@ that *increases* file size, so it's not a size-reduction lever.
 
 ## Usage Guide
 
-1. **Select Date & Time**: Use the UTC time picker at the top to choose your
-   observation time (10-minute increments)
+1. **Select Date & Time**: Use the UTC time dock at the bottom of the map to
+   choose your observation time (10-minute increments), or hit "Dernier" /
+   `L` to jump to the newest available image. Turn on "Auto" there to keep
+   following new imagery as it is published
 2. **Enable Layers**: Toggle RGB, VIS, and/or IR from the control bar
 3. **Fine-tune**: Click "Adjustments" to access layer-specific controls
    (contrast, brightness, saturation, etc.)
@@ -216,10 +243,11 @@ that *increases* file size, so it's not a size-reduction lever.
 5. **Spot fires**: Click the 🔥 button to open its own panel, enable the fire
    hotspot overlay, and tune opacity/sensitivity/brightness thresholds live
    against the current view
-6. **Download**: Click "Download" to preview each available format as a
-   thumbnail, pick a file format (PNG/JPEG) and resolution, then export —
-   you'll get a single file directly if one format is selected, or a ZIP if
-   several are
+6. **Export**: Click "Export" to open the export modal. On the **Image** tab
+   you preview each available format as a thumbnail, pick a file format
+   (PNG/JPEG) and resolution, then export — a single file if one format is
+   selected, a ZIP if several are. The **Animation GIF** and **Vidéo WebM**
+   tabs share a time-range picker for animated exports
 
 ---
 
