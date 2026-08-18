@@ -165,7 +165,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     isVisIrMode,
     shouldPreferIrBaseAtNight,
     baseLayer,
-    rgbToIrTransition,
     isCloudOnlyIrMode,
     effectiveCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight,
@@ -1057,10 +1056,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       irFallbackBaseLayerRef.current.remove();
     }
     irFallbackBaseLayerRef.current = createIrFallbackBaseLayer(isoTime, irStyle);
-    if (baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && rgbToIrTransition > 0.01) {
-      irFallbackBaseLayerRef.current.addTo(map2);
-      irFallbackBaseLayerRef.current.setOpacity(rgbToIrTransition);
-    } else if (isVisIrMode && baseLayer !== 'ir' && cloudOnlyIrNightFloor > 0.01) {
+    if (isVisIrMode && baseLayer !== 'ir' && cloudOnlyIrNightFloor > 0.01) {
       // Crossfades a bright raw-IR layer in underneath the cloud-only composite as dusk
       // approaches: the composite is blended in `mix-blend-mode: color`, which takes its
       // luminosity from the VIS backdrop, so it necessarily dims as VIS does. Brightening the
@@ -1243,22 +1239,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   useEffect(() => {
     const map2 = map2Instance.current;
     const visOverlayLayer = visOverlayLayerRef.current;
-    const irFallbackBaseLayer = irFallbackBaseLayerRef.current;
     const irOverlayLayer = irOverlayLayerRef.current;
     const irCloudOnlyLayer = irCloudOnlyLayerRef.current;
 
     if (map2 && visOverlayLayer && isVisOverlayEnabled && map2.hasLayer(visOverlayLayer)) {
       visOverlayLayer.setOpacity(currentVisOverlayOpacity);
     }
-    if (map2 && baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && rgbToIrTransition > 0.01 && irFallbackBaseLayer) {
-      if (!map2.hasLayer(irFallbackBaseLayer)) {
-        irFallbackBaseLayer.addTo(map2);
-      }
-      irFallbackBaseLayer.setOpacity(rgbToIrTransition);
-    } else if (map2 && irFallbackBaseLayer && map2.hasLayer(irFallbackBaseLayer)) {
-      irFallbackBaseLayer.remove();
-    }
-
     if (map2 && !isHybridMode && irOverlayLayer && isIrOverlayEnabled && map2.hasLayer(irOverlayLayer)) {
       irOverlayLayer.setOpacity(activeLayers.rgb ? effectiveHybridIrOpacity : sandwichOpacity);
     }
@@ -1283,7 +1269,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     isCloudOnlyIrMode,
     isIrOverlayEnabled,
     isVisOverlayEnabled,
-    rgbToIrTransition,
     sandwichOpacity,
   ]);
 
