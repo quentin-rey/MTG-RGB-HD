@@ -228,6 +228,56 @@ export function getLatestAvailableTime(): string {
 }
 
 /**
+ * The WMS layers actually fetched at `currentTime` for a given view — which is NOT the same set as
+ * `activeLayers`, and that difference is a real bug source (issue #55). `shouldPreferIrBaseAtNight`
+ * puts IR on screen as the base layer at dusk even in RGB+VIS mode where `activeLayers.ir` is
+ * false; the RGB→IR night transition and the cloud-only-IR composite pull in layers the same way.
+ * Any layer rendered but left out of the freshness check gets a timestamp nobody verified it has,
+ * and GeoServer answers that with a silently-substituted neighbouring frame rather than an error
+ * (see `fetchVerifiedLatestAvailableTime`), which is exactly how two layers end up showing
+ * different instants.
+ *
+ * Deliberately over-inclusive where a layer's use is conditional on a threshold: including a layer
+ * that turns out not to be fetched only costs a slightly older synced timestamp, whereas omitting
+ * one that is fetched reintroduces the desync this exists to prevent.
+ */
+export function getRenderedWmsLayers(params: {
+  activeLayers: ActiveLayers;
+  blendState: Pick<
+    LayerBlendState,
+    'baseLayer' | 'isVisOverlayEnabled' | 'isIrOverlayEnabled' | 'isCloudOnlyIrMode'
+    | 'isRgbBasedCloudOnlyMode' | 'cloudOnlyIrVisMaskWeight' | 'rgbToIrTransition'
+  >;
+  fireHotspotEnabled: boolean;
+}): string[] {
+  const { activeLayers, blendState, fireHotspotEnabled } = params;
+  const layers = new Set<string>();
+
+  if (blendState.baseLayer === 'rgb') layers.add(LAYER_RGB);
+  if (blendState.baseLayer === 'vis') layers.add(LAYER_VIS);
+  if (blendState.baseLayer === 'ir') layers.add(LAYER_IR);
+
+  if (blendState.isVisOverlayEnabled) layers.add(LAYER_VIS);
+  if (blendState.isIrOverlayEnabled) layers.add(LAYER_IR);
+
+  // RGB→IR dusk transition: an IR base is faded in underneath the RGB one.
+  if (blendState.baseLayer === 'rgb' && activeLayers.rgb && activeLayers.ir && blendState.rgbToIrTransition > 0) {
+    layers.add(LAYER_IR);
+  }
+
+  // Cloud-only-IR composite: always IR, plus whichever layers feed its cloud-detection mask.
+  if (blendState.isCloudOnlyIrMode) {
+    layers.add(LAYER_IR);
+    if (blendState.cloudOnlyIrVisMaskWeight > 0) layers.add(LAYER_VIS);
+    if (blendState.isRgbBasedCloudOnlyMode) layers.add(LAYER_RGB);
+  }
+
+  if (fireHotspotEnabled) layers.add(LAYER_FIRETEMP);
+
+  return [...layers];
+}
+
+/**
  * Fetches a single layer's own latest-published time from its scoped WMS capabilities endpoint
  * (`/geoserver/<workspace>/<layer>/ows`, much lighter than the full-workspace GetCapabilities
  * document). Returns null on any network/parse failure so callers can fall back safely.
@@ -276,14 +326,26 @@ async function fetchLayerLatestAvailableTime(layer: string, signal: AbortSignal)
  * a capabilities `default` attribute pointing into the future (clock skew, a stale cached
  * response advertising a not-yet-real slot) — that's clamped against actual wall-clock "now"
  * instead, which `fallback`'s 20-minute margin was never a meaningful proxy for.
+ *
+ * `verified` is the part callers must not ignore (issue #55). This returns a usable timestamp in
+ * every case, but only a `verified: true` one is *guaranteed to exist on every rendered layer*; a
+ * `verified: false` result is the same unverified heuristic guess the probing exists to replace,
+ * handed back because a probe failed, timed out, or answered nonsense. Returning both through one
+ * bare string is what let a guess be stored and acted on as if it had been checked — the fixed
+ * 20-minute buffer is regularly *shorter* than RGB's real publishing lag (measured at ~28min while
+ * VIS sat at ~18min), so the guess lands on a slot RGB does not have, and GeoServer answers it
+ * with a neighbouring frame instead of an error. Treat an unverified result as "keep whatever
+ * known-good value you already had and retry", never as grounds to move the view forward.
  */
-export async function fetchSyncedLatestAvailableTime(activeLayers: ActiveLayers): Promise<string> {
+export type LatestAvailableProbe = {
+  time: string;
+  /** True only when every requested layer answered and the result genuinely exists on all of them. */
+  verified: boolean;
+};
+
+export async function fetchVerifiedLatestAvailableTime(layers: string[]): Promise<LatestAvailableProbe> {
   const fallback = getLatestAvailableTime();
-  const layers: string[] = [];
-  if (activeLayers.rgb) layers.push(LAYER_RGB);
-  if (activeLayers.vis) layers.push(LAYER_VIS);
-  if (activeLayers.ir) layers.push(LAYER_IR);
-  if (layers.length === 0) return fallback;
+  if (layers.length === 0) return { time: fallback, verified: false };
 
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), 4000);
@@ -291,13 +353,14 @@ export async function fetchSyncedLatestAvailableTime(activeLayers: ActiveLayers)
   try {
     const results = await Promise.all(layers.map((layer) => fetchLayerLatestAvailableTime(layer, controller.signal)));
     const validTimes = results.filter((value): value is string => value !== null);
-    if (validTimes.length !== layers.length) return fallback;
+    if (validTimes.length !== layers.length) return { time: fallback, verified: false };
 
     const earliestAcrossLayers = validTimes.reduce((min, value) => (value < min ? value : min));
     const nowIso = new Date().toISOString().slice(0, 16);
-    return earliestAcrossLayers > nowIso ? fallback : earliestAcrossLayers;
+    if (earliestAcrossLayers > nowIso) return { time: fallback, verified: false };
+    return { time: earliestAcrossLayers, verified: true };
   } catch {
-    return fallback;
+    return { time: fallback, verified: false };
   } finally {
     window.clearTimeout(timeoutId);
   }
