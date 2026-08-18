@@ -3,7 +3,9 @@ import 'leaflet/dist/leaflet.css';
 import { Check, Download, Loader2, Monitor, Moon, Share2, Sun } from 'lucide-react';
 import {
   DEFAULT_ACTIVE_LAYERS,
-  fetchSyncedLatestAvailableTime,
+  computeLayerBlendState,
+  fetchVerifiedLatestAvailableTime,
+  getRenderedWmsLayers,
   getAvailableExportKindsFromLayers,
   getExportFileBaseName,
   getHdEnhancementProfile,
@@ -678,11 +680,10 @@ export default function DualMapViewer() {
   // both issues exist: that helper is a synchronous heuristic (now − 20min floored to 10min) that
   // nothing re-evaluates, so no render ever happens just because a new image was published — the
   // UI could not have told you a newer image existed even if it wanted to. Seeded from the
-  // heuristic (instant, no network) and then kept honest by `fetchSyncedLatestAvailableTime`,
-  // which verifies against each active layer's own published time rather than assuming a shared
-  // publishing lag. Monotonic on purpose: a probe that fails falls back to the heuristic, which
-  // can be *older* than a previously verified value, and letting "latest" walk backwards would
-  // make the badge and auto-update flicker.
+  // heuristic (instant, no network) and then kept honest by `fetchVerifiedLatestAvailableTime`,
+  // which verifies against each *rendered* layer's own published time rather than assuming a
+  // shared publishing lag. Only verified probe results are ever stored here — see the refresh
+  // effect below for why that distinction is load-bearing (issue #55).
   const [latestAvailableTime, setLatestAvailableTime] = useState(() => getLatestAvailableTime());
   const latestAvailableDatePart = latestAvailableTime.split('T')[0];
 
@@ -692,37 +693,6 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.autoUpdate, JSON.stringify(autoUpdateEnabled));
   }, [autoUpdateEnabled]);
-
-  // Keeps `latestAvailableTime` current. Deliberately NOT a plain setInterval on its own:
-  // browsers throttle timers hard in a backgrounded tab, and "came back to the app after two
-  // hours" is precisely the situation issue #52 is about — so a visibilitychange re-probe is the
-  // part that actually matters, with the interval covering a tab left open in the foreground.
-  // MTG publishes every 10 minutes; probing every 5 keeps the badge honest without being chatty
-  // (one small scoped GetCapabilities per active layer, no GetMap traffic).
-  const { rgb: layerRgbActive, vis: layerVisActive, ir: layerIrActive } = activeLayers;
-  useEffect(() => {
-    let cancelled = false;
-    const layers: ActiveLayers = { rgb: layerRgbActive, vis: layerVisActive, ir: layerIrActive };
-
-    const refreshLatest = async () => {
-      const synced = await fetchSyncedLatestAvailableTime(layers);
-      if (cancelled) return;
-      setLatestAvailableTime((previous) => (synced > previous ? synced : previous));
-    };
-
-    void refreshLatest();
-    const intervalId = window.setInterval(() => { void refreshLatest(); }, 5 * 60 * 1000);
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refreshLatest();
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [layerRgbActive, layerVisActive, layerIrActive]);
 
   // The one predicate both issues are built on. #52 renders a cue when this is false; #50 only
   // advances while it is true. Deriving both from the same comparison is the point of doing them
@@ -814,6 +784,71 @@ export default function DualMapViewer() {
     rgbHdOpacity,
     sandwichOpacity,
   });
+
+  // Which WMS layers are actually on screen right now — NOT simply `activeLayers` (issue #55).
+  // At dusk `shouldPreferIrBaseAtNight` renders IR as the base even in RGB+VIS mode, where
+  // `activeLayers.ir` is false; probing only the flagged-active layers left the visible base
+  // layer's freshness unchecked, so it silently snapped to a different instant than the overlays.
+  // Derived from `computeLayerBlendState`, the same function the renderers use to decide what to
+  // draw, so the probe set cannot drift away from what is actually drawn.
+  const renderedWmsLayers = getRenderedWmsLayers({
+    activeLayers,
+    blendState: computeLayerBlendState({
+      activeLayers,
+      rgbHdOpacity,
+      sandwichOpacity,
+      autoReduceVisAtNight,
+      solarElevation,
+    }),
+    fireHotspotEnabled,
+  });
+  const renderedWmsLayersKey = [...renderedWmsLayers].sort().join(',');
+
+  // Keeps `latestAvailableTime` current. Deliberately NOT a plain setInterval on its own:
+  // browsers throttle timers hard in a backgrounded tab, and "came back to the app after two
+  // hours" is precisely the situation issue #52 is about — so a visibilitychange re-probe is the
+  // part that actually matters, with the interval covering a tab left open in the foreground.
+  // MTG publishes every 10 minutes; probing every 5 keeps the badge honest without being chatty
+  // (one small scoped GetCapabilities per rendered layer, no GetMap traffic).
+  const previousRenderedLayersKeyRef = useRef(renderedWmsLayersKey);
+  useEffect(() => {
+    // Bringing a laggier layer into view (enabling IR, or dusk switching the base to it) can
+    // legitimately move the verified latest *backwards*; that first probe after a layer-set
+    // change is therefore allowed to lower the value. Within a stable layer set it is not, since
+    // a regression there could only be noise.
+    const layerSetChanged = previousRenderedLayersKeyRef.current !== renderedWmsLayersKey;
+    previousRenderedLayersKeyRef.current = renderedWmsLayersKey;
+
+    let cancelled = false;
+    const layers = renderedWmsLayersKey ? renderedWmsLayersKey.split(',') : [];
+
+    const refreshLatest = async (mayGoBackwards: boolean) => {
+      const probe = await fetchVerifiedLatestAvailableTime(layers);
+      if (cancelled) return;
+      // Unverified results are dropped outright rather than stored (issue #55). An unverified
+      // result is the plain now−20min heuristic, whose fixed buffer is regularly shorter than
+      // RGB's real publishing lag — storing it would move the view onto a slot RGB does not have,
+      // and GeoServer serves that as a neighbouring frame instead of an error, which is the
+      // desync itself. Keeping the last known-good value and waiting for the next probe is always
+      // the safer failure mode: at worst the badge is a few minutes conservative.
+      if (!probe.verified) return;
+      setLatestAvailableTime((previous) => (mayGoBackwards || probe.time > previous ? probe.time : previous));
+    };
+
+    void refreshLatest(layerSetChanged);
+    const intervalId = window.setInterval(() => { void refreshLatest(false); }, 5 * 60 * 1000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshLatest(false);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [renderedWmsLayersKey]);
+
   const rgbLegacyFusionSaturationBoost = isRgbVisOnlyMode ? RGB_VIS_FUSION.rgbSaturationBoost : 1;
   const rgbLegacyFusionBrightnessBoost = isRgbVisOnlyMode ? RGB_VIS_FUSION.rgbBrightnessBoost : 1;
   const hdPresetProfile = getHdEnhancementProfile(hdEnhancePreset);
@@ -916,21 +951,27 @@ export default function DualMapViewer() {
 
   // The plain `getLatestAvailableTime()` heuristic (now minus a fixed buffer) assumes every WMS
   // layer publishes within that same margin, but RGB/VIS/IR can each lag independently — see
-  // `fetchSyncedLatestAvailableTime`'s comment for why that silently desyncs RGB and VIS at the
-  // exact instant this button is meant to guarantee freshness. Probes each active layer's real
+  // `fetchVerifiedLatestAvailableTime`'s comment for why that silently desyncs RGB and VIS at the
+  // exact instant this button is meant to guarantee freshness. Probes each *rendered* layer's real
   // latest-published time first (briefly, with its own fallback/timeout) so "jump to latest"
-  // actually lands on a timestamp every active layer genuinely has data for.
+  // actually lands on a timestamp every layer on screen genuinely has data for.
   const jumpToLatest = async () => {
     if (isJumpingToLatest) return;
     setIsJumpingToLatest(true);
     try {
-      const syncedLatest = await fetchSyncedLatestAvailableTime(activeLayers);
-      // Fold the probe result into the shared latest-available state before moving: otherwise a
+      const probe = await fetchVerifiedLatestAvailableTime(renderedWmsLayers);
+      // An unverified probe is the bare heuristic, which can name a slot some rendered layer does
+      // not have — jumping there is precisely the desync of issue #55. Fall back to the last
+      // verified value we already hold instead; it is guaranteed good, only possibly a little old.
+      const target = probe.verified ? probe.time : latestAvailableTime;
+      // Fold the result into the shared latest-available state before moving: otherwise a
       // verified time newer than what polling has seen would be clamped straight back down by
       // handleTimeChange, and "Dernier" would refuse to reach the actual latest image.
-      setLatestAvailableTime((previous) => (syncedLatest > previous ? syncedLatest : previous));
+      if (probe.verified) {
+        setLatestAvailableTime((previous) => (target > previous ? target : previous));
+      }
       setIsBackgroundRefresh(false);
-      setCurrentTime(syncedLatest);
+      setCurrentTime(target);
     } finally {
       setIsJumpingToLatest(false);
     }
@@ -945,9 +986,9 @@ export default function DualMapViewer() {
   }, [currentTime, latestAvailableTime]);
 
   // `currentTime`'s initial state (above) is seeded with the same synchronous
-  // `getLatestAvailableTime()` heuristic that `fetchSyncedLatestAvailableTime` exists to correct
+  // `getLatestAvailableTime()` heuristic that `fetchVerifiedLatestAvailableTime` exists to correct
   // for "jump to latest" (see that function's comment) — RGB/VIS/IR can each lag independently,
-  // so the naive guess can silently land on a timestamp only some active layers actually have
+  // so the naive guess can silently land on a timestamp only some rendered layers actually have
   // data for. That's the intermittent RGB/VIS desync users still see on a fresh page load (no
   // share link, no persisted time either): the "jump to latest" fix only covered the L
   // shortcut/"Dernier" button, not this initial mount. Re-probes once on mount and snaps to the
@@ -968,11 +1009,15 @@ export default function DualMapViewer() {
     if (hadRestoredCurrentTimeRef.current && !shouldFollowLatestOnMount) return;
     let cancelled = false;
     setIsJumpingToLatest(true);
-    fetchSyncedLatestAvailableTime(activeLayers)
-      .then((synced) => {
+    fetchVerifiedLatestAvailableTime(renderedWmsLayers)
+      .then((probe) => {
         if (cancelled) return;
-        setLatestAvailableTime((previous) => (synced > previous ? synced : previous));
-        setCurrentTime((prev) => (prev === initialCurrentTimeRef.current ? synced : prev));
+        // Same rule as everywhere else (#55): only a verified time is safe to render. If the
+        // probe failed, leave the heuristic seed alone rather than committing to another guess —
+        // the polling effect will correct it as soon as one probe succeeds.
+        if (!probe.verified) return;
+        setLatestAvailableTime((previous) => (probe.time > previous ? probe.time : previous));
+        setCurrentTime((prev) => (prev === initialCurrentTimeRef.current ? probe.time : prev));
       })
       .finally(() => {
         if (!cancelled) setIsJumpingToLatest(false);
