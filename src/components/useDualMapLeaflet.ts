@@ -416,6 +416,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const anyLayer = layer as any;
     if (typeof anyLayer.on !== 'function' || typeof anyLayer.off !== 'function') return () => undefined;
 
+    // Tiles that have started (tileloadstart) but not yet resolved (tileload/tileerror), keyed by
+    // coordinate, scoped to this one layer instance (a fresh Set per bindLayerLoading call, since
+    // two layers can legitimately be loading the same x/y/z tile coordinate at once). Needed
+    // because zooming or panning makes Leaflet prune/replace tiles that are still in flight —
+    // Leaflet fires 'tileunload' for those, but never their 'tileload'/'tileerror', so without
+    // tracking which specific tiles are still outstanding, pendingTilesRef could only ever grow
+    // on repeated zoom/pan, permanently blocking maybeFinishLoading() and leaving the "Chargement
+    // des tuiles" modal open (see #49 — the time-change case was fixed by resetting the counters
+    // per cycle, but zoom/pan don't go through a "cycle" at all, so that fix didn't cover them).
+    const pendingKeys = new Set<string>();
+    const tileKey = (coords: { x: number; y: number; z: number }) => `${coords.x}:${coords.y}:${coords.z}`;
+
     const onLoading = () => {
       if (loadingNoStartTimeoutRef.current !== null) {
         window.clearTimeout(loadingNoStartTimeoutRef.current);
@@ -435,7 +447,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       maybeFinishLoading();
     };
 
-    const onStart = () => {
+    const onStart = (e: any) => {
       if (loadingNoStartTimeoutRef.current !== null) {
         window.clearTimeout(loadingNoStartTimeoutRef.current);
         loadingNoStartTimeoutRef.current = null;
@@ -444,6 +456,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         window.clearTimeout(loadingIdleTimeoutRef.current);
         loadingIdleTimeoutRef.current = null;
       }
+      if (e?.coords) pendingKeys.add(tileKey(e.coords));
       startedTilesRef.current += 1;
       pendingTilesRef.current += 1;
       setLoadingTileCount(pendingTilesRef.current);
@@ -454,7 +467,13 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       setIsMapLoading(true);
     };
 
-    const onEnd = () => {
+    const resolveTile = (e: any) => {
+      // Guard against double-resolving the same tile (e.g. tileerror followed by a stray
+      // tileunload for that same tile) — only the first event to see this key counts.
+      if (e?.coords) {
+        const key = tileKey(e.coords);
+        if (!pendingKeys.delete(key)) return false;
+      }
       completedTilesRef.current += 1;
       pendingTilesRef.current = Math.max(0, pendingTilesRef.current - 1);
       setLoadingTileCount(pendingTilesRef.current);
@@ -468,20 +487,31 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       }
 
       maybeFinishLoading();
+      return true;
+    };
+
+    const onUnload = (e: any) => {
+      // Only tiles still in pendingKeys were mid-flight when pruned (zoom/pan discarding an
+      // off-screen or superseded tile); a tile that already finished loading and is now being
+      // unloaded during normal cache housekeeping won't be in the set, so resolveTile() is a
+      // no-op for it (already resolved via onEnd, no double count).
+      resolveTile(e);
     };
 
     anyLayer.on('loading', onLoading);
     anyLayer.on('load', onLoad);
     anyLayer.on('tileloadstart', onStart);
-    anyLayer.on('tileload', onEnd);
-    anyLayer.on('tileerror', onEnd);
+    anyLayer.on('tileload', resolveTile);
+    anyLayer.on('tileerror', resolveTile);
+    anyLayer.on('tileunload', onUnload);
 
     return () => {
       anyLayer.off('loading', onLoading);
       anyLayer.off('load', onLoad);
       anyLayer.off('tileloadstart', onStart);
-      anyLayer.off('tileload', onEnd);
-      anyLayer.off('tileerror', onEnd);
+      anyLayer.off('tileload', resolveTile);
+      anyLayer.off('tileerror', resolveTile);
+      anyLayer.off('tileunload', onUnload);
     };
   };
 
