@@ -202,8 +202,8 @@ export function TimeDock(props: TimeDockProps) {
           </button>
 
           {/* 6 actions: two rows of 3 on mobile rather than a 6-wide grid, which would squeeze
-              each button below a usable touch target on narrow phones (see the mobile layout
-              notes in CLAUDE.md). Unchanged single flex row from sm: up. */}
+              each button well below the ~44px minimum touch target on narrow phones. Unchanged
+              single flex row from sm: up. */}
           <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
             <button
               onClick={() => updateTimeFromTotalMinutes(totalMinutes - 30)}

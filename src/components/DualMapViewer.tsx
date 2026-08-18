@@ -726,8 +726,9 @@ export default function DualMapViewer() {
 
   // The one predicate both issues are built on. #52 renders a cue when this is false; #50 only
   // advances while it is true. Deriving both from the same comparison is the point of doing them
-  // together — two independent staleness checks would drift apart (see the blend-math note in
-  // CLAUDE.md for the precedent).
+  // together — two independent staleness checks would drift apart, the same way the live and
+  // export renderers did before their blending math was centralised into
+  // `computeLayerBlendState` (dualMapViewerShared.ts).
   const isAtLatest = currentTime >= latestAvailableTime;
   const [customAnimationDate, setCustomAnimationDate] = useState(() => sharedSnapshot?.customAnimationDate ?? currentTime.split('T')[0]);
   const [customStartStep, setCustomStartStep] = useState(() => {
