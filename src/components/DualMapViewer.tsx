@@ -710,14 +710,14 @@ export default function DualMapViewer() {
     if (typeof sharedSnapshot?.customStartStep === 'number') {
       return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)));
     }
-    const latestStep = getStepFromUtcValue(getLatestAvailableTime());
+    const latestStep = getStepFromUtcValue(latestAvailableTime);
     return Math.max(0, latestStep - 18);
   });
   const [customEndStep, setCustomEndStep] = useState(() => {
     if (typeof sharedSnapshot?.customEndStep === 'number') {
       return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customEndStep)));
     }
-    return getStepFromUtcValue(getLatestAvailableTime());
+    return getStepFromUtcValue(latestAvailableTime);
   });
 
   const customDayMaxStep = getLatestAllowedStepForDate(customAnimationDate, latestAvailableTime);
@@ -1039,7 +1039,7 @@ export default function DualMapViewer() {
     setAnimationPreset(value);
     if (value !== 'custom') return;
 
-    const base = parseUtcInputValue(currentTime) ?? parseUtcInputValue(getLatestAvailableTime()) ?? new Date();
+    const base = parseUtcInputValue(currentTime) ?? parseUtcInputValue(latestAvailableTime) ?? new Date();
     const datePart = base.toISOString().slice(0, 10);
     const baseStep = getStepFromUtcValue(toUtcInputValue(base));
     const nextEnd = Math.max(0, Math.min(getLatestAllowedStepForDate(datePart, latestAvailableTime), baseStep));
@@ -1052,7 +1052,13 @@ export default function DualMapViewer() {
   };
 
   const buildAnimationFrameTimes = (): string[] => {
-    const latestAvailable = parseUtcInputValue(getLatestAvailableTime());
+    // The verified `latestAvailableTime`, not the raw now−20min heuristic (issue #59, a residue of
+    // #55). The heuristic's fixed buffer is regularly shorter than a layer's real publishing lag,
+    // so bounding the range with it puts the last frames on slots some layer has no image for —
+    // and GeoServer answers those by silently serving a neighbouring frame instead of erroring.
+    // The exported animation then ends on frames where one layer is frozen while the others keep
+    // moving, with nothing to indicate it.
+    const latestAvailable = parseUtcInputValue(latestAvailableTime);
     if (!latestAvailable) {
       throw new Error('No latest time available');
     }
