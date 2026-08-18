@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, Info, Loader2, Minus, Monitor, Moon, Plus, Sliders, Sun, Wrench, X } from 'lucide-react';
+import { Bug, CircleHelp, Clock, History, Info, Loader2, Minus, Monitor, Moon, Plus, RefreshCw, Sliders, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -30,21 +30,56 @@ function GithubIcon(props: { className?: string }) {
 }
 
 type TimeDockProps = {
+  autoUpdateEnabled: boolean;
   currentTime: string;
+  isAtLatest: boolean;
+  isBackgroundRefreshing: boolean;
   isSyncingLatest: boolean;
+  latestAvailableTime: string;
   t: Translator;
   theme: UiTheme;
+  onAutoUpdateToggle: () => void;
   onLatest: () => void;
   onTimeChange: (newTime: string) => void;
 };
 
+/** Compact "2 h 30" / "40 min" gap between the viewed time and the latest available one. Both are
+ *  `YYYY-MM-DDTHH:MM` UTC strings, hence the explicit 'Z'. */
+function formatTimeBehind(currentTime: string, latestAvailableTime: string): string | null {
+  const current = new Date(`${currentTime}Z`).getTime();
+  const latest = new Date(`${latestAvailableTime}Z`).getTime();
+  if (Number.isNaN(current) || Number.isNaN(latest)) return null;
+
+  const minutesBehind = Math.round((latest - current) / 60000);
+  if (minutesBehind < 10) return null;
+  if (minutesBehind < 60) return `${minutesBehind} min`;
+
+  const hours = Math.floor(minutesBehind / 60);
+  const minutes = minutesBehind % 60;
+  if (hours < 24) return minutes === 0 ? `${hours} h` : `${hours} h ${String(minutes).padStart(2, '0')}`;
+  return `${Math.floor(hours / 24)} j`;
+}
+
 export function TimeDock(props: TimeDockProps) {
-  const { currentTime, isSyncingLatest, onLatest, onTimeChange, t, theme } = props;
+  const {
+    autoUpdateEnabled,
+    currentTime,
+    isAtLatest,
+    isBackgroundRefreshing,
+    isSyncingLatest,
+    latestAvailableTime,
+    onAutoUpdateToggle,
+    onLatest,
+    onTimeChange,
+    t,
+    theme,
+  } = props;
   const isLight = theme === 'light';
   const [isMobileActionsExpanded, setIsMobileActionsExpanded] = useState(false);
   const [datePart, timePart] = currentTime.split('T');
   const [hourPart, minutePart] = timePart.split(':');
   const totalMinutes = Number(hourPart) * 60 + Number(minutePart);
+  const timeBehindLabel = formatTimeBehind(currentTime, latestAvailableTime);
 
   const updateTimeFromTotalMinutes = (nextTotalMinutes: number) => {
     const normalized = Math.max(0, Math.min(23 * 60 + 50, Math.round(nextTotalMinutes / 10) * 10));
@@ -88,8 +123,33 @@ export function TimeDock(props: TimeDockProps) {
           <span className="inline-flex items-center gap-1.5 font-medium">
             <Clock className="w-3.5 h-3.5 text-blue-300" />
             {t('utcTime')}
+            {isBackgroundRefreshing && (
+              <Loader2 className="w-3 h-3 animate-spin shrink-0 text-blue-300" aria-label={t('autoUpdateRefreshing')} />
+            )}
           </span>
-          <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{datePart} {hourPart}:{minutePart}</span>
+          <span className="inline-flex items-center gap-2 min-w-0">
+            {/* Issue #52: the app deliberately restores the time you left on, which is easy to
+                forget about — this is the cue that you are not on live imagery, and a shortcut
+                back. Only shown once genuinely behind (>= one 10-min slot), so it can't flicker
+                on the boundary. */}
+            {!isAtLatest && timeBehindLabel && (
+              <button
+                onClick={onLatest}
+                disabled={isSyncingLatest}
+                title={t('notLatestHint')}
+                className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] sm:text-[10px] font-medium transition-colors disabled:cursor-wait ${
+                  isLight
+                    ? 'bg-amber-100 hover:bg-amber-200 border-amber-400 text-amber-900'
+                    : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/50 text-amber-200'
+                }`}
+              >
+                <History className="w-3 h-3 shrink-0" />
+                <span className="hidden sm:inline">{t('notLatestBadge')} · </span>
+                <span className="font-mono">−{timeBehindLabel}</span>
+              </button>
+            )}
+            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{datePart} {hourPart}:{minutePart}</span>
+          </span>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -141,7 +201,10 @@ export function TimeDock(props: TimeDockProps) {
             {isMobileActionsExpanded ? t('hideActions') : t('showActions')}
           </button>
 
-          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-5 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
+          {/* 6 actions: two rows of 3 on mobile rather than a 6-wide grid, which would squeeze
+              each button below a usable touch target on narrow phones (see the mobile layout
+              notes in CLAUDE.md). Unchanged single flex row from sm: up. */}
+          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
             <button
               onClick={() => updateTimeFromTotalMinutes(totalMinutes - 30)}
               className={`border rounded-md px-2 py-1 text-[11px] transition-colors ${
@@ -194,6 +257,33 @@ export function TimeDock(props: TimeDockProps) {
             >
               {isSyncingLatest && <Loader2 className="w-3 h-3 animate-spin shrink-0" />}
               {t('latest')}
+            </button>
+            {/* Issue #50. Paused-vs-active is a real distinction worth surfacing: auto-update
+                only advances while you are on the latest slot, so scrubbing into the past
+                suspends it until you come back — without this the toggle would look broken. */}
+            <button
+              onClick={onAutoUpdateToggle}
+              title={
+                autoUpdateEnabled
+                  ? (isAtLatest ? t('autoUpdateOnHint') : t('autoUpdatePaused'))
+                  : t('autoUpdateOffHint')
+              }
+              aria-pressed={autoUpdateEnabled}
+              // The visible label is just "Auto" for width, which would otherwise collide with the
+              // theme switch's own "Auto" option — two controls with the same accessible name.
+              aria-label={t('autoUpdateAriaLabel')}
+              className={`flex items-center justify-center gap-1 border rounded-md px-2 py-1 text-[11px] transition-colors ${
+                autoUpdateEnabled
+                  ? (isAtLatest
+                    ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-600 text-white'
+                    : 'bg-amber-600/80 hover:bg-amber-600 border-amber-600 text-white')
+                  : isLight
+                    ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                    : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
+              }`}
+            >
+              <RefreshCw className={`w-3 h-3 shrink-0 ${autoUpdateEnabled && isAtLatest ? 'animate-spin [animation-duration:3s]' : ''}`} />
+              {t('autoUpdate')}
             </button>
           </div>
         </div>

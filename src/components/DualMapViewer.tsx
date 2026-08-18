@@ -670,8 +670,65 @@ export default function DualMapViewer() {
   const [isWebmExporting, setIsWebmExporting] = useState(false);
   const [webmExportProgress, setWebmExportProgress] = useState(0);
   const [animationRangeError, setAnimationRangeError] = useState<string | null>(null);
-  const latestAvailableTime = getLatestAvailableTime();
+  // The single source of truth for "what is the newest image that actually exists". Everything
+  // that needs to reason about freshness reads this: the "past image" badge (#52), auto-update
+  // (#50), the date-input max, the animation range clamps and handleTimeChange's own clamp.
+  //
+  // It has to be *state*, not a bare `getLatestAvailableTime()` call per render, for the reason
+  // both issues exist: that helper is a synchronous heuristic (now − 20min floored to 10min) that
+  // nothing re-evaluates, so no render ever happens just because a new image was published — the
+  // UI could not have told you a newer image existed even if it wanted to. Seeded from the
+  // heuristic (instant, no network) and then kept honest by `fetchSyncedLatestAvailableTime`,
+  // which verifies against each active layer's own published time rather than assuming a shared
+  // publishing lag. Monotonic on purpose: a probe that fails falls back to the heuristic, which
+  // can be *older* than a previously verified value, and letting "latest" walk backwards would
+  // make the badge and auto-update flicker.
+  const [latestAvailableTime, setLatestAvailableTime] = useState(() => getLatestAvailableTime());
   const latestAvailableDatePart = latestAvailableTime.split('T')[0];
+
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(
+    () => readStoredJson<boolean>(STORAGE_KEYS.autoUpdate, false),
+  );
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.autoUpdate, JSON.stringify(autoUpdateEnabled));
+  }, [autoUpdateEnabled]);
+
+  // Keeps `latestAvailableTime` current. Deliberately NOT a plain setInterval on its own:
+  // browsers throttle timers hard in a backgrounded tab, and "came back to the app after two
+  // hours" is precisely the situation issue #52 is about — so a visibilitychange re-probe is the
+  // part that actually matters, with the interval covering a tab left open in the foreground.
+  // MTG publishes every 10 minutes; probing every 5 keeps the badge honest without being chatty
+  // (one small scoped GetCapabilities per active layer, no GetMap traffic).
+  const { rgb: layerRgbActive, vis: layerVisActive, ir: layerIrActive } = activeLayers;
+  useEffect(() => {
+    let cancelled = false;
+    const layers: ActiveLayers = { rgb: layerRgbActive, vis: layerVisActive, ir: layerIrActive };
+
+    const refreshLatest = async () => {
+      const synced = await fetchSyncedLatestAvailableTime(layers);
+      if (cancelled) return;
+      setLatestAvailableTime((previous) => (synced > previous ? synced : previous));
+    };
+
+    void refreshLatest();
+    const intervalId = window.setInterval(() => { void refreshLatest(); }, 5 * 60 * 1000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshLatest();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [layerRgbActive, layerVisActive, layerIrActive]);
+
+  // The one predicate both issues are built on. #52 renders a cue when this is false; #50 only
+  // advances while it is true. Deriving both from the same comparison is the point of doing them
+  // together — two independent staleness checks would drift apart (see the blend-math note in
+  // CLAUDE.md for the precedent).
+  const isAtLatest = currentTime >= latestAvailableTime;
   const [customAnimationDate, setCustomAnimationDate] = useState(() => sharedSnapshot?.customAnimationDate ?? currentTime.split('T')[0]);
   const [customStartStep, setCustomStartStep] = useState(() => {
     if (typeof sharedSnapshot?.customStartStep === 'number') {
@@ -810,17 +867,49 @@ export default function DualMapViewer() {
     ? gifSelectedKind
     : getAnimationExportKind(activeLayers);
 
+  // True while an auto-update refresh is loading tiles nobody asked for. Used only to keep the
+  // blocking "Chargement des tuiles" modal from popping up unattended every 10 minutes, which is
+  // exactly the passive/kiosk use case auto-update exists for. Any user-initiated time change
+  // clears it, so a real interaction always gets the real indicator back.
+  const [isBackgroundRefresh, setIsBackgroundRefresh] = useState(false);
+  const wasMapLoadingRef = useRef(false);
+  useEffect(() => {
+    // Only clear on a true→false transition: clearing whenever `isMapLoading` is false would
+    // cancel the flag in the gap between setting it and the tile cycle actually starting.
+    if (wasMapLoadingRef.current && !isMapLoading) setIsBackgroundRefresh(false);
+    wasMapLoadingRef.current = isMapLoading;
+  }, [isMapLoading]);
+
   const handleTimeChange = (newTimeStr: string) => {
+    setIsBackgroundRefresh(false);
     const newTime = new Date(newTimeStr);
-    const latestAvailable = getLatestAvailableTime();
-    const maxTime = new Date(latestAvailable);
+    const maxTime = new Date(latestAvailableTime);
 
     if (newTime > maxTime) {
-      setCurrentTime(latestAvailable);
+      setCurrentTime(latestAvailableTime);
     } else {
       setCurrentTime(newTimeStr);
     }
   };
+
+  // Auto-update (#50). Advances only when a genuinely newer slot appears AND the user was already
+  // on the previous latest — comparing against the *previous* `latestAvailableTime` is what
+  // distinguishes "a new image was published" from "the user deliberately scrubbed back", which
+  // `isAtLatest` alone cannot tell apart once a new slot exists. So scrubbing into the past pauses
+  // auto-update implicitly, and "Dernier" resumes it; without that, this would drag the user
+  // forward against their will and re-break the persistence fix of #21.
+  const previousLatestAvailableTimeRef = useRef(latestAvailableTime);
+  useEffect(() => {
+    const previousLatest = previousLatestAvailableTimeRef.current;
+    previousLatestAvailableTimeRef.current = latestAvailableTime;
+
+    if (!autoUpdateEnabled) return;
+    if (latestAvailableTime <= previousLatest) return;
+    if (currentTime < previousLatest) return;
+
+    setIsBackgroundRefresh(true);
+    setCurrentTime(latestAvailableTime);
+  }, [latestAvailableTime, autoUpdateEnabled, currentTime]);
 
   const [isJumpingToLatest, setIsJumpingToLatest] = useState(false);
 
@@ -835,20 +924,24 @@ export default function DualMapViewer() {
     setIsJumpingToLatest(true);
     try {
       const syncedLatest = await fetchSyncedLatestAvailableTime(activeLayers);
-      handleTimeChange(syncedLatest);
+      // Fold the probe result into the shared latest-available state before moving: otherwise a
+      // verified time newer than what polling has seen would be clamped straight back down by
+      // handleTimeChange, and "Dernier" would refuse to reach the actual latest image.
+      setLatestAvailableTime((previous) => (syncedLatest > previous ? syncedLatest : previous));
+      setIsBackgroundRefresh(false);
+      setCurrentTime(syncedLatest);
     } finally {
       setIsJumpingToLatest(false);
     }
   };
 
   useEffect(() => {
-    const latestAvailable = getLatestAvailableTime();
     const requested = new Date(currentTime + 'Z');
-    const latest = new Date(latestAvailable + 'Z');
+    const latest = new Date(latestAvailableTime + 'Z');
     if (requested.getTime() > latest.getTime()) {
-      setCurrentTime(latestAvailable);
+      setCurrentTime(latestAvailableTime);
     }
-  }, [currentTime]);
+  }, [currentTime, latestAvailableTime]);
 
   // `currentTime`'s initial state (above) is seeded with the same synchronous
   // `getLatestAvailableTime()` heuristic that `fetchSyncedLatestAvailableTime` exists to correct
@@ -862,14 +955,22 @@ export default function DualMapViewer() {
   // time change. Also skipped entirely whenever the initial time came from a share link or from
   // localStorage (`hadRestoredCurrentTimeRef`, set above) — otherwise this would silently snap a
   // deliberately-restored past time back to "latest" a few seconds after every reload.
+  //
+  // Auto-update (#50) is the one deliberate exception to that skip: having it on means "I want
+  // live imagery", so it outranks the remembered timestamp and we do snap forward on load. A
+  // share link still wins over both — a shared link is a snapshot of a specific moment, and
+  // yanking the recipient to "now" would destroy the thing that was shared.
   const initialCurrentTimeRef = useRef(currentTime);
+  const autoUpdateEnabledOnMountRef = useRef(autoUpdateEnabled);
   useEffect(() => {
-    if (hadRestoredCurrentTimeRef.current) return;
+    const shouldFollowLatestOnMount = autoUpdateEnabledOnMountRef.current && !sharedSnapshot?.currentTime;
+    if (hadRestoredCurrentTimeRef.current && !shouldFollowLatestOnMount) return;
     let cancelled = false;
     setIsJumpingToLatest(true);
     fetchSyncedLatestAvailableTime(activeLayers)
       .then((synced) => {
         if (cancelled) return;
+        setLatestAvailableTime((previous) => (synced > previous ? synced : previous));
         setCurrentTime((prev) => (prev === initialCurrentTimeRef.current ? synced : prev));
       })
       .finally(() => {
@@ -1656,15 +1757,20 @@ export default function DualMapViewer() {
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
 
           <TimeDock
+            autoUpdateEnabled={autoUpdateEnabled}
             currentTime={currentTime}
+            isAtLatest={isAtLatest}
+            isBackgroundRefreshing={isBackgroundRefresh && isMapLoading}
             isSyncingLatest={isJumpingToLatest}
+            latestAvailableTime={latestAvailableTime}
+            onAutoUpdateToggle={() => setAutoUpdateEnabled((previous) => !previous)}
             onLatest={() => { void jumpToLatest(); }}
             onTimeChange={handleTimeChange}
             t={t}
             theme={resolvedTheme}
           />
 
-          {isMapLoading && (
+          {isMapLoading && !isBackgroundRefresh && (
             <div className="absolute inset-x-0 top-20 sm:top-24 z-[430] pointer-events-none flex justify-center px-3">
               <div className={`backdrop-blur-md border rounded-lg px-4 py-3 text-xs shadow-2xl w-[min(92vw,320px)] ${
                 resolvedTheme === 'light'
