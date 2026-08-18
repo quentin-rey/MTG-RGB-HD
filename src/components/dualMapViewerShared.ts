@@ -18,6 +18,7 @@ export const FRANCE_DEPARTMENTS_GEOJSON_URL = 'https://raw.githubusercontent.com
 export const STORAGE_KEYS = {
   activeLayers: 'mtg_active_layers',
   autoReduceVisAtNight: 'mtg_auto_reduce_vis_night',
+  autoUpdate: 'mtg_auto_update',
   currentTime: 'mtg_current_time',
   fireHotspotEnabled: 'mtg_fire_hotspot_enabled',
   fireHotspotMinBrightness: 'mtg_fire_hotspot_min_brightness',
