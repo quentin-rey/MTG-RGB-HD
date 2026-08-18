@@ -273,19 +273,17 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     base: 'rgb' | 'ir' | 'vis',
     isoTime: string,
     nextIrStyle: IrStyle,
-    isVisIrNightFallback: boolean,
   ) => {
-    // VIS+IR's night fallback (raw IR standing in for the VIS-luminance-dependent cloud-only
-    // composite, see shouldPreferIrBaseAtNight/isCloudOnlyIrMode) used the plain, unenhanced
-    // `ir-base-layer-tiles` class — the same one plain standalone-IR mode uses. But the composite
-    // it replaces boosts saturation/contrast both in `computeCloudOnlyIrRgba` (satBoost) and via
-    // `.ir-cloud-only-layer-tiles`'s own CSS filter, so the raw fallback looked visibly flatter and
-    // darker by comparison, both at the moment of the switch and generally at night. Give it its
-    // own class with a matching boost instead of reusing standalone IR's untouched one.
+    // Every mode showing a raw IR base at night renders it identically — it is the same data, so
+    // it should look the same. VIS+IR used to get its own brightened class, to match the
+    // brightness of the cloud-only composite it stands in for. It matched the *average* and blew
+    // out the highlights doing it: 23% of the scene clipped to pure white against 0.7% for the
+    // very same imagery in RGB+VIS+IR or standalone IR, which destroys exactly the cold-cloud-top
+    // detail IR is read for (issue #71).
     const className = base === 'rgb'
       ? 'rgb-layer-tiles'
       : base === 'ir'
-        ? (isVisIrNightFallback ? 'ir-base-layer-tiles-vis-ir-fallback' : 'ir-base-layer-tiles')
+        ? 'ir-base-layer-tiles'
         : 'vis-layer-tiles';
     return L.tileLayer.wms(WMS_URL_DIRECT, {
       layers: base === 'rgb' ? LAYER_RGB : base === 'ir' ? LAYER_IR : LAYER_VIS,
@@ -930,12 +928,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     const initialIsoTime = new Date(currentTime + 'Z').toISOString();
     beginLoadingCycle();
-    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, initialIsoTime, irStyle, isVisIrMode).addTo(map2);
+    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, initialIsoTime, irStyle).addTo(map2);
     visOverlayLayerRef.current = createVisOverlayLayer(
       initialIsoTime,
-      isHybridMode,
-      !activeLayers.rgb && activeLayers.ir,
-      activeLayers.rgb && activeLayers.vis && !activeLayers.ir,
+      // Every variant below is picked from the base layer actually rendered, not from
+      // `activeLayers`. Once the night fallback puts raw IR underneath, the only blend that
+      // leaves it intact is `screen`: VIS is black at night, and both `luminosity` (RGB+VIS) and
+      // `soft-light` (VIS alone) take that black and crush the IR base with it — RGB+VIS at night
+      // measured 52/255 mean luminance against 116 for the identical IR data in every other mode
+      // (issue #71).
+      isHybridMode && baseLayer !== 'ir',
+      baseLayer === 'ir',
+      activeLayers.rgb && activeLayers.vis && !activeLayers.ir && baseLayer !== 'ir',
     );
     irOverlayLayerRef.current = createIrOverlayLayer(initialIsoTime, irStyle);
 
@@ -1050,7 +1054,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     const isoTime = new Date(currentTime + 'Z').toISOString();
     secondaryBaseLayerRef.current?.remove();
-    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle, isVisIrMode).addTo(map2);
+    secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle).addTo(map2);
 
     if (irFallbackBaseLayerRef.current && map2.hasLayer(irFallbackBaseLayerRef.current)) {
       irFallbackBaseLayerRef.current.remove();
@@ -1079,9 +1083,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     visOverlayLayerRef.current = createVisOverlayLayer(
       isoTime,
-      isHybridMode,
-      !activeLayers.rgb && activeLayers.ir,
-      activeLayers.rgb && activeLayers.vis && !activeLayers.ir,
+      // Every variant below is picked from the base layer actually rendered, not from
+      // `activeLayers`. Once the night fallback puts raw IR underneath, the only blend that
+      // leaves it intact is `screen`: VIS is black at night, and both `luminosity` (RGB+VIS) and
+      // `soft-light` (VIS alone) take that black and crush the IR base with it — RGB+VIS at night
+      // measured 52/255 mean luminance against 116 for the identical IR data in every other mode
+      // (issue #71).
+      isHybridMode && baseLayer !== 'ir',
+      baseLayer === 'ir',
+      activeLayers.rgb && activeLayers.vis && !activeLayers.ir && baseLayer !== 'ir',
     );
     irOverlayLayerRef.current = createIrOverlayLayer(isoTime, irStyle);
 
