@@ -23,6 +23,16 @@ import {
   type MapOptions,
 } from './dualMapViewerShared';
 
+type CanvasTileWork = {
+  /** Set once Leaflet has discarded the tile, so async work started for it can stop early. */
+  __abandoned?: boolean;
+  /** Cancellers for the WMS requests this tile still has in flight. */
+  __cancelLoads?: Array<() => void>;
+};
+
+/** 1x1 transparent GIF — assigning it to an <img> src drops any request still pending on it. */
+const EMPTY_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+
 type UseDualMapLeafletArgs = {
   currentTime: string;
   activeLayers: ActiveLayers;
@@ -577,6 +587,47 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     });
   };
 
+  /**
+   * `loadImage` plus a way to call the request off. Needed by the two canvas GridLayers below:
+   * their `createTile` kicks off WMS requests and a full 256x256 pixel pass, and zooming makes
+   * Leaflet discard those tiles mid-flight (`GridLayer._abortLoading`) — a canvas tile has no
+   * `complete` property, so *every* in-flight one is dropped. Nothing cancelled the work, so the
+   * requests ran to completion and the pixels were computed for tiles that were already gone.
+   * Assigning an empty image to `src` is how Leaflet's own `TileLayer._removeTile` drops a
+   * pending request; the handlers are cleared first so the cancellation can't resolve or reject.
+   */
+  const loadImageCancellable = (url: string) => {
+    const image = new Image();
+    image.crossOrigin = 'Anonymous';
+    const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Failed to load tile: ${url}`));
+    });
+    image.src = url;
+    return {
+      promise,
+      cancel: () => {
+        image.onload = null;
+        image.onerror = null;
+        image.src = EMPTY_IMAGE_DATA_URL;
+      },
+    };
+  };
+
+  /**
+   * Marks a discarded canvas tile so its in-flight work stops: cancels the requests it still has
+   * outstanding, and flags the element so the `.then()` bails before the pixel pass. Bound to both
+   * 'tileabort' (zoom dropping a stale level) and 'tileunload' (ordinary pruning). For a tile that
+   * already finished, both are no-ops — the promise has resolved and there is nothing left to cut.
+   */
+  const markCanvasTileAbandoned = (event: any) => {
+    const element = event?.tile as (HTMLCanvasElement & CanvasTileWork) | undefined;
+    if (!element) return;
+    element.__abandoned = true;
+    element.__cancelLoads?.forEach((cancel) => cancel());
+    element.__cancelLoads = [];
+  };
+
   const createCloudOnlyIrLayer = (
     isoTime: string,
     nextIrStyle: IrStyle,
@@ -611,6 +662,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       zIndex: 330,
       className: 'ir-cloud-only-layer-tiles',
     } as any);
+    layer.on('tileabort', markCanvasTileAbandoned);
+    layer.on('tileunload', markCanvasTileAbandoned);
 
     (layer as any).createTile = (coords: L.Coords, done: (error: Error | null, tile: HTMLCanvasElement) => void) => {
       const tile = document.createElement('canvas');
@@ -664,12 +717,24 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       const rgbMaskUrl = buildWmsTileUrl(LAYER_RGB, '', bbox, isoTime);
       const irUrl = buildWmsTileUrl(LAYER_IR, nextIrStyle, bbox, isoTime);
 
+      const visMaskLoad = useVisMask ? loadImageCancellable(visMaskUrl) : null;
+      const rgbMaskLoad = useRgbMask ? loadImageCancellable(rgbMaskUrl) : null;
+      const irLoad = loadImageCancellable(irUrl);
+      const work = tile as HTMLCanvasElement & CanvasTileWork;
+      work.__cancelLoads = [visMaskLoad, rgbMaskLoad, irLoad]
+        .filter((load): load is { promise: Promise<HTMLImageElement>; cancel: () => void } => load !== null)
+        .map((load) => load.cancel);
+
       void Promise.all([
-        useVisMask ? loadImage(visMaskUrl) : Promise.resolve(null),
-        useRgbMask ? loadImage(rgbMaskUrl) : Promise.resolve(null),
-        loadImage(irUrl),
+        visMaskLoad ? visMaskLoad.promise : Promise.resolve(null),
+        rgbMaskLoad ? rgbMaskLoad.promise : Promise.resolve(null),
+        irLoad.promise,
       ])
         .then(([visMaskImage, rgbMaskImage, irImage]) => {
+          // Leaflet dropped this tile while its requests were in flight (zoom/pan). Everything
+          // below is pure waste for a tile that will never be shown.
+          if (work.__abandoned) return;
+          work.__cancelLoads = [];
           let visMaskData: Uint8ClampedArray | null = null;
           let rgbMaskData: Uint8ClampedArray | null = null;
 
@@ -750,6 +815,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       zIndex: 340,
       className: 'fire-hotspot-layer-tiles',
     } as any);
+    layer.on('tileabort', markCanvasTileAbandoned);
+    layer.on('tileunload', markCanvasTileAbandoned);
 
     (layer as any).createTile = (coords: L.Coords, done: (error: Error | null, tile: HTMLCanvasElement) => void) => {
       const tile = document.createElement('canvas');
@@ -789,8 +856,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
       const fireUrl = buildWmsTileUrl(LAYER_FIRETEMP, '', bbox, isoTime);
 
-      void loadImage(fireUrl)
+      const fireLoad = loadImageCancellable(fireUrl);
+      const work = tile as HTMLCanvasElement & CanvasTileWork;
+      work.__cancelLoads = [fireLoad.cancel];
+
+      void fireLoad.promise
         .then((fireImage) => {
+          // Discarded mid-flight by a zoom/pan — skip the pixel pass entirely.
+          if (work.__abandoned) return;
+          work.__cancelLoads = [];
           const fireCanvas = document.createElement('canvas');
           fireCanvas.width = 256;
           fireCanvas.height = 256;
