@@ -557,7 +557,15 @@ export function computeLayerBlendState(params: {
   // goes dark, that crushes the composite to black no matter how visible the IR overlay itself
   // is. So VIS+IR must switch to the same raw-IR base fallback as the RGB combos once the sun
   // is low, not just the RGB ones.
-  const shouldPreferIrBaseAtNight = (activeLayers.rgb || isVisIrMode) && (activeLayers.vis || activeLayers.ir) && solarElevation < 1.5;
+  // Any mode whose selected layers all go dark at night needs the raw-IR stand-in, which means
+  // anything containing RGB or VIS. IR-only is excluded because it is already showing IR.
+  //
+  // This used to read `(rgb || isVisIrMode) && (vis || ir)`, which effectively required two active
+  // layers: RGB+VIS got IR substituted even though IR was not selected, while RGB alone and VIS
+  // alone were left showing a black screen all night (issue #71). Substituting is the right call —
+  // the "Fallback IR nocturne actif" badge says so plainly — but it has to be applied
+  // consistently, and there was no principle under which RGB+VIS qualified and RGB alone did not.
+  const shouldPreferIrBaseAtNight = (activeLayers.rgb || activeLayers.vis) && solarElevation < 1.5;
   const baseLayer: 'rgb' | 'ir' | 'vis' = shouldPreferIrBaseAtNight
     ? 'ir'
     : activeLayers.rgb

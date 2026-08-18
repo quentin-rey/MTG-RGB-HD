@@ -143,14 +143,6 @@ const DYNAMIC_TILE_STYLES = `
     mix-blend-mode: color;
     filter: saturate(1.2) contrast(1.08);
   }
-  /* VIS+IR's night fallback: raw IR standing in for the VIS-luminance-dependent cloud-only
-     composite (see shouldPreferIrBaseAtNight/isVisIrMode in dualMapViewerShared.ts). Boosted to
-     match how vivid/bright the composite it replaces looks (satBoost in computeCloudOnlyIrRgba
-     plus .ir-cloud-only-layer-tiles' own filter below) — the plain .ir-base-layer-tiles class
-     (used by standalone IR mode) is intentionally left unfiltered/raw. */
-  .ir-base-layer-tiles-vis-ir-fallback {
-    filter: brightness(1.35) contrast(1.15) saturate(1.5);
-  }
   /* Raw IR crossfaded in underneath the VIS+IR cloud-only composite as dusk approaches (see
      cloudOnlyIrNightFloor), purely so the composite's own mix-blend-mode: color (which takes
      its luminosity from whatever's behind it) has a brighter backdrop to read luminosity from as
@@ -160,7 +152,7 @@ const DYNAMIC_TILE_STYLES = `
      the backdrop's hue, producing muddy off-palette greens/reds in thick cloud cores instead of
      the clean blue/cyan/yellow ramp. Brightness-only keeps the composite in charge of hue/sat. */
   .ir-fallback-base-layer-tiles {
-    filter: grayscale(1) brightness(1.5) contrast(1.05);
+    filter: grayscale(1) contrast(1.05);
   }
   .ir-cloud-only-layer-tiles {
     mix-blend-mode: color;
