@@ -36,7 +36,13 @@ import {
   type GifFinalPauseMs,
   type GifPaletteMode,
   type StillImageFormat,
+  WMS_CORS_BLOCKED,
 } from './dualMapExport';
+
+/** The imagery is reachable but the browser refuses to let the page read its pixels, because the
+ *  WMS server stopped sending its CORS header. Nothing the user can act on — so say that, rather
+ *  than sending them to check a connection that is working fine. */
+const isWmsCorsBlocked = (error: unknown) => error instanceof Error && error.message === WMS_CORS_BLOCKED;
 import { useDualMapLeaflet } from './useDualMapLeaflet';
 import {
   ExportModal,
@@ -1212,7 +1218,7 @@ export default function DualMapViewer() {
       saveAs(gifBlob, `MTG_ANIMATION_${gifFileBaseName}_${gifMaxDimension}px_${safeStart}_to_${safeEnd}.gif`);
     } catch (error) {
       console.error('GIF export failed:', error);
-      alert(t('animationExportFailed'));
+      alert(isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('animationExportFailed'));
     } finally {
       setIsGifExporting(false);
     }
@@ -1281,7 +1287,11 @@ export default function DualMapViewer() {
       saveAs(webmBlob, `MTG_ANIMATION_${webmFileBaseName}_${gifMaxDimension}px_${safeStart}_to_${safeEnd}.webm`);
     } catch (error) {
       console.error('WebM export failed:', error);
-      alert(error instanceof Error && error.message === 'webm-unsupported' ? t('animationExportWebmUnsupported') : t('animationExportWebmFailed'));
+      alert(
+        error instanceof Error && error.message === 'webm-unsupported'
+          ? t('animationExportWebmUnsupported')
+          : isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('animationExportWebmFailed'),
+      );
     } finally {
       setIsWebmExporting(false);
     }
@@ -1408,7 +1418,7 @@ export default function DualMapViewer() {
       });
     } catch (err) {
       console.error('Export failed:', err);
-      alert(t('exportFailedAlert'));
+      alert(isWmsCorsBlocked(err) ? t('exportCorsBlocked') : t('exportFailedAlert'));
     } finally {
       setIsExporting(false);
     }
