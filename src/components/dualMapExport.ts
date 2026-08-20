@@ -493,12 +493,38 @@ function buildWmsUrl(
   return `${WMS_URL_DIRECT}?service=WMS&request=GetMap&layers=${encodeURIComponent(layer)}&styles=${encodeURIComponent(style)}&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=${width}&height=${height}&time=${encodeURIComponent(isoTime)}`;
 }
 
+/**
+ * Loads a tile the export pipeline can actually read back. Every canvas step here — compositing,
+ * the HD enhancement pass, `toBlob` — needs pixel access, which the browser only grants for
+ * cross-origin images served with CORS headers.
+ *
+ * When the load fails, the same URL is retried *without* `crossOrigin`. If that succeeds, the
+ * image is perfectly reachable and merely unreadable, i.e. the server dropped its CORS header —
+ * a completely different problem from a network failure, and one the user can do nothing about.
+ * Distinguishing the two is what lets the UI stop blaming the user's connection for an upstream
+ * misconfiguration.
+ */
+export const WMS_CORS_BLOCKED = 'wms-cors-blocked';
+
+function isReachableWithoutCors(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = new Image();
+    probe.onload = () => resolve(true);
+    probe.onerror = () => resolve(false);
+    probe.src = url;
+  });
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load: ${url}`));
+    img.onerror = () => {
+      void isReachableWithoutCors(url).then((reachable) => {
+        reject(new Error(reachable ? WMS_CORS_BLOCKED : `Failed to load: ${url}`));
+      });
+    };
     img.src = url;
   });
 }
