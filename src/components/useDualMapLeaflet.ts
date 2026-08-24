@@ -34,11 +34,25 @@ type CanvasTileWork = {
 const EMPTY_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 
 /**
- * Backoff between attempts to reload a tile whose request failed. Three tries then give up: long
- * enough to ride out a rate-limit refusal or a brief network drop, bounded so a slot the server
- * genuinely has no image for can't turn into an endless request loop.
+ * Backoff between attempts to reload a tile whose request failed, spread by TILE_RETRY_JITTER so a
+ * batch of tiles refused together doesn't retry in lockstep. Four tries then give up: long enough
+ * to ride out a rate-limit refusal or a brief network drop, bounded so a slot the server genuinely
+ * has no image for can't turn into an endless request loop.
  */
-const TILE_RETRY_DELAYS_MS = [700, 2000, 5000];
+const TILE_RETRY_DELAYS_MS = [800, 2500, 6000, 15000];
+
+/** Each delay is multiplied by a random factor in [1 - x, 1 + x]. */
+const TILE_RETRY_JITTER = 0.4;
+
+/**
+ * Retries are dispatched a few at a time rather than all at once. A whole screen of tiles is
+ * routinely refused together — that is what a concurrency limit does — and replaying them
+ * simultaneously just reproduces the burst that caused the refusals, so every attempt fails and
+ * the hole becomes permanent. Measured against a server refusing anything past 20 requests in
+ * flight: retrying in lockstep left 30 tiles blank for good, trickling them left 0.
+ */
+const MAX_CONCURRENT_TILE_RETRIES = 4;
+const TILE_RETRY_SPACING_MS = 150;
 
 /** Per-tile retry counter, carried on the <img> element Leaflet hands back with 'tileerror'. */
 type RetriableTile = HTMLImageElement & { __tileRetryCount?: number };
@@ -110,6 +124,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   // reconciles the total.
   type LayerLoadState = { pendingKeys: Set<string>; isLoading: boolean };
   const layerLoadStatesRef = useRef<Set<LayerLoadState>>(new Set());
+
+  // Shared across every layer, deliberately: the point of the queue is to cap how many replayed
+  // tiles are in flight *in total*, and a per-layer budget would multiply by the number of layers.
+  const tileRetryQueueRef = useRef<Array<{ element: RetriableTile; url: string }>>([]);
+  const tileRetryInFlightRef = useRef(0);
+  const tileRetryPumpRef = useRef<number | null>(null);
   const startedTilesRef = useRef(0);
   const completedTilesRef = useRef(0);
   const mapIsLoadingRef = useRef(false);
@@ -454,6 +474,47 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     }, 180);
   };
 
+  /**
+   * Drains the retry queue a few tiles at a time. Dispatching one per tick (rather than filling
+   * the budget instantly) keeps replayed tiles interleaved with the fresh ones Leaflet is still
+   * requesting, instead of stacking a second burst on top of the first.
+   */
+  const pumpTileRetries = () => {
+    if (tileRetryPumpRef.current !== null) return;
+    if (tileRetryQueueRef.current.length === 0) return;
+
+    tileRetryPumpRef.current = window.setTimeout(() => {
+      tileRetryPumpRef.current = null;
+
+      while (
+        tileRetryInFlightRef.current < MAX_CONCURRENT_TILE_RETRIES &&
+        tileRetryQueueRef.current.length > 0
+      ) {
+        const next = tileRetryQueueRef.current.shift();
+        if (!next) break;
+        // Pruned while it waited its turn: Leaflet detaches the element, so reloading it would
+        // fetch imagery nothing is going to show.
+        if (!next.element.isConnected) continue;
+
+        tileRetryInFlightRef.current += 1;
+        const release = () => {
+          next.element.removeEventListener('load', release);
+          next.element.removeEventListener('error', release);
+          tileRetryInFlightRef.current -= 1;
+          pumpTileRetries();
+        };
+        // Alongside Leaflet's own onload/onerror properties, which stay bound and still carry the
+        // tile through _tileReady — these listeners only free the slot.
+        next.element.addEventListener('load', release);
+        next.element.addEventListener('error', release);
+        next.element.src = next.url;
+        break;
+      }
+
+      pumpTileRetries();
+    }, TILE_RETRY_SPACING_MS);
+  };
+
   const bindLayerLoading = (layer: L.Layer | null) => {
     if (!layer) return () => undefined;
     const anyLayer = layer as any;
@@ -558,7 +619,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     // the imagery until something rebuilds the whole grid, which is why zooming out and back in
     // repairs it by hand (issue #79). view.eumetsat.int rate-limits WMS
     // (`x-rate-limit-limit: 20`, action "Delay excess requests 1000ms"), so the occasional refused
-    // tile is expected rather than exceptional.
+    // tile is expected rather than exceptional, and a whole screenful can be refused at once.
     //
     // Only <img> tiles are retried. The canvas layers build their pixels from several WMS requests
     // at once and report failure through done(error, tile); replaying that here would re-run the
@@ -572,15 +633,17 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       element.__tileRetryCount = attempt + 1;
 
       const url = element.src;
+      const jitter = 1 + (Math.random() * 2 - 1) * TILE_RETRY_JITTER;
+      const delay = Math.round(TILE_RETRY_DELAYS_MS[attempt] * jitter);
       const timer = window.setTimeout(() => {
         retryTimers.delete(timer);
-        // Pruned or replaced while we waited: Leaflet detaches the element, so reloading it would
-        // fetch imagery nothing is going to show.
         if (!element.isConnected) return;
-        // Leaflet leaves its own onload/onerror bound, so a successful retry still reaches
-        // _tileReady and gets the tile marked loaded and faded in.
-        element.src = url;
-      }, TILE_RETRY_DELAYS_MS[attempt]);
+        // Queued rather than reloaded on the spot: see pumpTileRetries. Leaflet leaves its own
+        // onload/onerror bound, so a successful retry still reaches _tileReady and gets the tile
+        // marked loaded and faded in.
+        tileRetryQueueRef.current.push({ element, url });
+        pumpTileRetries();
+      }, delay);
       retryTimers.add(timer);
     };
 
