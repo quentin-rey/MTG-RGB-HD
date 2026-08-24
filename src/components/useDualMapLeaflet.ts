@@ -33,6 +33,16 @@ type CanvasTileWork = {
 /** 1x1 transparent GIF — assigning it to an <img> src drops any request still pending on it. */
 const EMPTY_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 
+/**
+ * Backoff between attempts to reload a tile whose request failed. Three tries then give up: long
+ * enough to ride out a rate-limit refusal or a brief network drop, bounded so a slot the server
+ * genuinely has no image for can't turn into an endless request loop.
+ */
+const TILE_RETRY_DELAYS_MS = [700, 2000, 5000];
+
+/** Per-tile retry counter, carried on the <img> element Leaflet hands back with 'tileerror'. */
+type RetriableTile = HTMLImageElement & { __tileRetryCount?: number };
+
 type UseDualMapLeafletArgs = {
   currentTime: string;
   activeLayers: ActiveLayers;
@@ -544,11 +554,42 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       return true;
     };
 
+    // A tile whose request failed is left blank by Leaflet and never retried: it stays a hole in
+    // the imagery until something rebuilds the whole grid, which is why zooming out and back in
+    // repairs it by hand (issue #79). view.eumetsat.int rate-limits WMS
+    // (`x-rate-limit-limit: 20`, action "Delay excess requests 1000ms"), so the occasional refused
+    // tile is expected rather than exceptional.
+    //
+    // Only <img> tiles are retried. The canvas layers build their pixels from several WMS requests
+    // at once and report failure through done(error, tile); replaying that here would re-run the
+    // whole composite, and during a service-wide outage it would do so for every tile on screen.
+    const retryTimers = new Set<number>();
+    const retryFailedTile = (e: any) => {
+      const element = e?.tile as RetriableTile | undefined;
+      if (!element || typeof element.src !== 'string' || element.src === '') return;
+      const attempt = element.__tileRetryCount ?? 0;
+      if (attempt >= TILE_RETRY_DELAYS_MS.length) return;
+      element.__tileRetryCount = attempt + 1;
+
+      const url = element.src;
+      const timer = window.setTimeout(() => {
+        retryTimers.delete(timer);
+        // Pruned or replaced while we waited: Leaflet detaches the element, so reloading it would
+        // fetch imagery nothing is going to show.
+        if (!element.isConnected) return;
+        // Leaflet leaves its own onload/onerror bound, so a successful retry still reaches
+        // _tileReady and gets the tile marked loaded and faded in.
+        element.src = url;
+      }, TILE_RETRY_DELAYS_MS[attempt]);
+      retryTimers.add(timer);
+    };
+
     anyLayer.on('loading', onLoading);
     anyLayer.on('load', onLoad);
     anyLayer.on('tileloadstart', onStart);
     anyLayer.on('tileload', resolveTile);
     anyLayer.on('tileerror', resolveTile);
+    anyLayer.on('tileerror', retryFailedTile);
     anyLayer.on('tileunload', resolveTile);
     anyLayer.on('tileabort', resolveTile);
 
@@ -558,8 +599,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       anyLayer.off('tileloadstart', onStart);
       anyLayer.off('tileload', resolveTile);
       anyLayer.off('tileerror', resolveTile);
+      anyLayer.off('tileerror', retryFailedTile);
       anyLayer.off('tileunload', resolveTile);
       anyLayer.off('tileabort', resolveTile);
+
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      retryTimers.clear();
 
       // This layer instance is going away (recreated by an effect, or the map torn down):
       // whatever it still had in flight will never resolve, so drop its bookkeeping entirely
