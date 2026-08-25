@@ -139,14 +139,24 @@ const DYNAMIC_TILE_STYLES = `
   .city-label-sm .city-dot { width: 3px; height: 3px; }
   .city-label-md .city-dot { width: 4px; height: 4px; }
   .city-label-lg .city-dot { width: 5px; height: 5px; }
-  .vis-layer-tiles {
+  /* Every filter below sits on the individual tiles, never on the Leaflet tile container that
+     carries the class. A CSS filter makes WebKit render its element into one buffer, and past
+     roughly 1750px wide it stops painting: on a 2560px-wide window Safari left the right third of
+     the map pure black, tiles loaded and correctly positioned but never drawn (issue #79). Chrome
+     and Firefox paint it fine, which is why this only ever showed up on Safari. These filters are
+     all pointwise — brightness, contrast, saturate, grayscale — so applying them per tile is
+     pixel-identical to applying them to the whole layer. mix-blend-mode stays on the container:
+     it has to blend against what is behind the layer, and it is not what triggers the bug. */
+  .vis-layer-tiles .leaflet-tile {
     filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
   }
-  .rgb-layer-tiles {
+  .rgb-layer-tiles .leaflet-tile {
     filter: saturate(var(--mtg-rgb-saturation)) brightness(var(--mtg-rgb-brightness));
   }
   .ir-overlay-layer-tiles {
     mix-blend-mode: color;
+  }
+  .ir-overlay-layer-tiles .leaflet-tile {
     filter: saturate(1.2) contrast(1.08);
   }
   /* Raw IR crossfaded in underneath the VIS+IR cloud-only composite as dusk approaches (see
@@ -157,27 +167,37 @@ const DYNAMIC_TILE_STYLES = `
      colored backdrop (this same raw IR image, un-desaturated) made the composite's own hue fight
      the backdrop's hue, producing muddy off-palette greens/reds in thick cloud cores instead of
      the clean blue/cyan/yellow ramp. Brightness-only keeps the composite in charge of hue/sat. */
-  .ir-fallback-base-layer-tiles {
+  .ir-fallback-base-layer-tiles .leaflet-tile {
     filter: grayscale(1) contrast(1.05);
   }
   .ir-cloud-only-layer-tiles {
     mix-blend-mode: color;
+  }
+  .ir-cloud-only-layer-tiles .leaflet-tile {
     filter: saturate(1.2) contrast(1.08);
   }
   .vis-overlay-layer-tiles {
     mix-blend-mode: soft-light;
+  }
+  .vis-overlay-layer-tiles .leaflet-tile {
     filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
   }
   .vis-overlay-layer-tiles-rgb-hd {
     mix-blend-mode: luminosity;
+  }
+  .vis-overlay-layer-tiles-rgb-hd .leaflet-tile {
     filter: brightness(var(--mtg-vis-hd-legacy-brightness)) contrast(var(--mtg-vis-hd-legacy-contrast));
   }
   .vis-overlay-layer-tiles-on-ir {
     mix-blend-mode: screen;
+  }
+  .vis-overlay-layer-tiles-on-ir .leaflet-tile {
     filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast)) saturate(1.05);
   }
   .vis-overlay-layer-tiles-hybrid {
     mix-blend-mode: luminosity;
+  }
+  .vis-overlay-layer-tiles-hybrid .leaflet-tile {
     filter: brightness(var(--mtg-vis-brightness)) contrast(var(--mtg-vis-contrast));
   }
 `;
