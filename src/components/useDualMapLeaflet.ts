@@ -54,6 +54,13 @@ const TILE_RETRY_JITTER = 0.4;
 const MAX_CONCURRENT_TILE_RETRIES = 4;
 const TILE_RETRY_SPACING_MS = 150;
 
+/**
+ * How long a time change waits for the new imagery to be cached before switching anyway. A
+ * warm-up costs as long as the reload it replaces, so this has to sit well past a normal load;
+ * it is a deadlock guard, not a pacing knob. Changing the time again cancels the wait outright.
+ */
+const TIME_PREWARM_TIMEOUT_MS = 25000;
+
 /** Per-tile retry counter, carried on the <img> element Leaflet hands back with 'tileerror'. */
 type RetriableTile = HTMLImageElement & { __tileRetryCount?: number };
 
@@ -127,6 +134,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
   // Shared across every layer, deliberately: the point of the queue is to cap how many replayed
   // tiles are in flight *in total*, and a per-layer budget would multiply by the number of layers.
+  // Read by the layer-building effect, which must know the time it is building for without
+  // re-running whenever it changes — rebuilding every layer is exactly what a time change must
+  // stop doing (issue #79).
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+
   const tileRetryQueueRef = useRef<Array<{ element: RetriableTile; url: string }>>([]);
   const tileRetryInFlightRef = useRef(0);
   const tileRetryPumpRef = useRef<number | null>(null);
@@ -1129,26 +1142,178 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     };
   }, []);
 
+  /**
+   * Loads a set of layers' tiles for `isoTime` into the browser's HTTP cache, without touching
+   * what is on screen.
+   *
+   * Changing the time calls setParams(), setParams() calls redraw(), and redraw() calls
+   * `_removeAllTiles()`: Leaflet wipes the map the instant the time changes and leaves it black
+   * until every tile has come back from the server. On a large window under EUMETSAT's rate
+   * limiting that takes about ten seconds — measured on 2560x1189: 103 of 110 tiles blank one
+   * second after a single time step, still 55 blank at five seconds, back to 0 at nine. Stepping
+   * again in the meantime restarts the wipe, which is the "tiles flicker then go black" of #79.
+   *
+   * Warming the cache first turns that reload into cache hits, so the previous frame simply stays
+   * up until the new one is ready to appear all at once.
+   *
+   * The URLs come from Leaflet's own `getTileUrl` with the time temporarily swapped in, because a
+   * hand-built URL would order its parameters differently and miss the cache. GetMap answers with
+   * `cache-control: max-age=604800`, and neither these requests nor Leaflet's set `crossOrigin`,
+   * so both land in the same cache partition.
+   */
+  /**
+   * Whether what is on screen is worth protecting. Waiting for the new imagery only makes sense
+   * if the frame it would replace is actually complete: during the initial load — or right after
+   * one, when the app jumps to the verified latest slot — the map is still half empty, and
+   * holding the switch back would just leave those holes on screen for longer.
+   */
+  const hasCompleteFrameOnScreen = () => {
+    const container = map2Instance.current?.getContainer();
+    if (!container) return false;
+    const tiles = Array.from(container.querySelectorAll('img.leaflet-tile')) as HTMLImageElement[];
+    if (tiles.length === 0) return false;
+    const blank = tiles.filter((tile) => !tile.complete || tile.naturalWidth === 0).length;
+    return blank / tiles.length < 0.1;
+  };
+
+  const prewarmTilesForTime = (
+    layers: L.TileLayer.WMS[],
+    isoTime: string,
+    onProgress: (done: number, total: number) => void,
+  ) => {
+    const map = map2Instance.current;
+    const images: HTMLImageElement[] = [];
+    const cancel = () => {
+      for (const image of images) {
+        image.onload = null;
+        image.onerror = null;
+        image.src = EMPTY_IMAGE_DATA_URL;
+      }
+      images.length = 0;
+    };
+    if (!map || layers.length === 0) return { promise: Promise.resolve(), cancel };
+
+    // The coordinates Leaflet is *currently* showing, rather than a range recomputed from the
+    // pixel bounds: it has to be exactly the set Leaflet will ask for after the switch, or the
+    // warm-up pays for tiles nobody wants while the ones that matter still arrive cold.
+    const urls: string[] = [];
+    for (const layer of layers) {
+      const anyLayer = layer as any;
+      if (!anyLayer.wmsParams || typeof anyLayer.getTileUrl !== 'function') continue;
+      const previousTime = anyLayer.wmsParams.time;
+      anyLayer.wmsParams.time = isoTime;
+      try {
+        for (const tile of Object.values(anyLayer._tiles ?? {}) as any[]) {
+          if (!tile?.current || !tile.coords) continue;
+          urls.push(anyLayer.getTileUrl(tile.coords));
+        }
+      } finally {
+        anyLayer.wmsParams.time = previousTime;
+      }
+    }
+
+    const total = urls.length;
+    if (total === 0) return { promise: Promise.resolve(), cancel };
+
+    let done = 0;
+    const promise = new Promise<void>((resolve) => {
+      const settle = () => {
+        done += 1;
+        onProgress(done, total);
+        if (done >= total) resolve();
+      };
+      for (const url of urls) {
+        const image = new Image();
+        image.onload = settle;
+        image.onerror = settle;
+        image.src = url;
+        images.push(image);
+      }
+    });
+
+    return { promise, cancel };
+  };
+
   useEffect(() => {
+    let cancelled = false;
+    let applied = false;
+    let prewarm: { cancel: () => void } | null = null;
+    let switchTimeout: number | null = null;
+
+    const cleanUp = () => {
+      cancelled = true;
+      prewarm?.cancel();
+      if (switchTimeout !== null) {
+        window.clearTimeout(switchTimeout);
+        switchTimeout = null;
+      }
+    };
+
     try {
       const isoTime = new Date(currentTime + 'Z').toISOString();
-      // `setParams` makes Leaflet redraw every tile immediately, abandoning whatever was still
-      // in flight for the previous time — those abandoned tiles' `tileloadstart` already
-      // marked tiles pending (bindLayerLoading, above) but their `tileload`/`tileerror`
-      // counterpart never fires once Leaflet drops the tile, so without this reset the pending
-      // count could never return to 0 again. That left the "Chargement des tuiles" modal stuck
-      // open indefinitely on repeated/rapid time changes (scrubbing the time slider) until some
-      // unrelated change (e.g. toggling a layer, which does call beginLoadingCycle() below)
-      // happened to reset it. beginLoadingCycle() is idempotent — safe to call on every time
-      // change, including the initial one right after the mount effect already called it.
-      beginLoadingCycle();
-      secondaryBaseLayerRef.current?.setParams({ time: isoTime } as any);
-      irFallbackBaseLayerRef.current?.setParams({ time: isoTime, styles: irStyle } as any);
-      visOverlayLayerRef.current?.setParams({ time: isoTime } as any);
-      irOverlayLayerRef.current?.setParams({ time: isoTime } as any);
+
+      const applyTime = () => {
+        if (cancelled || applied) return;
+        applied = true;
+        if (switchTimeout !== null) {
+          window.clearTimeout(switchTimeout);
+          switchTimeout = null;
+        }
+        // Whatever the warm-up still has in flight is now redundant: Leaflet is about to request
+        // the same tiles itself, and leaving both running only splits the rate-limit budget.
+        prewarm?.cancel();
+        // `setParams` makes Leaflet redraw every tile immediately, abandoning whatever was still
+        // in flight for the previous time — those abandoned tiles' `tileloadstart` already
+        // marked tiles pending (bindLayerLoading, above) but their `tileload`/`tileerror`
+        // counterpart never fires once Leaflet drops the tile, so without this reset the pending
+        // count could never return to 0 again. That left the "Chargement des tuiles" modal stuck
+        // open indefinitely on repeated/rapid time changes (scrubbing the time slider) until some
+        // unrelated change (e.g. toggling a layer, which does call beginLoadingCycle() below)
+        // happened to reset it. beginLoadingCycle() is idempotent — safe to call on every time
+        // change, including the initial one right after the mount effect already called it.
+        beginLoadingCycle();
+        secondaryBaseLayerRef.current?.setParams({ time: isoTime } as any);
+        irFallbackBaseLayerRef.current?.setParams({ time: isoTime, styles: irStyle } as any);
+        visOverlayLayerRef.current?.setParams({ time: isoTime } as any);
+        irOverlayLayerRef.current?.setParams({ time: isoTime } as any);
+      };
+
+      // Only the layers actually on the map: `getTileUrl` reads `layer._map`, and the IR fallback
+      // and IR overlay are both added conditionally.
+      const layers = [
+        secondaryBaseLayerRef.current,
+        irFallbackBaseLayerRef.current,
+        visOverlayLayerRef.current,
+        irOverlayLayerRef.current,
+      ].filter((layer): layer is L.TileLayer.WMS => Boolean(layer) && Boolean((layer as any)._map));
+
+      // Nothing to preserve on the very first pass: the mount effect built these layers with this
+      // time already, and redrawing them here would fetch the whole grid a second time.
+      const alreadyShowingThisTime =
+        layers.length > 0 && layers.every((layer) => (layer as any).wmsParams?.time === isoTime);
+      if (alreadyShowingThisTime) return cleanUp;
+
+      if (layers.length === 0 || !map2Instance.current || !hasCompleteFrameOnScreen()) {
+        applyTime();
+        return cleanUp;
+      }
+
+      // The modal has to stand in for the wait, since Leaflet isn't loading anything yet: the
+      // whole point is that the map still shows the previous frame while this runs.
+      setIsMapLoading(true);
+      const warm = prewarmTilesForTime(layers, isoTime, (done, total) => {
+        if (cancelled) return;
+        setLoadingTileCount(Math.max(0, total - done));
+        setLoadingProgress(Math.max(0, Math.min(99, Math.round((done / total) * 100))));
+      });
+      prewarm = warm;
+      switchTimeout = window.setTimeout(applyTime, TIME_PREWARM_TIMEOUT_MS);
+      void warm.promise.then(applyTime);
     } catch (e) {
       console.warn('Invalid time format', e);
     }
+
+    return cleanUp;
   }, [currentTime]);
 
   useEffect(() => {
@@ -1160,7 +1325,13 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
 
     beginLoadingCycle();
 
-    const isoTime = new Date(currentTime + 'Z').toISOString();
+    // `currentTimeRef`, not `currentTime`: this effect rebuilds every WMS layer from scratch, and
+    // rebuilding means Leaflet drops all their tiles and refetches the grid. Doing that on a time
+    // change blanked the map for as long as the refetch took — about ten seconds on a large
+    // window under EUMETSAT's rate limiting (issue #79). Layer *identity* depends on the mode and
+    // the style; the time is only a parameter, and the effect above now hands it over with
+    // `setParams` once the new imagery is cached.
+    const isoTime = new Date(currentTimeRef.current + 'Z').toISOString();
     secondaryBaseLayerRef.current?.remove();
     secondaryBaseLayerRef.current = createSecondaryBaseLayer(baseLayer, isoTime, irStyle).addTo(map2);
 
@@ -1275,7 +1446,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     };
   }, [
     baseLayer,
-    currentTime,
     irStyle,
     isHybridMode,
     isVisIrMode,
