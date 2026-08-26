@@ -777,6 +777,9 @@ export default function DualMapViewer() {
       ? Math.max(MIN_PLAYBACK_FPS, Math.min(MAX_PLAYBACK_FPS, Math.round(stored)))
       : DEFAULT_PLAYBACK_FPS;
   });
+  const [playbackBoomerang, setPlaybackBoomerang] = useState<boolean>(
+    () => readStoredJson<boolean>(STORAGE_KEYS.playbackBoomerang, false),
+  );
   const [playbackQuality, setPlaybackQuality] = useState<PlaybackQuality>(() => {
     const stored = readStoredJson<PlaybackQuality>(STORAGE_KEYS.playbackQuality, DEFAULT_PLAYBACK_QUALITY);
     return PLAYBACK_QUALITY_CHOICES.includes(stored) ? stored : DEFAULT_PLAYBACK_QUALITY;
@@ -795,6 +798,9 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.playbackQuality, JSON.stringify(playbackQuality));
   }, [playbackQuality]);
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.playbackBoomerang, JSON.stringify(playbackBoomerang));
+  }, [playbackBoomerang]);
   const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(() => {
     const value = sharedSnapshot?.gifMaxDimension;
     return value === 960 || value === 1280 || value === 1600 ? value : 1280;
@@ -1493,19 +1499,41 @@ export default function DualMapViewer() {
   /** Scrubbing pauses but stays in the animation — the overlay keeps showing the frame you land on. */
   const seekPlayback = (index: number) => {
     if (playbackFrames.length === 0) return;
+    playbackDirectionRef.current = 1;
     setIsPlaying(false);
     setPlaybackIndex(Math.max(0, Math.min(playbackFrames.length - 1, index)));
   };
 
   // Advances the sequence. Wraps around: an animation of the last few hours is something you leave
   // running, not something that stops on the last frame.
+  // Direction of travel, only ever -1 in boomerang mode. A ref because the interval updates the
+  // index through a functional setState and must not be rebuilt every time the direction flips.
+  const playbackDirectionRef = useRef(1);
+
   useEffect(() => {
     if (!isPlaying || playbackFrames.length === 0) return;
     const interval = window.setInterval(() => {
-      setPlaybackIndex((previous) => (previous + 1) % playbackFrames.length);
+      setPlaybackIndex((previous) => {
+        const lastIndex = playbackFrames.length - 1;
+        if (lastIndex < 1) return 0;
+        if (!playbackBoomerang) {
+          playbackDirectionRef.current = 1;
+          return previous >= lastIndex ? 0 : previous + 1;
+        }
+        // Turn around one frame short of each end, so the end frames are not shown twice in a row.
+        let next = previous + playbackDirectionRef.current;
+        if (next > lastIndex) {
+          playbackDirectionRef.current = -1;
+          next = lastIndex - 1;
+        } else if (next < 0) {
+          playbackDirectionRef.current = 1;
+          next = 1;
+        }
+        return next;
+      });
     }, Math.round(1000 / playbackFps));
     return () => window.clearInterval(interval);
-  }, [isPlaying, playbackFrames, playbackFps]);
+  }, [isPlaying, playbackFrames, playbackFps, playbackBoomerang]);
 
   // Read by closePlayback, which runs outside this render and needs the frame actually on screen.
   const playbackIndexRef = useRef(playbackIndex);
@@ -2278,6 +2306,7 @@ export default function DualMapViewer() {
             playbackFrames={playbackFrames}
             playbackIndex={playbackIndex}
             playbackPreload={playbackPreload}
+            playbackBoomerang={playbackBoomerang}
             playbackPreset={playbackPreset}
             playbackQuality={playbackQuality}
             playbackQualityChoices={PLAYBACK_QUALITY_CHOICES}
@@ -2287,6 +2316,7 @@ export default function DualMapViewer() {
             onPlaybackCustomEndStepChange={playbackRange.setEndStep}
             onPlaybackCustomStartStepChange={playbackRange.setStartStep}
             onPlaybackFpsChange={setPlaybackFps}
+            onPlaybackBoomerangToggle={() => setPlaybackBoomerang((previous) => !previous)}
             onPlaybackPresetChange={setPlaybackPreset}
             onPlaybackQualityChange={(quality) => setPlaybackQuality(quality as PlaybackQuality)}
             onPlaybackSeek={seekPlayback}

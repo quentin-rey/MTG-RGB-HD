@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
+import { ArrowLeftRight, Bug, CircleHelp, Clock, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -49,6 +49,7 @@ type TimeDockProps = {
   playbackFrames: string[];
   playbackIndex: number;
   playbackPreload: { done: number; total: number } | null;
+  playbackBoomerang: boolean;
   playbackPreset: AnimationPreset;
   playbackQuality: number;
   playbackQualityChoices: readonly number[];
@@ -60,6 +61,7 @@ type TimeDockProps = {
   onPlaybackCustomEndStepChange: (step: number) => void;
   onPlaybackCustomStartStepChange: (step: number) => void;
   onPlaybackFpsChange: (fps: number) => void;
+  onPlaybackBoomerangToggle: () => void;
   onPlaybackPresetChange: (preset: AnimationPreset) => void;
   onPlaybackQualityChange: (quality: number) => void;
   onPlaybackSeek: (index: number) => void;
@@ -106,6 +108,7 @@ export function TimeDock(props: TimeDockProps) {
     playbackFrames,
     playbackIndex,
     playbackPreload,
+    playbackBoomerang,
     playbackPreset,
     playbackQuality,
     playbackQualityChoices,
@@ -115,6 +118,7 @@ export function TimeDock(props: TimeDockProps) {
     onPlaybackCustomEndStepChange,
     onPlaybackCustomStartStepChange,
     onPlaybackFpsChange,
+    onPlaybackBoomerangToggle,
     onPlaybackPresetChange,
     onPlaybackQualityChange,
     onPlaybackSeek,
@@ -130,18 +134,56 @@ export function TimeDock(props: TimeDockProps) {
   // animation runs is a legitimate way to watch the map without the controls in front of it.
   // Deriving the panel's visibility from the session instead made the button dead during
   // playback, which is exactly what it looked like — a broken button.
+  // Only on the rising edge — when an animation starts existing. Reacting to the state itself
+  // reopened the panel the moment preparation turned into a ready sequence, undoing a fold the
+  // user had just asked for.
+  const wasPlaybackBusyRef = useRef(false);
   useEffect(() => {
-    if (hasPlaybackSession || playbackPreload) setIsAnimationPanelOpen(true);
-  }, [hasPlaybackSession, Boolean(playbackPreload)]);
+    const busy = hasPlaybackSession || Boolean(playbackPreload);
+    if (busy && !wasPlaybackBusyRef.current) setIsAnimationPanelOpen(true);
+    wasPlaybackBusyRef.current = busy;
+  }, [hasPlaybackSession, playbackPreload]);
   const showAnimationPanel = isAnimationPanelOpen;
   const playbackRangeLabel = hasPlaybackSession
     ? `${playbackFrames[0].slice(11)} → ${playbackFrames[playbackFrames.length - 1].slice(11)}`
     : null;
+  const isLight = theme === 'light';
+  const playbackSpeedControls = (
+    <>
+      {t('playbackSpeed')}
+      <input
+        type="range"
+        min={playbackFpsMin}
+        max={playbackFpsMax}
+        step={1}
+        value={playbackFps}
+        onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
+        aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
+        className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+          themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+        }`}
+      />
+      <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
+      <button
+        onClick={onPlaybackBoomerangToggle}
+        title={t('playbackBoomerangHint')}
+        aria-label={t('playbackBoomerang')}
+        aria-pressed={playbackBoomerang}
+        className={`inline-flex items-center gap-1 border rounded px-1.5 py-0.5 transition-colors ${
+          playbackBoomerang
+            ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+            : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+        }`}
+      >
+        <ArrowLeftRight className="w-3 h-3 shrink-0" />
+      </button>
+    </>
+  );
+
   const stepToLabel = (step: number) => {
     const total = Math.max(0, Math.min(143, Math.round(step))) * 10;
     return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
   };
-  const isLight = theme === 'light';
   const [isMobileActionsExpanded, setIsMobileActionsExpanded] = useState(false);
   const [datePart, timePart] = currentTime.split('T');
   const [hourPart, minutePart] = timePart.split(':');
@@ -264,20 +306,7 @@ export function TimeDock(props: TimeDockProps) {
               <span className={`hidden sm:inline-flex items-center gap-1.5 shrink-0 text-[10px] ${
                 themedClass(isLight, 'text-slate-600', 'text-slate-400')
               }`}>
-                {t('playbackSpeed')}
-                <input
-                  type="range"
-                  min={playbackFpsMin}
-                  max={playbackFpsMax}
-                  step={1}
-                  value={playbackFps}
-                  onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
-                  aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
-                  className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
-                    themedClass(isLight, 'bg-slate-200', 'bg-white/10')
-                  }`}
-                />
-                <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
+                {playbackSpeedControls}
               </span>
             </div>
 
@@ -409,23 +438,10 @@ export function TimeDock(props: TimeDockProps) {
                   </span>
                   <span className="hidden sm:inline font-mono truncate opacity-80">{playbackRangeLabel}</span>
                   <span className={`inline-flex sm:hidden items-center gap-1.5 shrink-0 text-[10px] ${
-                themedClass(isLight, 'text-slate-600', 'text-slate-400')
-              }`}>
-                {t('playbackSpeed')}
-                <input
-                  type="range"
-                  min={playbackFpsMin}
-                  max={playbackFpsMax}
-                  step={1}
-                  value={playbackFps}
-                  onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
-                  aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
-                  className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
-                    themedClass(isLight, 'bg-slate-200', 'bg-white/10')
-                  }`}
-                />
-                <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
-              </span>
+                    themedClass(isLight, 'text-slate-600', 'text-slate-400')
+                  }`}>
+                    {playbackSpeedControls}
+                  </span>
                 </div>
               </div>
             ) : (
@@ -582,7 +598,7 @@ export function TimeDock(props: TimeDockProps) {
               aria-label={t('playbackPanelToggle')}
               aria-expanded={showAnimationPanel}
               className={`flex items-center justify-center gap-1 border rounded-md px-2 py-1 text-[11px] transition-colors ${
-                showAnimationPanel
+                showAnimationPanel || hasPlaybackSession || playbackPreload
                   ? isLight
                     ? 'bg-blue-600 hover:bg-blue-700 border-blue-600 text-white'
                     : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'

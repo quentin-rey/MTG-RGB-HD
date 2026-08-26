@@ -38,6 +38,7 @@ export const STORAGE_KEYS = {
   language: 'mtg_language',
   lastMapView: 'mtg_last_map_view',
   mapOptions: 'mtg_map_options',
+  playbackBoomerang: 'mtg_playback_boomerang',
   playbackCustomDate: 'mtg_playback_custom_date',
   playbackCustomEndStep: 'mtg_playback_custom_end_step',
   playbackCustomStartStep: 'mtg_playback_custom_start_step',
