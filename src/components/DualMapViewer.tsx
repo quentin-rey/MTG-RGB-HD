@@ -54,6 +54,7 @@ import {
   InfoModal,
   Map2ControlBar,
   Map2TitleBadge,
+  PlaybackExitModal,
   TimeDock,
   ZoomControl,
 } from './dualMapViewerPanels';
@@ -1318,6 +1319,11 @@ export default function DualMapViewer() {
    * replayed as if it described the current view.
    */
   const playbackCacheRef = useRef<{ renderKey: string; frames: string[]; urls: string[] } | null>(null);
+  const playbackRenderedViewRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
+  // Set while we put the map back ourselves, so the guard below doesn't mistake it for the user
+  // moving the map again.
+  const restoringPlaybackViewRef = useRef(false);
+  const [playbackExitPrompt, setPlaybackExitPrompt] = useState<'session' | 'preload' | null>(null);
 
   const releasePlaybackCache = () => {
     playbackCacheRef.current?.urls.forEach((url) => URL.revokeObjectURL(url));
@@ -1386,6 +1392,11 @@ export default function DualMapViewer() {
         && cached.frames.every((frame, index) => frame === frames[index]);
       const resumeIndex = cached.frames.indexOf(currentTime);
       if (sameFrames || resumeIndex >= 0) {
+        playbackRenderedViewRef.current = {
+          lat: map2Instance.current.getCenter().lat,
+          lng: map2Instance.current.getCenter().lng,
+          zoom: map2Instance.current.getZoom(),
+        };
         setPlaybackFrames(cached.frames);
         setPlaybackUrls(cached.urls);
         setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
@@ -1394,6 +1405,12 @@ export default function DualMapViewer() {
       }
     }
 
+    const map = map2Instance.current;
+    playbackRenderedViewRef.current = {
+      lat: map.getCenter().lat,
+      lng: map.getCenter().lng,
+      zoom: map.getZoom(),
+    };
     setPlaybackPreload({ done: 0, total: frames.length });
     let cancelled = false;
     playbackCancelRef.current = () => { cancelled = true; };
@@ -1545,8 +1562,18 @@ export default function DualMapViewer() {
     const map = map2Instance.current;
     if (!map || (playbackUrls.length === 0 && !playbackPreload)) return;
     const handleMove = () => {
-      releasePlaybackCache();
-      closePlayback();
+      if (restoringPlaybackViewRef.current) return;
+      if (playbackPreload) {
+        // Each frame is rendered from the map's bounds at the moment it is drawn, so letting the
+        // render continue past a pan would mix two framings in one sequence.
+        playbackCancelRef.current?.();
+        playbackCancelRef.current = null;
+        setPlaybackPreload(null);
+        setPlaybackExitPrompt('preload');
+        return;
+      }
+      setIsPlaying(false);
+      setPlaybackExitPrompt('session');
     };
     map.on('movestart', handleMove);
     map.on('zoomstart', handleMove);
@@ -1555,6 +1582,34 @@ export default function DualMapViewer() {
       map.off('zoomstart', handleMove);
     };
   }, [playbackUrls, playbackPreload, playbackFrames]);
+
+  const restorePlaybackView = () => {
+    const map = map2Instance.current;
+    const view = playbackRenderedViewRef.current;
+    if (!map || !view) return;
+    restoringPlaybackViewRef.current = true;
+    map.setView([view.lat, view.lng], view.zoom, { animate: false });
+    // Cleared after Leaflet has emitted its own move events for this programmatic change.
+    window.setTimeout(() => { restoringPlaybackViewRef.current = false; }, 0);
+  };
+
+  const resumePlaybackAfterMove = () => {
+    const mode = playbackExitPrompt;
+    setPlaybackExitPrompt(null);
+    restorePlaybackView();
+    if (mode === 'preload') {
+      void startPlayback();
+      return;
+    }
+    setIsPlaying(true);
+  };
+
+  const leavePlaybackAfterMove = () => {
+    setPlaybackExitPrompt(null);
+    // The framing has changed, so the rendered frames can never be replayed as they are.
+    releasePlaybackCache();
+    closePlayback();
+  };
 
   // The rendered frames belong to one layer set; keeping them across a toggle would replay the
   // wrong imagery.
@@ -2283,6 +2338,16 @@ export default function DualMapViewer() {
               alt=""
               aria-hidden="true"
               className="absolute inset-0 w-full h-full object-cover z-[410] pointer-events-none select-none"
+            />
+          )}
+
+          {playbackExitPrompt && (
+            <PlaybackExitModal
+              mode={playbackExitPrompt}
+              t={t}
+              theme={resolvedTheme}
+              onLeave={leavePlaybackAfterMove}
+              onResume={resumePlaybackAfterMove}
             />
           )}
 

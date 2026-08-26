@@ -87,6 +87,64 @@ function formatTimeBehind(currentTime: string, latestAvailableTime: string): str
   return `${Math.floor(hours / 24)} j`;
 }
 
+/**
+ * Asked when the map is panned or zoomed while an animation is running or being prepared. The
+ * frames are rendered for one framing, so a move makes them describe a view that is no longer
+ * there — but silently ending the animation for a stray scroll is worse than asking (issue #78).
+ */
+export function PlaybackExitModal(props: {
+  mode: 'session' | 'preload';
+  t: Translator;
+  theme: UiTheme;
+  onLeave: () => void;
+  onResume: () => void;
+}) {
+  const { mode, t, theme, onLeave, onResume } = props;
+  const isLight = theme === 'light';
+  return (
+    <div className="fixed inset-0 z-[560] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('playbackExitTitle')}
+        className={`w-[min(92vw,26rem)] rounded-xl border shadow-2xl p-4 sm:p-5 ${
+          themedClass(isLight, 'bg-white border-slate-300', 'bg-[#141414] border-white/15')
+        }`}
+      >
+        <h2 className={`text-sm sm:text-base font-semibold ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>
+          {t('playbackExitTitle')}
+        </h2>
+        <p className={`mt-2 text-xs sm:text-sm leading-relaxed ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
+          {t(mode === 'preload' ? 'playbackExitPreloadBody' : 'playbackExitBody')}
+        </p>
+        <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+          <button
+            onClick={onLeave}
+            className={`rounded-md border px-3 py-2 text-xs sm:text-sm transition-colors ${
+              isLight
+                ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
+            }`}
+          >
+            {t('playbackExitLeave')}
+          </button>
+          <button
+            onClick={onResume}
+            autoFocus
+            className={`rounded-md border px-3 py-2 text-xs sm:text-sm font-medium transition-colors ${
+              isLight
+                ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
+                : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+            }`}
+          >
+            {t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TimeDock(props: TimeDockProps) {
   const {
     autoUpdateEnabled,
