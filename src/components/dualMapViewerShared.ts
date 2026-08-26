@@ -42,6 +42,7 @@ export const STORAGE_KEYS = {
   playbackCustomEndStep: 'mtg_playback_custom_end_step',
   playbackCustomStartStep: 'mtg_playback_custom_start_step',
   playbackFps: 'mtg_playback_fps',
+  playbackQuality: 'mtg_playback_quality',
   playbackPreset: 'mtg_playback_preset',
   rgbHdOpacity: 'mtg_rgb_hd_opacity',
   rgbSaturation: 'mtg_rgb_saturation',

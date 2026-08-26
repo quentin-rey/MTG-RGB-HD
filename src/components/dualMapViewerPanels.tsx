@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, ChevronDown, ChevronUp, CircleHelp, Clock, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
+import { Bug, CircleHelp, Clock, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -43,12 +43,15 @@ type TimeDockProps = {
   playbackCustomEndStep: number;
   playbackCustomStartStep: number;
   playbackFps: number;
-  playbackFpsChoices: readonly number[];
-  playbackFrameCountPreview: number | null;
+  playbackFpsMax: number;
+  playbackFpsMin: number;
+  playbackFramePreview: { count: number; start: string; end: string } | null;
   playbackFrames: string[];
   playbackIndex: number;
   playbackPreload: { done: number; total: number } | null;
   playbackPreset: AnimationPreset;
+  playbackQuality: number;
+  playbackQualityChoices: readonly number[];
   t: Translator;
   theme: UiTheme;
   onAutoUpdateToggle: () => void;
@@ -58,6 +61,7 @@ type TimeDockProps = {
   onPlaybackCustomStartStepChange: (step: number) => void;
   onPlaybackFpsChange: (fps: number) => void;
   onPlaybackPresetChange: (preset: AnimationPreset) => void;
+  onPlaybackQualityChange: (quality: number) => void;
   onPlaybackSeek: (index: number) => void;
   onPlaybackStop: () => void;
   onPlaybackToggle: () => void;
@@ -96,12 +100,15 @@ export function TimeDock(props: TimeDockProps) {
     playbackCustomEndStep,
     playbackCustomStartStep,
     playbackFps,
-    playbackFpsChoices,
-    playbackFrameCountPreview,
+    playbackFpsMax,
+    playbackFpsMin,
+    playbackFramePreview,
     playbackFrames,
     playbackIndex,
     playbackPreload,
     playbackPreset,
+    playbackQuality,
+    playbackQualityChoices,
     onAutoUpdateToggle,
     onLatest,
     onPlaybackCustomDateChange,
@@ -109,6 +116,7 @@ export function TimeDock(props: TimeDockProps) {
     onPlaybackCustomStartStepChange,
     onPlaybackFpsChange,
     onPlaybackPresetChange,
+    onPlaybackQualityChange,
     onPlaybackSeek,
     onPlaybackStop,
     onPlaybackToggle,
@@ -118,9 +126,14 @@ export function TimeDock(props: TimeDockProps) {
   } = props;
   const hasPlaybackSession = playbackFrames.length > 0;
   const [isAnimationPanelOpen, setIsAnimationPanelOpen] = useState(false);
-  // Open whenever there is something to show, so preparing or playing never happens behind a
-  // collapsed panel.
-  const showAnimationPanel = isAnimationPanelOpen || hasPlaybackSession || Boolean(playbackPreload);
+  // Opens itself when a sequence starts, then stays collapsible: folding it away while the
+  // animation runs is a legitimate way to watch the map without the controls in front of it.
+  // Deriving the panel's visibility from the session instead made the button dead during
+  // playback, which is exactly what it looked like — a broken button.
+  useEffect(() => {
+    if (hasPlaybackSession || playbackPreload) setIsAnimationPanelOpen(true);
+  }, [hasPlaybackSession, Boolean(playbackPreload)]);
+  const showAnimationPanel = isAnimationPanelOpen;
   const playbackRangeLabel = hasPlaybackSession
     ? `${playbackFrames[0].slice(11)} → ${playbackFrames[playbackFrames.length - 1].slice(11)}`
     : null;
@@ -248,24 +261,23 @@ export function TimeDock(props: TimeDockProps) {
                   </button>
                 ))}
               </div>
-              <span className={`hidden sm:inline-flex items-center gap-1 shrink-0 text-[10px] ${
+              <span className={`hidden sm:inline-flex items-center gap-1.5 shrink-0 text-[10px] ${
                 themedClass(isLight, 'text-slate-600', 'text-slate-400')
               }`}>
                 {t('playbackSpeed')}
-                {playbackFpsChoices.map((fps) => (
-                  <button
-                    key={fps}
-                    onClick={() => onPlaybackFpsChange(fps)}
-                    className={`border rounded px-1.5 py-0.5 font-mono transition-colors ${
-                      fps === playbackFps
-                        ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
-                        : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
-                    }`}
-                  >
-                    {fps}
-                  </button>
-                ))}
-                <span className="opacity-70">{t('playbackSpeedUnit')}</span>
+                <input
+                  type="range"
+                  min={playbackFpsMin}
+                  max={playbackFpsMax}
+                  step={1}
+                  value={playbackFps}
+                  onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
+                  aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
+                  className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                    themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                  }`}
+                />
+                <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
               </span>
             </div>
 
@@ -396,40 +408,73 @@ export function TimeDock(props: TimeDockProps) {
                       .replace('{total}', String(playbackFrames.length))}
                   </span>
                   <span className="hidden sm:inline font-mono truncate opacity-80">{playbackRangeLabel}</span>
-                  <span className="inline-flex sm:hidden items-center gap-1 shrink-0">
-                    {playbackFpsChoices.map((fps) => (
+                  <span className={`inline-flex sm:hidden items-center gap-1.5 shrink-0 text-[10px] ${
+                themedClass(isLight, 'text-slate-600', 'text-slate-400')
+              }`}>
+                {t('playbackSpeed')}
+                <input
+                  type="range"
+                  min={playbackFpsMin}
+                  max={playbackFpsMax}
+                  step={1}
+                  value={playbackFps}
+                  onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
+                  aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
+                  className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                    themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                  }`}
+                />
+                <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
+              </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className={`flex items-center justify-between gap-2 text-[10px] ${
+                  themedClass(isLight, 'text-slate-600', 'text-slate-400')
+                }`}>
+                  <span className="inline-flex items-center gap-1.5 shrink-0">
+                    {t('playbackQuality')}
+                    {playbackQualityChoices.map((quality, index) => (
                       <button
-                        key={fps}
-                        onClick={() => onPlaybackFpsChange(fps)}
-                        className={`border rounded px-1.5 py-0.5 font-mono transition-colors ${
-                          fps === playbackFps
+                        key={quality}
+                        onClick={() => onPlaybackQualityChange(quality)}
+                        title={`${quality} px`}
+                        className={`border rounded px-1.5 py-0.5 transition-colors ${
+                          quality === playbackQuality
                             ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
                             : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
                         }`}
                       >
-                        {fps}
+                        {t(index === 0 ? 'playbackQualityFast' : index === 1 ? 'playbackQualityBalanced' : 'playbackQualityDetailed')}
                       </button>
                     ))}
                   </span>
+                  {playbackFramePreview && (
+                    <span className="font-mono truncate text-right">
+                      {t('playbackResolvedRange')
+                        .replace('{start}', playbackFramePreview.start.replace('T', ' '))
+                        .replace('{end}', playbackFramePreview.end.replace('T', ' '))}
+                    </span>
+                  )}
                 </div>
+                <button
+                  onClick={onPlaybackToggle}
+                  className={`w-full flex items-center justify-center gap-2 border rounded-md px-2 py-2 sm:py-1.5 text-[11px] sm:text-xs font-medium transition-colors ${
+                    isLight
+                      ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
+                      : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+                  }`}
+                >
+                  <Play className="w-3.5 h-3.5 shrink-0" />
+                  {t('playbackStart')}
+                  {playbackFramePreview && (
+                    <span className="font-mono opacity-80">
+                      · {t('playbackFramesCount').replace('{count}', String(playbackFramePreview.count))}
+                    </span>
+                  )}
+                </button>
               </div>
-            ) : (
-              <button
-                onClick={onPlaybackToggle}
-                className={`w-full flex items-center justify-center gap-2 border rounded-md px-2 py-2 sm:py-1.5 text-[11px] sm:text-xs font-medium transition-colors ${
-                  isLight
-                    ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
-                    : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
-                }`}
-              >
-                <Play className="w-3.5 h-3.5 shrink-0" />
-                {t('playbackStart')}
-                {playbackFrameCountPreview !== null && (
-                  <span className="font-mono opacity-80">
-                    · {t('playbackFramesCount').replace('{count}', String(playbackFrameCountPreview))}
-                  </span>
-                )}
-              </button>
             )}
           </div>
         )}
@@ -486,7 +531,7 @@ export function TimeDock(props: TimeDockProps) {
           {/* 7 actions: rows of 3 on mobile rather than one wide grid, which would squeeze
               each button well below the ~44px minimum touch target on narrow phones. Unchanged
               single flex row from sm: up. */}
-          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
+          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-stretch sm:gap-1 sm:!flex`}>
             <button
               onClick={() => updateTimeFromTotalMinutes(totalMinutes - 30)}
               className={`border rounded-md px-2 py-1 text-[11px] transition-colors ${
@@ -546,8 +591,7 @@ export function TimeDock(props: TimeDockProps) {
                     : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
               }`}
             >
-              <Film className="w-3 h-3 shrink-0" />
-              {showAnimationPanel ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronUp className="w-3 h-3 shrink-0" />}
+              <Film className="w-3.5 h-3.5 shrink-0" />
             </button>
             <button
               onClick={onLatest}

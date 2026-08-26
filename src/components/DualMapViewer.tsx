@@ -212,11 +212,17 @@ const MAX_ANIMATION_EXPORT_FRAMES = 73;
  * the six-hour preset, which stays a few tens of seconds on a normal window (issue #78).
  */
 const MAX_ANIMATION_PLAYBACK_FRAMES = 37;
-const PLAYBACK_FPS_CHOICES = [4, 8, 12] as const;
+const MIN_PLAYBACK_FPS = 4;
+const MAX_PLAYBACK_FPS = 12;
 const DEFAULT_PLAYBACK_FPS = 8;
-/** Rendered frame size for playback. Wide enough to look sharp on a normal window, small enough
- *  that a full sequence stays a few tens of megabytes in memory. */
-const PLAYBACK_MAX_DIMENSION = 1280;
+/**
+ * Rendered frame sizes for playback. Each frame is a full render, so this trades preparation time
+ * and memory against sharpness: 960 prepares about a third faster than 1280, 1600 about a third
+ * slower. A whole sequence stays a few tens of megabytes at any of them.
+ */
+const PLAYBACK_QUALITY_CHOICES = [960, 1280, 1600] as const;
+type PlaybackQuality = (typeof PLAYBACK_QUALITY_CHOICES)[number];
+const DEFAULT_PLAYBACK_QUALITY: PlaybackQuality = 1280;
 const MAX_CUSTOM_RANGE_MS = 12 * 60 * 60 * 1000;
 const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
@@ -767,9 +773,13 @@ export default function DualMapViewer() {
   const [playbackUrls, setPlaybackUrls] = useState<string[]>([]);
   const [playbackFps, setPlaybackFps] = useState<number>(() => {
     const stored = readStoredJson<number>(STORAGE_KEYS.playbackFps, DEFAULT_PLAYBACK_FPS);
-    return PLAYBACK_FPS_CHOICES.includes(stored as (typeof PLAYBACK_FPS_CHOICES)[number])
-      ? stored
+    return Number.isFinite(stored)
+      ? Math.max(MIN_PLAYBACK_FPS, Math.min(MAX_PLAYBACK_FPS, Math.round(stored)))
       : DEFAULT_PLAYBACK_FPS;
+  });
+  const [playbackQuality, setPlaybackQuality] = useState<PlaybackQuality>(() => {
+    const stored = readStoredJson<PlaybackQuality>(STORAGE_KEYS.playbackQuality, DEFAULT_PLAYBACK_QUALITY);
+    return PLAYBACK_QUALITY_CHOICES.includes(stored) ? stored : DEFAULT_PLAYBACK_QUALITY;
   });
   const [playbackPreset, setPlaybackPreset] = useState<AnimationPreset>(() => {
     const stored = readStoredJson<AnimationPreset>(STORAGE_KEYS.playbackPreset, '3h');
@@ -782,6 +792,9 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.playbackPreset, JSON.stringify(playbackPreset));
   }, [playbackPreset]);
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.playbackQuality, JSON.stringify(playbackQuality));
+  }, [playbackQuality]);
   const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(() => {
     const value = sharedSnapshot?.gifMaxDimension;
     return value === 960 || value === 1280 || value === 1600 ? value : 1280;
@@ -1312,7 +1325,7 @@ export default function DualMapViewer() {
       ? `${map.getCenter().lat.toFixed(4)},${map.getCenter().lng.toFixed(4)},${map.getZoom()},${container.clientWidth}x${container.clientHeight}`
       : 'no-map';
     return [
-      effectiveGifKind, PLAYBACK_MAX_DIMENSION, view,
+      effectiveGifKind, playbackQuality, view,
       `${activeLayers.rgb}${activeLayers.vis}${activeLayers.ir}`,
       fireHotspotEnabled, fireHotspotMinBrightness, fireHotspotMinRedBlueDiff, fireHotspotOpacity,
       irStyle, visBrightness, visContrast,
@@ -1387,7 +1400,7 @@ export default function DualMapViewer() {
       const blobs = await renderAnimationFrameBlobs({
         frameTimes: frames,
         kind: effectiveGifKind,
-        maxDimension: PLAYBACK_MAX_DIMENSION,
+        maxDimension: playbackQuality,
         imageFormat: 'jpeg',
         map: map2Instance.current,
         mapContainer: map2Ref.current,
@@ -1445,11 +1458,18 @@ export default function DualMapViewer() {
     }
   };
 
-  let playbackFrameCountPreview: number | null = null;
+  // Resolved before anything is rendered: a preset is anchored on the time being viewed, not on
+  // the newest image (PR #75), and spelling the range out is the only way that reads as obvious.
+  let playbackFramePreview: { count: number; start: string; end: string } | null = null;
   try {
-    playbackFrameCountPreview = buildAnimationFrameTimes(playbackRangeSpec, MAX_ANIMATION_PLAYBACK_FRAMES).length;
+    const preview = buildAnimationFrameTimes(playbackRangeSpec, MAX_ANIMATION_PLAYBACK_FRAMES);
+    playbackFramePreview = {
+      count: preview.length,
+      start: preview[0],
+      end: preview[preview.length - 1],
+    };
   } catch {
-    playbackFrameCountPreview = null;
+    playbackFramePreview = null;
   }
 
   const togglePlayback = () => {
@@ -2252,12 +2272,15 @@ export default function DualMapViewer() {
             playbackCustomEndStep={playbackRange.endStep}
             playbackCustomStartStep={playbackRange.startStep}
             playbackFps={playbackFps}
-            playbackFpsChoices={PLAYBACK_FPS_CHOICES}
-            playbackFrameCountPreview={playbackFrameCountPreview}
+            playbackFpsMax={MAX_PLAYBACK_FPS}
+            playbackFpsMin={MIN_PLAYBACK_FPS}
+            playbackFramePreview={playbackFramePreview}
             playbackFrames={playbackFrames}
             playbackIndex={playbackIndex}
             playbackPreload={playbackPreload}
             playbackPreset={playbackPreset}
+            playbackQuality={playbackQuality}
+            playbackQualityChoices={PLAYBACK_QUALITY_CHOICES}
             onAutoUpdateToggle={() => setAutoUpdateEnabled((previous) => !previous)}
             onLatest={() => { closePlayback(); void jumpToLatest(); }}
             onPlaybackCustomDateChange={playbackRange.setDate}
@@ -2265,6 +2288,7 @@ export default function DualMapViewer() {
             onPlaybackCustomStartStepChange={playbackRange.setStartStep}
             onPlaybackFpsChange={setPlaybackFps}
             onPlaybackPresetChange={setPlaybackPreset}
+            onPlaybackQualityChange={(quality) => setPlaybackQuality(quality as PlaybackQuality)}
             onPlaybackSeek={seekPlayback}
             onPlaybackStop={closePlayback}
             onPlaybackToggle={togglePlayback}
