@@ -1097,7 +1097,7 @@ type RenderAnimationFramesOptions = Omit<DownloadSatellitePackOptions, 'requeste
  * export here is a fixed sequence of pre-rendered stills replayed at `fps`, not a live capture of
  * a continuously-redrawing map, since each frame requires its own round-trip to the WMS endpoint.
  */
-async function renderAnimationFrameBlobs(options: RenderAnimationFramesOptions): Promise<Blob[]> {
+export async function renderAnimationFrameBlobs(options: RenderAnimationFramesOptions): Promise<Blob[]> {
   const { frameTimes, kind, maxDimension, onFrameProgress, ...shared } = options;
   const frameBlobs: Blob[] = [];
 

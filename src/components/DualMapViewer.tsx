@@ -30,6 +30,7 @@ import { getTranslator, type Language } from './i18n';
 import {
   downloadSatellitePack,
   exportAnimationGif,
+  renderAnimationFrameBlobs,
   exportAnimationWebm,
   generateExportPreviews,
   type GifDitherLevel,
@@ -204,11 +205,96 @@ const DYNAMIC_TILE_STYLES = `
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 const MAX_ANIMATION_EXPORT_FRAMES = 73;
+/**
+ * In-app playback caps lower than the export. An export renders each frame off-screen and is
+ * expected to take its time; playback has to warm every frame's tiles through the network first,
+ * and at EUMETSAT's rate the wait before anything moves grows with the frame count. 37 frames is
+ * the six-hour preset, which stays a few tens of seconds on a normal window (issue #78).
+ */
+const MAX_ANIMATION_PLAYBACK_FRAMES = 37;
+const PLAYBACK_FPS_CHOICES = [4, 8, 12] as const;
+const DEFAULT_PLAYBACK_FPS = 8;
+/** Rendered frame size for playback. Wide enough to look sharp on a normal window, small enough
+ *  that a full sequence stays a few tens of megabytes in memory. */
+const PLAYBACK_MAX_DIMENSION = 1280;
 const MAX_CUSTOM_RANGE_MS = 12 * 60 * 60 * 1000;
 const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
 const CUSTOM_MIN_RANGE_STEPS = MIN_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
 const CUSTOM_MAX_RANGE_STEPS = MAX_CUSTOM_RANGE_MS / TEN_MINUTES_MS;
+
+type CustomAnimationRange = {
+  date: string;
+  startStep: number;
+  endStep: number;
+  dayMaxStep: number;
+  start: string;
+  end: string;
+  setDate: (nextDate: string) => void;
+  setStartStep: (step: number) => void;
+  setEndStep: (step: number) => void;
+  seed: (nextDate: string, nextStartStep: number, nextEndStep: number) => void;
+};
+
+/**
+ * One custom animation range: a UTC day plus a start and end ten-minute step inside it, kept
+ * normalised (ordered, at least one hour, at most twelve, never past the latest available image).
+ *
+ * Instantiated twice — once for the export, once for playback — because the two are deliberately
+ * independent: setting up a twelve-hour GIF should not silently change what the play button is
+ * about to read back, and vice versa.
+ */
+function useCustomAnimationRange(options: {
+  initialDate: string;
+  initialStartStep: number;
+  initialEndStep: number;
+  latestAvailableTime: string;
+  latestAvailableDatePart: string;
+}): CustomAnimationRange {
+  const { latestAvailableTime, latestAvailableDatePart } = options;
+  const [date, setDateState] = useState(options.initialDate);
+  const [startStep, setStartStep] = useState(options.initialStartStep);
+  const [endStep, setEndStep] = useState(options.initialEndStep);
+
+  const dayMaxStep = getLatestAllowedStepForDate(date, latestAvailableTime);
+
+  useEffect(() => {
+    const normalized = normalizeCustomDaySteps(startStep, endStep, dayMaxStep);
+    if (normalized.start !== startStep) setStartStep(normalized.start);
+    if (normalized.end !== endStep) setEndStep(normalized.end);
+  }, [date, dayMaxStep, endStep, startStep]);
+
+  return {
+    date,
+    startStep,
+    endStep,
+    dayMaxStep,
+    start: `${date}T${toTimePartFromStep(startStep)}`,
+    end: `${date}T${toTimePartFromStep(endStep)}`,
+    setDate: (nextDate: string) => {
+      setDateState(nextDate > latestAvailableDatePart ? latestAvailableDatePart : nextDate);
+    },
+    setStartStep: (step: number) => {
+      const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, dayMaxStep));
+      const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, dayMaxStep));
+      const minStart = Math.max(0, endStep - maxSpan);
+      const maxStart = Math.max(0, endStep - minSpan);
+      setStartStep(Math.max(minStart, Math.min(maxStart, Math.round(step))));
+    },
+    setEndStep: (step: number) => {
+      const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, dayMaxStep));
+      const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, dayMaxStep));
+      const minEnd = Math.min(dayMaxStep, startStep + minSpan);
+      const maxEnd = Math.min(dayMaxStep, startStep + maxSpan);
+      setEndStep(Math.max(minEnd, Math.min(maxEnd, Math.round(step))));
+    },
+    seed: (nextDate: string, nextStartStep: number, nextEndStep: number) => {
+      setDateState(nextDate);
+      setStartStep(nextStartStep);
+      setEndStep(nextEndStep);
+    },
+  };
+}
 
 function clampMapView(input: MapViewState | null | undefined): MapViewState | null {
   if (!input) return null;
@@ -670,6 +756,32 @@ export default function DualMapViewer() {
     const fps = Number(sharedSnapshot?.animationFps ?? 6);
     return Math.max(2, Math.min(20, Math.round(fps)));
   });
+
+  // In-app animation (issue #78). `playbackFrames` is the resolved sequence for the current
+  // session, `playbackIndex` the frame on screen; `isPlaybackActive` is what tells the map hook to
+  // switch times without waiting, since every frame has already been warmed.
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackFrames, setPlaybackFrames] = useState<string[]>([]);
+  const [playbackIndex, setPlaybackIndex] = useState(0);
+  const [playbackPreload, setPlaybackPreload] = useState<{ done: number; total: number } | null>(null);
+  const [playbackUrls, setPlaybackUrls] = useState<string[]>([]);
+  const [playbackFps, setPlaybackFps] = useState<number>(() => {
+    const stored = readStoredJson<number>(STORAGE_KEYS.playbackFps, DEFAULT_PLAYBACK_FPS);
+    return PLAYBACK_FPS_CHOICES.includes(stored as (typeof PLAYBACK_FPS_CHOICES)[number])
+      ? stored
+      : DEFAULT_PLAYBACK_FPS;
+  });
+  const [playbackPreset, setPlaybackPreset] = useState<AnimationPreset>(() => {
+    const stored = readStoredJson<AnimationPreset>(STORAGE_KEYS.playbackPreset, '3h');
+    return stored === '3h' || stored === '6h' || stored === '12h' || stored === 'custom' ? stored : '3h';
+  });
+  const playbackCancelRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.playbackFps, JSON.stringify(playbackFps));
+  }, [playbackFps]);
+  useEffect(() => {
+    safeSetLocalStorage(STORAGE_KEYS.playbackPreset, JSON.stringify(playbackPreset));
+  }, [playbackPreset]);
   const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(() => {
     const value = sharedSnapshot?.gifMaxDimension;
     return value === 960 || value === 1280 || value === 1600 ? value : 1280;
@@ -747,57 +859,43 @@ export default function DualMapViewer() {
   // export renderers did before their blending math was centralised into
   // `computeLayerBlendState` (dualMapViewerShared.ts).
   const isAtLatest = currentTime >= latestAvailableTime;
-  const [customAnimationDate, setCustomAnimationDate] = useState(() => sanitizeUtcDateValue(sharedSnapshot?.customAnimationDate) ?? currentTime.split('T')[0]);
-  const [customStartStep, setCustomStartStep] = useState(() => {
-    if (typeof sharedSnapshot?.customStartStep === 'number') {
-      return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)));
-    }
-    const latestStep = getStepFromUtcValue(latestAvailableTime);
-    return Math.max(0, latestStep - 18);
-  });
-  const [customEndStep, setCustomEndStep] = useState(() => {
-    if (typeof sharedSnapshot?.customEndStep === 'number') {
-      return Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customEndStep)));
-    }
-    return getStepFromUtcValue(latestAvailableTime);
+  const exportRange = useCustomAnimationRange({
+    initialDate: sanitizeUtcDateValue(sharedSnapshot?.customAnimationDate) ?? currentTime.split('T')[0],
+    initialStartStep: typeof sharedSnapshot?.customStartStep === 'number'
+      ? Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)))
+      : Math.max(0, getStepFromUtcValue(latestAvailableTime) - 18),
+    initialEndStep: typeof sharedSnapshot?.customEndStep === 'number'
+      ? Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customEndStep)))
+      : getStepFromUtcValue(latestAvailableTime),
+    latestAvailableTime,
+    latestAvailableDatePart,
   });
 
-  const customDayMaxStep = getLatestAllowedStepForDate(customAnimationDate, latestAvailableTime);
-  const customAnimationStart = `${customAnimationDate}T${toTimePartFromStep(customStartStep)}`;
-  const customAnimationEnd = `${customAnimationDate}T${toTimePartFromStep(customEndStep)}`;
+  // Playback's own range, independent of the export's (see useCustomAnimationRange).
+  const playbackRange = useCustomAnimationRange({
+    initialDate: sanitizeUtcDateValue(readStoredJson<string | null>(STORAGE_KEYS.playbackCustomDate, null))
+      ?? currentTime.split('T')[0],
+    initialStartStep: readStoredJson<number>(STORAGE_KEYS.playbackCustomStartStep, Math.max(0, getStepFromUtcValue(latestAvailableTime) - 18)),
+    initialEndStep: readStoredJson<number>(STORAGE_KEYS.playbackCustomEndStep, getStepFromUtcValue(latestAvailableTime)),
+    latestAvailableTime,
+    latestAvailableDatePart,
+  });
 
   useEffect(() => {
-    const normalized = normalizeCustomDaySteps(customStartStep, customEndStep, customDayMaxStep);
-    if (normalized.start !== customStartStep) {
-      setCustomStartStep(normalized.start);
-    }
-    if (normalized.end !== customEndStep) {
-      setCustomEndStep(normalized.end);
-    }
-  }, [customAnimationDate, customDayMaxStep, customEndStep, customStartStep]);
+    safeSetLocalStorage(STORAGE_KEYS.playbackCustomDate, JSON.stringify(playbackRange.date));
+    safeSetLocalStorage(STORAGE_KEYS.playbackCustomStartStep, JSON.stringify(playbackRange.startStep));
+    safeSetLocalStorage(STORAGE_KEYS.playbackCustomEndStep, JSON.stringify(playbackRange.endStep));
+  }, [playbackRange.date, playbackRange.startStep, playbackRange.endStep]);
 
-  const handleCustomDateChange = (nextDate: string) => {
-    const safeDate = nextDate > latestAvailableDatePart ? latestAvailableDatePart : nextDate;
-    setCustomAnimationDate(safeDate);
-  };
-
-  const handleCustomStartStepChange = (step: number) => {
-    const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, customDayMaxStep));
-    const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, customDayMaxStep));
-    const minStart = Math.max(0, customEndStep - maxSpan);
-    const maxStart = Math.max(0, customEndStep - minSpan);
-    const clamped = Math.max(minStart, Math.min(maxStart, Math.round(step)));
-    setCustomStartStep(clamped);
-  };
-
-  const handleCustomEndStepChange = (step: number) => {
-    const minSpan = Math.max(1, Math.min(CUSTOM_MIN_RANGE_STEPS, customDayMaxStep));
-    const maxSpan = Math.max(minSpan, Math.min(CUSTOM_MAX_RANGE_STEPS, customDayMaxStep));
-    const minEnd = Math.min(customDayMaxStep, customStartStep + minSpan);
-    const maxEnd = Math.min(customDayMaxStep, customStartStep + maxSpan);
-    const clamped = Math.max(minEnd, Math.min(maxEnd, Math.round(step)));
-    setCustomEndStep(clamped);
-  };
+  const customAnimationDate = exportRange.date;
+  const customStartStep = exportRange.startStep;
+  const customEndStep = exportRange.endStep;
+  const customDayMaxStep = exportRange.dayMaxStep;
+  const customAnimationStart = exportRange.start;
+  const customAnimationEnd = exportRange.end;
+  const handleCustomDateChange = exportRange.setDate;
+  const handleCustomStartStepChange = exportRange.setStartStep;
+  const handleCustomEndStepChange = exportRange.setEndStep;
 
   const {
     cityLoadPromiseRef,
@@ -965,6 +1063,9 @@ export default function DualMapViewer() {
 
   const handleTimeChange = (newTimeStr: string) => {
     setIsBackgroundRefresh(false);
+    // Moving the time by hand leaves the animation: the sequence would no longer describe what is
+    // on screen, and the frame you land on becomes the current time (issue #78).
+    if (playbackUrls.length > 0 || playbackPreload) closePlayback();
     const newTime = new Date(newTimeStr);
     const maxTime = new Date(latestAvailableTime);
 
@@ -1088,12 +1189,26 @@ export default function DualMapViewer() {
     const nextStart = Math.max(0, nextEnd - 18);
     const normalized = normalizeCustomDaySteps(nextStart, nextEnd, getLatestAllowedStepForDate(datePart, latestAvailableTime));
 
-    setCustomAnimationDate(datePart);
-    setCustomStartStep(normalized.start);
-    setCustomEndStep(normalized.end);
+    exportRange.seed(datePart, normalized.start, normalized.end);
   };
 
-  const buildAnimationFrameTimes = (): string[] => {
+  type AnimationRangeSpec = { preset: AnimationPreset; customStart: string; customEnd: string };
+
+  const exportRangeSpec: AnimationRangeSpec = {
+    preset: animationPreset,
+    customStart: customAnimationStart,
+    customEnd: customAnimationEnd,
+  };
+  const playbackRangeSpec: AnimationRangeSpec = {
+    preset: playbackPreset,
+    customStart: playbackRange.start,
+    customEnd: playbackRange.end,
+  };
+
+  const buildAnimationFrameTimes = (
+    spec: AnimationRangeSpec,
+    maxFrames: number = MAX_ANIMATION_EXPORT_FRAMES,
+  ): string[] => {
     // The verified `latestAvailableTime`, not the raw now−20min heuristic (issue #59, a residue of
     // #55). The heuristic's fixed buffer is regularly shorter than a layer's real publishing lag,
     // so bounding the range with it puts the last frames on slots some layer has no image for —
@@ -1107,9 +1222,9 @@ export default function DualMapViewer() {
 
     let startDate: Date;
     let endDate: Date;
-    if (animationPreset === 'custom') {
-      const parsedStart = parseUtcInputValue(customAnimationStart);
-      const parsedEnd = parseUtcInputValue(customAnimationEnd);
+    if (spec.preset === 'custom') {
+      const parsedStart = parseUtcInputValue(spec.customStart);
+      const parsedEnd = parseUtcInputValue(spec.customEnd);
       if (!parsedStart || !parsedEnd) {
         throw new Error('animation-range-invalid');
       }
@@ -1131,7 +1246,7 @@ export default function DualMapViewer() {
       // the latest image instead silently exported a completely different day, with nothing in
       // the UI to say so. Still clamped to the latest available, so at the live edge (where
       // currentTime is the latest slot) the behaviour is unchanged.
-      const durationHours = animationPreset === '3h' ? 3 : animationPreset === '6h' ? 6 : 12;
+      const durationHours = spec.preset === '3h' ? 3 : spec.preset === '6h' ? 6 : 12;
       const viewedTime = parseUtcInputValue(currentTime);
       endDate = viewedTime && viewedTime < latestAvailable ? viewedTime : latestAvailable;
       startDate = new Date(endDate.getTime() - durationHours * 60 * 60 * 1000);
@@ -1151,8 +1266,12 @@ export default function DualMapViewer() {
     const frames: string[] = [];
     for (let ts = roundedStart.getTime(); ts <= roundedEnd.getTime(); ts += TEN_MINUTES_MS) {
       frames.push(toUtcInputValue(new Date(ts)));
-      if (frames.length > MAX_ANIMATION_EXPORT_FRAMES) {
-        throw new Error('animation-max-export-frames');
+      if (frames.length > maxFrames) {
+        throw new Error(
+          maxFrames === MAX_ANIMATION_EXPORT_FRAMES
+            ? 'animation-max-export-frames'
+            : 'animation-max-playback-frames',
+        );
       }
     }
 
@@ -1165,6 +1284,7 @@ export default function DualMapViewer() {
 
   const mapAnimationErrorCode = (code: string): string => {
     if (code === 'animation-max-export-frames') return t('animationMaxExportFramesError');
+    if (code === 'animation-max-playback-frames') return t('animationMaxPlaybackFramesError');
     if (code === 'animation-export-too-few-frames') return t('animationExportTooFewFramesError');
     if (code === 'animation-custom-future-end') return t('animationCustomFutureEndError');
     if (code === 'animation-custom-too-short') return t('animationCustomTooShortError');
@@ -1172,12 +1292,250 @@ export default function DualMapViewer() {
     return t('animationRangeError');
   };
 
+  /**
+   * Frames already rendered, kept after the animation is closed so that reopening it with the same
+   * settings costs nothing. The signature covers everything a frame's pixels depend on — the range,
+   * the layers, every image adjustment, and the map's framing — so a stale set can never be
+   * replayed as if it described the current view.
+   */
+  const playbackCacheRef = useRef<{ renderKey: string; frames: string[]; urls: string[] } | null>(null);
+
+  const releasePlaybackCache = () => {
+    playbackCacheRef.current?.urls.forEach((url) => URL.revokeObjectURL(url));
+    playbackCacheRef.current = null;
+  };
+
+  const buildPlaybackRenderKey = (): string => {
+    const map = map2Instance.current;
+    const container = map2Ref.current;
+    const view = map && container
+      ? `${map.getCenter().lat.toFixed(4)},${map.getCenter().lng.toFixed(4)},${map.getZoom()},${container.clientWidth}x${container.clientHeight}`
+      : 'no-map';
+    return [
+      effectiveGifKind, PLAYBACK_MAX_DIMENSION, view,
+      `${activeLayers.rgb}${activeLayers.vis}${activeLayers.ir}`,
+      fireHotspotEnabled, fireHotspotMinBrightness, fireHotspotMinRedBlueDiff, fireHotspotOpacity,
+      irStyle, visBrightness, visContrast,
+      hdEnhanceEnabled, hdEnhanceHighlightProtection, hdEnhanceLocalContrast, hdEnhanceNoiseReduction,
+      hdEnhancePreset, hdEnhanceRadius, hdEnhanceSaturationAdjust, hdEnhanceShadowProtection,
+      hdEnhanceSharpen, hdEnhanceStrength,
+      rgbSaturation, rgbHdOpacity, sandwichOpacity, autoReduceVisAtNight,
+      JSON.stringify(mapOptions), language,
+    ].join('|');
+  };
+
+  /** Pauses without leaving: the frame on screen stays on screen. */
+  const pausePlayback = () => setIsPlaying(false);
+
+  /** Leaves the animation. The frame you were on becomes the current time (issue #78). */
+  const closePlayback = () => {
+    playbackCancelRef.current?.();
+    playbackCancelRef.current = null;
+    setIsPlaying(false);
+    setPlaybackPreload(null);
+    const landing = playbackFrames[Math.min(playbackIndexRef.current, playbackFrames.length - 1)];
+    if (landing) setCurrentTime(landing);
+    setPlaybackFrames([]);
+    setPlaybackUrls([]);
+    setPlaybackIndex(0);
+    // The rendered frames are kept: reopening the same animation is then instant.
+  };
+
+  const startPlayback = async () => {
+    if (!map2Instance.current || !map2Ref.current) return;
+
+    let frames: string[];
+    try {
+      frames = buildAnimationFrameTimes(playbackRangeSpec, MAX_ANIMATION_PLAYBACK_FRAMES);
+    } catch (error) {
+      window.alert(mapAnimationErrorCode((error as Error).message));
+      return;
+    }
+
+    // A new image arriving mid-sequence would move the view out from under the animation.
+    setAutoUpdateEnabled(false);
+    setPlaybackIndex(0);
+
+    const renderKey = buildPlaybackRenderKey();
+    const cached = playbackCacheRef.current;
+    if (cached && cached.renderKey === renderKey) {
+      // Same frames, or the time we are sitting on is one of the frames already rendered. The
+      // second case is the ordinary stop-and-replay: closing the animation moves the current time
+      // onto the frame you stopped at, which shifts a preset range's anchor — rebuilding an
+      // identical-looking sequence for that would waste a render per frame.
+      const sameFrames = cached.frames.length === frames.length
+        && cached.frames.every((frame, index) => frame === frames[index]);
+      const resumeIndex = cached.frames.indexOf(currentTime);
+      if (sameFrames || resumeIndex >= 0) {
+        setPlaybackFrames(cached.frames);
+        setPlaybackUrls(cached.urls);
+        setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
+        setIsPlaying(true);
+        return;
+      }
+    }
+
+    setPlaybackPreload({ done: 0, total: frames.length });
+    let cancelled = false;
+    playbackCancelRef.current = () => { cancelled = true; };
+
+    try {
+      // The same renderer the GIF and WebM exports use, so what plays is what an export of the
+      // same range produces. Playing off Leaflet's own tiles instead was measured at 58% of the
+      // time showing a blank map: `setParams` drops every tile on each frame, and at 8 frames a
+      // second the grid never finishes coming back before the next one wipes it again.
+      const blobs = await renderAnimationFrameBlobs({
+        frameTimes: frames,
+        kind: effectiveGifKind,
+        maxDimension: PLAYBACK_MAX_DIMENSION,
+        imageFormat: 'jpeg',
+        map: map2Instance.current,
+        mapContainer: map2Ref.current,
+        activeLayers,
+        fireHotspotEnabled,
+        fireHotspotMinBrightness,
+        fireHotspotMinRedBlueDiff,
+        fireHotspotOpacity,
+        irStyle,
+        visBrightness,
+        visContrast,
+        hdEnhanceEnabled,
+        hdEnhanceHighlightProtection,
+        hdEnhanceLocalContrast,
+        hdEnhanceNoiseReduction,
+        hdEnhancePreset,
+        hdEnhanceRadius,
+        hdEnhanceSaturationAdjust,
+        hdEnhanceShadowProtection,
+        hdEnhanceSharpen,
+        hdEnhanceStrength,
+        rgbSaturation,
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        mapOptions,
+        language,
+        map1BordersLayer: map1BordersRef.current,
+        map1DepartmentsLayer: map1DepartmentsRef.current,
+        cityLoadPromise: cityLoadPromiseRef.current,
+        getVisibleCityFeatures,
+        onFrameProgress: (fraction) => {
+          if (cancelled) return;
+          setPlaybackPreload({ done: Math.round(fraction * frames.length), total: frames.length });
+        },
+      });
+
+      if (cancelled) {
+        setPlaybackPreload(null);
+        return;
+      }
+      const urls = blobs.map((blob) => URL.createObjectURL(blob));
+      releasePlaybackCache();
+      playbackCacheRef.current = { renderKey, frames, urls };
+      playbackCancelRef.current = null;
+      setPlaybackFrames(frames);
+      setPlaybackUrls(urls);
+      setPlaybackPreload(null);
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Playback preparation failed:', error);
+      setPlaybackPreload(null);
+      playbackCancelRef.current = null;
+      window.alert(isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('playbackPrepareFailed'));
+    }
+  };
+
+  let playbackFrameCountPreview: number | null = null;
+  try {
+    playbackFrameCountPreview = buildAnimationFrameTimes(playbackRangeSpec, MAX_ANIMATION_PLAYBACK_FRAMES).length;
+  } catch {
+    playbackFrameCountPreview = null;
+  }
+
+  const togglePlayback = () => {
+    if (playbackPreload) {
+      playbackCancelRef.current?.();
+      playbackCancelRef.current = null;
+      setPlaybackPreload(null);
+      return;
+    }
+    if (isPlaying) {
+      pausePlayback();
+      return;
+    }
+    if (playbackUrls.length > 0) {
+      setIsPlaying(true);
+      return;
+    }
+    void startPlayback();
+  };
+
+  /** Scrubbing pauses but stays in the animation — the overlay keeps showing the frame you land on. */
+  const seekPlayback = (index: number) => {
+    if (playbackFrames.length === 0) return;
+    setIsPlaying(false);
+    setPlaybackIndex(Math.max(0, Math.min(playbackFrames.length - 1, index)));
+  };
+
+  // Advances the sequence. Wraps around: an animation of the last few hours is something you leave
+  // running, not something that stops on the last frame.
+  useEffect(() => {
+    if (!isPlaying || playbackFrames.length === 0) return;
+    const interval = window.setInterval(() => {
+      setPlaybackIndex((previous) => (previous + 1) % playbackFrames.length);
+    }, Math.round(1000 / playbackFps));
+    return () => window.clearInterval(interval);
+  }, [isPlaying, playbackFrames, playbackFps]);
+
+  // Read by closePlayback, which runs outside this render and needs the frame actually on screen.
+  const playbackIndexRef = useRef(playbackIndex);
+  playbackIndexRef.current = playbackIndex;
+
+  // The frames were rendered for one framing of the map. Panning or zooming leaves them describing
+  // a view that is no longer there, so the animation closes and the cache goes with it.
+  useEffect(() => {
+    const map = map2Instance.current;
+    if (!map || (playbackUrls.length === 0 && !playbackPreload)) return;
+    const handleMove = () => {
+      releasePlaybackCache();
+      closePlayback();
+    };
+    map.on('movestart', handleMove);
+    map.on('zoomstart', handleMove);
+    return () => {
+      map.off('movestart', handleMove);
+      map.off('zoomstart', handleMove);
+    };
+  }, [playbackUrls, playbackPreload, playbackFrames]);
+
+  // The rendered frames belong to one layer set; keeping them across a toggle would replay the
+  // wrong imagery.
+  const playbackLayersKeyRef = useRef(renderedWmsLayersKey);
+  useEffect(() => {
+    if (playbackLayersKeyRef.current === renderedWmsLayersKey) return;
+    playbackLayersKeyRef.current = renderedWmsLayersKey;
+    releasePlaybackCache();
+    if (playbackUrls.length > 0 || playbackPreload) closePlayback();
+  }, [renderedWmsLayersKey]);
+
+  // A hidden tab throttles the timer; pause rather than close, so coming back resumes where it was.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const handleVisibility = () => {
+      if (document.hidden) setIsPlaying(false);
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [isPlaying]);
+
+  useEffect(() => releasePlaybackCache, []);
+
   const exportGif = async () => {
     if (!map2Instance.current || !map2Ref.current || isGifExporting) return;
 
     let frames: string[] = [];
     try {
-      frames = buildAnimationFrameTimes();
+      frames = buildAnimationFrameTimes(exportRangeSpec);
     } catch (error) {
       setAnimationRangeError(mapAnimationErrorCode(error instanceof Error ? error.message : ''));
       return;
@@ -1249,7 +1607,7 @@ export default function DualMapViewer() {
 
     let frames: string[] = [];
     try {
-      frames = buildAnimationFrameTimes();
+      frames = buildAnimationFrameTimes(exportRangeSpec);
     } catch (error) {
       setAnimationRangeError(mapAnimationErrorCode(error instanceof Error ? error.message : ''));
       return;
@@ -1322,7 +1680,7 @@ export default function DualMapViewer() {
   let computedAnimationRangeError: string | null = null;
   let animationFrameTimesPreview: string[] = [];
   try {
-    animationFrameTimesPreview = buildAnimationFrameTimes();
+    animationFrameTimesPreview = buildAnimationFrameTimes(exportRangeSpec);
   } catch (error) {
     computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
   }
@@ -1865,21 +2223,57 @@ export default function DualMapViewer() {
 
           <div ref={map2Ref} className="w-full h-full bg-[#0a0a0a] !z-0" />
 
+          {/* The animation plays as pre-rendered frames laid over the map rather than by moving
+              the map's own time (issue #78). Driving Leaflet at 8 frames a second left the map
+              blank 58% of the time — `setParams` drops every tile on each frame, and the grid
+              never finishes coming back before the next one wipes it. These frames come from the
+              very same renderer as the GIF export, so what you watch is what an export of the
+              same range produces. */}
+          {playbackUrls.length > 0 && (
+            <img
+              src={playbackUrls[Math.min(playbackIndex, playbackUrls.length - 1)]}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover z-[410] pointer-events-none select-none"
+            />
+          )}
+
           <TimeDock
             autoUpdateEnabled={autoUpdateEnabled}
             currentTime={currentTime}
             isAtLatest={isAtLatest}
             isBackgroundRefreshing={isBackgroundRefresh && isMapLoading}
+            isPlaying={isPlaying}
             isSyncingLatest={isJumpingToLatest}
             latestAvailableTime={latestAvailableTime}
+            latestAvailableDatePart={latestAvailableDatePart}
+            playbackCustomDate={playbackRange.date}
+            playbackCustomDayMaxStep={playbackRange.dayMaxStep}
+            playbackCustomEndStep={playbackRange.endStep}
+            playbackCustomStartStep={playbackRange.startStep}
+            playbackFps={playbackFps}
+            playbackFpsChoices={PLAYBACK_FPS_CHOICES}
+            playbackFrameCountPreview={playbackFrameCountPreview}
+            playbackFrames={playbackFrames}
+            playbackIndex={playbackIndex}
+            playbackPreload={playbackPreload}
+            playbackPreset={playbackPreset}
             onAutoUpdateToggle={() => setAutoUpdateEnabled((previous) => !previous)}
-            onLatest={() => { void jumpToLatest(); }}
+            onLatest={() => { closePlayback(); void jumpToLatest(); }}
+            onPlaybackCustomDateChange={playbackRange.setDate}
+            onPlaybackCustomEndStepChange={playbackRange.setEndStep}
+            onPlaybackCustomStartStepChange={playbackRange.setStartStep}
+            onPlaybackFpsChange={setPlaybackFps}
+            onPlaybackPresetChange={setPlaybackPreset}
+            onPlaybackSeek={seekPlayback}
+            onPlaybackStop={closePlayback}
+            onPlaybackToggle={togglePlayback}
             onTimeChange={handleTimeChange}
             t={t}
             theme={resolvedTheme}
           />
 
-          {isMapLoading && !isBackgroundRefresh && (
+          {isMapLoading && !isBackgroundRefresh && playbackUrls.length === 0 && (
             <div className="absolute inset-x-0 top-20 sm:top-24 z-[430] pointer-events-none flex justify-center px-3">
               <div className={`backdrop-blur-md border rounded-lg px-4 py-3 text-xs shadow-2xl w-[min(92vw,320px)] ${
                 resolvedTheme === 'light'
