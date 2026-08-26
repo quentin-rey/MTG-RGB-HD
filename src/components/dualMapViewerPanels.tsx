@@ -101,23 +101,68 @@ export function PlaybackExitModal(props: {
 }) {
   const { mode, t, theme, onLeave, onResume } = props;
   const isLight = theme === 'light';
+  const resumeLabel = t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume');
+  const resumeOutcome = t(mode === 'preload' ? 'playbackExitRestartOutcome' : 'playbackExitResumeOutcome');
+  // During preparation nothing is laid over the map, so the move *is* visible and the wording has
+  // to differ: only a running animation hides what the user just did.
+  const leaveOutcome = t(mode === 'preload' ? 'playbackExitLeavePreloadOutcome' : 'playbackExitLeaveOutcome');
+
+  // Each choice is spelled out against its own button label rather than buried in a sentence:
+  // the point of this dialog is that both gestures cannot win, and that has to be readable at a
+  // glance rather than parsed out of a semicolon.
+  const outcome = (label: string, text: string, emphasised: boolean) => (
+    <li className="flex gap-2">
+      <span className={`mt-[0.45rem] w-1 h-1 rounded-full shrink-0 ${
+        emphasised
+          ? themedClass(isLight, 'bg-slate-900', 'bg-blue-400')
+          : themedClass(isLight, 'bg-slate-400', 'bg-slate-500')
+      }`} />
+      <span>
+        <span className={`font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{label}</span>
+        {' '}
+        {text}
+      </span>
+    </li>
+  );
+
   return (
     <div className="fixed inset-0 z-[560] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm">
       <div
         role="dialog"
         aria-modal="true"
         aria-label={t('playbackExitTitle')}
-        className={`w-[min(92vw,26rem)] rounded-xl border shadow-2xl p-4 sm:p-5 ${
+        className={`w-[min(92vw,30rem)] rounded-xl border shadow-2xl ${
           themedClass(isLight, 'bg-white border-slate-300', 'bg-[#141414] border-white/15')
         }`}
       >
-        <h2 className={`text-sm sm:text-base font-semibold ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>
-          {t('playbackExitTitle')}
-        </h2>
-        <p className={`mt-2 text-xs sm:text-sm leading-relaxed ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-          {t(mode === 'preload' ? 'playbackExitPreloadBody' : 'playbackExitBody')}
-        </p>
-        <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+        <div className="flex items-start gap-3 p-4 sm:p-5">
+          <span className={`mt-0.5 shrink-0 flex items-center justify-center w-8 h-8 rounded-full ${
+            themedClass(isLight, 'bg-amber-100 text-amber-700', 'bg-amber-500/15 text-amber-300')
+          }`}>
+            <Film className="w-4 h-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className={`text-sm sm:text-base font-semibold leading-snug ${
+              themedClass(isLight, 'text-slate-900', 'text-white')
+            }`}>
+              {t('playbackExitTitle')}
+            </h2>
+            <p className={`mt-1.5 text-xs sm:text-[13px] leading-relaxed ${
+              themedClass(isLight, 'text-slate-600', 'text-slate-300')
+            }`}>
+              {t(mode === 'preload' ? 'playbackExitPreloadLead' : 'playbackExitLead')}
+            </p>
+            <ul className={`mt-3 space-y-1.5 text-xs sm:text-[13px] leading-relaxed ${
+              themedClass(isLight, 'text-slate-600', 'text-slate-300')
+            }`}>
+              {outcome(resumeLabel, resumeOutcome, true)}
+              {outcome(t('playbackExitLeave'), leaveOutcome, false)}
+            </ul>
+          </div>
+        </div>
+        <div className={`flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-4 sm:px-5 py-3 border-t rounded-b-xl ${
+          themedClass(isLight, 'bg-slate-50 border-slate-200', 'bg-white/[0.03] border-white/10')
+        }`}>
           <button
             onClick={onLeave}
             className={`rounded-md border px-3 py-2 text-xs sm:text-sm transition-colors ${
@@ -137,7 +182,7 @@ export function PlaybackExitModal(props: {
                 : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
             }`}
           >
-            {t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume')}
+            {resumeLabel}
           </button>
         </div>
       </div>
