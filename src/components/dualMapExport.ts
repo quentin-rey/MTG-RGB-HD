@@ -74,6 +74,8 @@ export type GifDitherLevel = 'none' | 'low' | 'medium' | 'high';
 export type GifFinalPauseMs = number;
 
 type ExportAnimationGifOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime'> & {
+  /** Pre-rendered frames, one per `frameTimes` entry. Skips the render pass entirely. */
+  frameBlobs?: Blob[];
   frameTimes: string[];
   fps: number;
   kind: ExportKind;
@@ -1150,7 +1152,9 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
 
   let targetWidth = 0;
   let targetHeight = 0;
-  const frameBlobs = await renderAnimationFrameBlobs({
+  // Frames the caller already holds — the in-app animation keeps its rendered sequence, so
+  // downloading what is on screen costs an encode rather than a full re-render (issue #78).
+  const frameBlobs = options.frameBlobs ?? await renderAnimationFrameBlobs({
     ...shared,
     frameTimes,
     kind,

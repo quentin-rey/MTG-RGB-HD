@@ -1082,10 +1082,8 @@ export default function DualMapViewer() {
   }, [isMapLoading]);
 
   const handleTimeChange = (newTimeStr: string) => {
+    if (requestPlaybackExit(() => handleTimeChange(newTimeStr))) return;
     setIsBackgroundRefresh(false);
-    // Moving the time by hand leaves the animation: the sequence would no longer describe what is
-    // on screen, and the frame you land on becomes the current time (issue #78).
-    if (playbackUrls.length > 0 || playbackPreload) closePlayback();
     const newTime = new Date(newTimeStr);
     const maxTime = new Date(latestAvailableTime);
 
@@ -1318,12 +1316,19 @@ export default function DualMapViewer() {
    * the layers, every image adjustment, and the map's framing — so a stale set can never be
    * replayed as if it described the current view.
    */
-  const playbackCacheRef = useRef<{ renderKey: string; frames: string[]; urls: string[] } | null>(null);
+  const playbackCacheRef = useRef<{ renderKey: string; frames: string[]; urls: string[]; blobs: Blob[] } | null>(null);
   const playbackRenderedViewRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
   // Set while we put the map back ourselves, so the guard below doesn't mistake it for the user
   // moving the map again.
   const restoringPlaybackViewRef = useRef(false);
-  const [playbackExitPrompt, setPlaybackExitPrompt] = useState<'session' | 'preload' | null>(null);
+  type PlaybackExitIntent = {
+    mode: 'session' | 'preload';
+    /** 'view' when the map was moved, 'time' when a control would change the displayed time. */
+    reason: 'view' | 'time';
+    /** Ran only if the user chooses to leave: the action that was held back. */
+    apply?: () => void;
+  };
+  const [playbackExitPrompt, setPlaybackExitPrompt] = useState<PlaybackExitIntent | null>(null);
 
   const releasePlaybackCache = () => {
     playbackCacheRef.current?.urls.forEach((url) => URL.revokeObjectURL(url));
@@ -1467,7 +1472,7 @@ export default function DualMapViewer() {
       }
       const urls = blobs.map((blob) => URL.createObjectURL(blob));
       releasePlaybackCache();
-      playbackCacheRef.current = { renderKey, frames, urls };
+      playbackCacheRef.current = { renderKey, frames, urls, blobs };
       playbackCancelRef.current = null;
       setPlaybackFrames(frames);
       setPlaybackUrls(urls);
@@ -1494,6 +1499,73 @@ export default function DualMapViewer() {
   } catch {
     playbackFramePreview = null;
   }
+
+  const [isDownloadingPlayback, setIsDownloadingPlayback] = useState(false);
+
+  /**
+   * Encodes the sequence already in memory into a GIF. No frame is rendered again: the animation
+   * you just watched is exactly the one you get, at the quality it was prepared with.
+   */
+  const downloadPlaybackAnimation = async () => {
+    const cached = playbackCacheRef.current;
+    if (!cached || cached.blobs.length === 0 || isDownloadingPlayback) return;
+    if (!map2Instance.current || !map2Ref.current) return;
+
+    setIsDownloadingPlayback(true);
+    try {
+      const { saveAs } = await import('file-saver');
+      const gifBlob = await exportAnimationGif({
+        frameBlobs: cached.blobs,
+        frameTimes: cached.frames,
+        fps: playbackFps,
+        kind: effectiveGifKind,
+        maxDimension: playbackQuality,
+        colorCount: gifColorCount,
+        paletteMode: gifPaletteMode,
+        ditherLevel: gifDitherLevel,
+        finalPauseMs: gifFinalPauseMs,
+        map: map2Instance.current,
+        mapContainer: map2Ref.current,
+        activeLayers,
+        fireHotspotEnabled,
+        fireHotspotMinBrightness,
+        fireHotspotMinRedBlueDiff,
+        fireHotspotOpacity,
+        irStyle,
+        visBrightness,
+        visContrast,
+        hdEnhanceEnabled,
+        hdEnhanceHighlightProtection,
+        hdEnhanceLocalContrast,
+        hdEnhanceNoiseReduction,
+        hdEnhancePreset,
+        hdEnhanceRadius,
+        hdEnhanceSaturationAdjust,
+        hdEnhanceShadowProtection,
+        hdEnhanceSharpen,
+        hdEnhanceStrength,
+        rgbSaturation,
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        mapOptions,
+        language,
+        map1BordersLayer: map1BordersRef.current,
+        map1DepartmentsLayer: map1DepartmentsRef.current,
+        cityLoadPromise: cityLoadPromiseRef.current,
+        getVisibleCityFeatures,
+      });
+      const safeStart = cached.frames[0].replace('T', '_').replace(/:/g, '-');
+      const safeEnd = cached.frames[cached.frames.length - 1].replace('T', '_').replace(/:/g, '-');
+      const baseName = getExportFileBaseName(effectiveGifKind, hdEnhanceEnabled);
+      saveAs(gifBlob, `MTG_ANIMATION_${baseName}_${playbackQuality}px_${safeStart}_to_${safeEnd}.gif`);
+    } catch (error) {
+      console.error('Playback download failed:', error);
+      window.alert(isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('animationExportFailed'));
+    } finally {
+      setIsDownloadingPlayback(false);
+    }
+  };
 
   const togglePlayback = () => {
     if (playbackPreload) {
@@ -1569,11 +1641,11 @@ export default function DualMapViewer() {
         playbackCancelRef.current?.();
         playbackCancelRef.current = null;
         setPlaybackPreload(null);
-        setPlaybackExitPrompt('preload');
+        setPlaybackExitPrompt({ mode: 'preload', reason: 'view' });
         return;
       }
       setIsPlaying(false);
-      setPlaybackExitPrompt('session');
+      setPlaybackExitPrompt({ mode: 'session', reason: 'view' });
     };
     map.on('movestart', handleMove);
     map.on('zoomstart', handleMove);
@@ -1594,10 +1666,12 @@ export default function DualMapViewer() {
   };
 
   const resumePlaybackAfterMove = () => {
-    const mode = playbackExitPrompt;
+    const intent = playbackExitPrompt;
     setPlaybackExitPrompt(null);
-    restorePlaybackView();
-    if (mode === 'preload') {
+    if (!intent) return;
+    // A time change never moved the map, so there is nothing to put back.
+    if (intent.reason === 'view') restorePlaybackView();
+    if (intent.mode === 'preload') {
       void startPlayback();
       return;
     }
@@ -1605,10 +1679,32 @@ export default function DualMapViewer() {
   };
 
   const leavePlaybackAfterMove = () => {
+    const intent = playbackExitPrompt;
     setPlaybackExitPrompt(null);
-    // The framing has changed, so the rendered frames can never be replayed as they are.
-    releasePlaybackCache();
+    // A moved map means the rendered frames can never be replayed as they are; a time change
+    // leaves them perfectly valid, so the sequence stays cached for a later replay.
+    if (intent?.reason === 'view') releasePlaybackCache();
     closePlayback();
+    intent?.apply?.();
+  };
+
+  /**
+   * Anything that would end a running animation goes through here: the time slider, the date
+   * field, the ±10/30 min steps, "Dernier", and turning auto-update back on. Guarding only pans
+   * and zooms would have made the rule impossible to remember — some gestures ask, others throw
+   * the sequence away without a word (issue #78).
+   *
+   * Returns true when the action has been held back and the dialog is up.
+   */
+  const requestPlaybackExit = (apply: () => void): boolean => {
+    if (playbackUrls.length === 0 && !playbackPreload) return false;
+    setIsPlaying(false);
+    setPlaybackExitPrompt({
+      mode: playbackPreload ? 'preload' : 'session',
+      reason: 'time',
+      apply,
+    });
+    return true;
   };
 
   // The rendered frames belong to one layer set; keeping them across a toggle would replay the
@@ -2343,7 +2439,8 @@ export default function DualMapViewer() {
 
           {playbackExitPrompt && (
             <PlaybackExitModal
-              mode={playbackExitPrompt}
+              mode={playbackExitPrompt.mode}
+              reason={playbackExitPrompt.reason}
               t={t}
               theme={resolvedTheme}
               onLeave={leavePlaybackAfterMove}
@@ -2368,6 +2465,7 @@ export default function DualMapViewer() {
             playbackFpsMax={MAX_PLAYBACK_FPS}
             playbackFpsMin={MIN_PLAYBACK_FPS}
             playbackFramePreview={playbackFramePreview}
+            playbackDownloadBusy={isDownloadingPlayback}
             playbackFrames={playbackFrames}
             playbackIndex={playbackIndex}
             playbackPreload={playbackPreload}
@@ -2375,12 +2473,22 @@ export default function DualMapViewer() {
             playbackPreset={playbackPreset}
             playbackQuality={playbackQuality}
             playbackQualityChoices={PLAYBACK_QUALITY_CHOICES}
-            onAutoUpdateToggle={() => setAutoUpdateEnabled((previous) => !previous)}
-            onLatest={() => { closePlayback(); void jumpToLatest(); }}
+            onAutoUpdateToggle={() => {
+              // Only turning it back *on* matters: auto-update advancing the time is what would
+              // pull the view out from under a running animation.
+              const enabling = !autoUpdateEnabled;
+              if (enabling && requestPlaybackExit(() => setAutoUpdateEnabled(true))) return;
+              setAutoUpdateEnabled(enabling);
+            }}
+            onLatest={() => {
+              if (requestPlaybackExit(() => { void jumpToLatest(); })) return;
+              void jumpToLatest();
+            }}
             onPlaybackCustomDateChange={playbackRange.setDate}
             onPlaybackCustomEndStepChange={playbackRange.setEndStep}
             onPlaybackCustomStartStepChange={playbackRange.setStartStep}
             onPlaybackFpsChange={setPlaybackFps}
+            onPlaybackDownload={() => { void downloadPlaybackAnimation(); }}
             onPlaybackBoomerangToggle={() => setPlaybackBoomerang((previous) => !previous)}
             onPlaybackPresetChange={setPlaybackPreset}
             onPlaybackQualityChange={(quality) => setPlaybackQuality(quality as PlaybackQuality)}

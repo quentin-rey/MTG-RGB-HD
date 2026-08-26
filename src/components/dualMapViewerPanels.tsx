@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { ArrowLeftRight, Bug, CircleHelp, Clock, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
+import { ArrowLeftRight, Bug, CircleHelp, Clock, Download, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -50,6 +50,7 @@ type TimeDockProps = {
   playbackIndex: number;
   playbackPreload: { done: number; total: number } | null;
   playbackBoomerang: boolean;
+  playbackDownloadBusy: boolean;
   playbackPreset: AnimationPreset;
   playbackQuality: number;
   playbackQualityChoices: readonly number[];
@@ -62,6 +63,7 @@ type TimeDockProps = {
   onPlaybackCustomStartStepChange: (step: number) => void;
   onPlaybackFpsChange: (fps: number) => void;
   onPlaybackBoomerangToggle: () => void;
+  onPlaybackDownload: () => void;
   onPlaybackPresetChange: (preset: AnimationPreset) => void;
   onPlaybackQualityChange: (quality: number) => void;
   onPlaybackSeek: (index: number) => void;
@@ -94,18 +96,26 @@ function formatTimeBehind(currentTime: string, latestAvailableTime: string): str
  */
 export function PlaybackExitModal(props: {
   mode: 'session' | 'preload';
+  reason: 'view' | 'time';
   t: Translator;
   theme: UiTheme;
   onLeave: () => void;
   onResume: () => void;
 }) {
-  const { mode, t, theme, onLeave, onResume } = props;
+  const { mode, reason, t, theme, onLeave, onResume } = props;
   const isLight = theme === 'light';
   const resumeLabel = t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume');
-  const resumeOutcome = t(mode === 'preload' ? 'playbackExitRestartOutcome' : 'playbackExitResumeOutcome');
+  const resumeOutcome = reason === 'time'
+    ? t('playbackExitTimeResumeOutcome')
+    : t(mode === 'preload' ? 'playbackExitRestartOutcome' : 'playbackExitResumeOutcome');
   // During preparation nothing is laid over the map, so the move *is* visible and the wording has
   // to differ: only a running animation hides what the user just did.
-  const leaveOutcome = t(mode === 'preload' ? 'playbackExitLeavePreloadOutcome' : 'playbackExitLeaveOutcome');
+  const leaveOutcome = reason === 'time'
+    ? t('playbackExitTimeLeaveOutcome')
+    : t(mode === 'preload' ? 'playbackExitLeavePreloadOutcome' : 'playbackExitLeaveOutcome');
+  const lead = reason === 'time'
+    ? t('playbackExitTimeLead')
+    : t(mode === 'preload' ? 'playbackExitPreloadLead' : 'playbackExitLead');
 
   // Each choice is spelled out against its own button label rather than buried in a sentence:
   // the point of this dialog is that both gestures cannot win, and that has to be readable at a
@@ -150,7 +160,7 @@ export function PlaybackExitModal(props: {
             <p className={`mt-1.5 text-xs sm:text-[13px] leading-relaxed ${
               themedClass(isLight, 'text-slate-600', 'text-slate-300')
             }`}>
-              {t(mode === 'preload' ? 'playbackExitPreloadLead' : 'playbackExitLead')}
+              {lead}
             </p>
             <ul className={`mt-3 space-y-1.5 text-xs sm:text-[13px] leading-relaxed ${
               themedClass(isLight, 'text-slate-600', 'text-slate-300')
@@ -212,6 +222,7 @@ export function TimeDock(props: TimeDockProps) {
     playbackIndex,
     playbackPreload,
     playbackBoomerang,
+    playbackDownloadBusy,
     playbackPreset,
     playbackQuality,
     playbackQualityChoices,
@@ -222,6 +233,7 @@ export function TimeDock(props: TimeDockProps) {
     onPlaybackCustomStartStepChange,
     onPlaybackFpsChange,
     onPlaybackBoomerangToggle,
+    onPlaybackDownload,
     onPlaybackPresetChange,
     onPlaybackQualityChange,
     onPlaybackSeek,
@@ -344,7 +356,7 @@ export function TimeDock(props: TimeDockProps) {
                 forget about — this is the cue that you are not on live imagery, and a shortcut
                 back. Only shown once genuinely behind (>= one 10-min slot), so it can't flicker
                 on the boundary. */}
-            {!isAtLatest && timeBehindLabel && (
+            {!isAtLatest && timeBehindLabel && !hasPlaybackSession && (
               <button
                 onClick={onLatest}
                 disabled={isSyncingLatest}
@@ -516,6 +528,21 @@ export function TimeDock(props: TimeDockProps) {
                       themedClass(isLight, 'bg-slate-200', 'bg-white/10')
                     }`}
                   />
+                  <button
+                    onClick={onPlaybackDownload}
+                    disabled={playbackDownloadBusy}
+                    title={t('playbackDownloadHint')}
+                    aria-label={t('playbackDownload')}
+                    className={`shrink-0 flex items-center justify-center rounded-md border w-9 h-9 sm:w-8 sm:h-8 transition-colors disabled:opacity-60 disabled:cursor-wait ${
+                      isLight
+                        ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                        : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                    }`}
+                  >
+                    {playbackDownloadBusy
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      : <Download className="w-3.5 h-3.5" />}
+                  </button>
                   <button
                     onClick={onPlaybackStop}
                     title={t('playbackStop')}
