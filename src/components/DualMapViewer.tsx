@@ -266,9 +266,14 @@ function useCustomAnimationRange(options: {
 
   const dayMaxStep = getLatestAllowedStepForDate(date, latestAvailableTime);
 
+  // Writes back the very state the user edits, on purpose: the ceiling moves as new imagery is
+  // published, so a range that was valid when picked can stop being valid without anyone touching
+  // it. Deriving it during render would leave the sliders showing a value the range no longer has.
   useEffect(() => {
     const normalized = normalizeCustomDaySteps(startStep, endStep, dayMaxStep);
+    // oxlint-disable-next-line react/set-state-in-effect
     if (normalized.start !== startStep) setStartStep(normalized.start);
+    // oxlint-disable-next-line react/set-state-in-effect
     if (normalized.end !== endStep) setEndStep(normalized.end);
   }, [date, dayMaxStep, endStep, startStep]);
 
@@ -473,7 +478,7 @@ export default function DualMapViewer() {
   const [exportFormat, setExportFormat] = useState<StillImageFormat>('png');
   const [exportResolution, setExportResolution] = useState<1920 | 2560 | 4096>(4096);
   const [webmQuality, setWebmQuality] = useState(0.8);
-  const [gifSelectedKind, setGifSelectedKind] = useState<ExportKind | null>(null);
+  const [gifSelectedKind] = useState<ExportKind | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [previewImages, setPreviewImages] = useState<Partial<Record<ExportKind, string>>>({});
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -729,7 +734,7 @@ export default function DualMapViewer() {
       showFranceDepartments: false,
     };
     const stored = sanitizeMapOptions(readStoredJson<unknown>(STORAGE_KEYS.mapOptions, defaults), defaults);
-    return sanitizeMapOptions({ ...stored, ...(sharedSnapshot?.mapOptions ?? {}) }, stored);
+    return sanitizeMapOptions({ ...stored, ...sharedSnapshot?.mapOptions }, stored);
   });
 
   useEffect(() => {
@@ -755,11 +760,11 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.currentTime, JSON.stringify(currentTime));
   }, [currentTime]);
-  const [animationPreset, setAnimationPreset] = useState<AnimationPreset>(() => {
+  const [animationPreset] = useState<AnimationPreset>(() => {
     const preset = sharedSnapshot?.animationPreset;
     return preset === '3h' || preset === '6h' || preset === '12h' || preset === 'custom' ? preset : '3h';
   });
-  const [animationFps, setAnimationFps] = useState(() => {
+  const [animationFps] = useState(() => {
     const fps = Number(sharedSnapshot?.animationFps ?? 6);
     return Math.max(2, Math.min(20, Math.round(fps)));
   });
@@ -802,7 +807,7 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.playbackBoomerang, JSON.stringify(playbackBoomerang));
   }, [playbackBoomerang]);
-  const [gifMaxDimension, setGifMaxDimension] = useState<960 | 1280 | 1600>(() => {
+  const [gifMaxDimension] = useState<960 | 1280 | 1600>(() => {
     const value = sharedSnapshot?.gifMaxDimension;
     return value === 960 || value === 1280 || value === 1600 ? value : 1280;
   });
@@ -822,11 +827,6 @@ export default function DualMapViewer() {
     const value = sharedSnapshot?.gifFinalPauseMs;
     return value === 100 || value === 500 || value === 1000 || value === 2000 ? value : 100;
   });
-  const [isGifExporting, setIsGifExporting] = useState(false);
-  const [gifExportProgress, setGifExportProgress] = useState(0);
-  const [isWebmExporting, setIsWebmExporting] = useState(false);
-  const [webmExportProgress, setWebmExportProgress] = useState(0);
-  const [animationRangeError, setAnimationRangeError] = useState<string | null>(null);
   // The single source of truth for "what is the newest image that actually exists". Everything
   // that needs to reason about freshness reads this: the "past image" badge (#52), auto-update
   // (#50), the date-input max, the animation range clamps and handleTimeChange's own clamp.
@@ -910,12 +910,6 @@ export default function DualMapViewer() {
   const customAnimationDate = exportRange.date;
   const customStartStep = exportRange.startStep;
   const customEndStep = exportRange.endStep;
-  const customDayMaxStep = exportRange.dayMaxStep;
-  const customAnimationStart = exportRange.start;
-  const customAnimationEnd = exportRange.end;
-  const handleCustomDateChange = exportRange.setDate;
-  const handleCustomStartStepChange = exportRange.setStartStep;
-  const handleCustomEndStepChange = exportRange.setEndStep;
 
   const {
     cityLoadPromiseRef,
@@ -1196,27 +1190,8 @@ export default function DualMapViewer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleAnimationPresetChange = (value: AnimationPreset) => {
-    setAnimationPreset(value);
-    if (value !== 'custom') return;
-
-    const base = parseUtcInputValue(currentTime) ?? parseUtcInputValue(latestAvailableTime) ?? new Date();
-    const datePart = base.toISOString().slice(0, 10);
-    const baseStep = getStepFromUtcValue(toUtcInputValue(base));
-    const nextEnd = Math.max(0, Math.min(getLatestAllowedStepForDate(datePart, latestAvailableTime), baseStep));
-    const nextStart = Math.max(0, nextEnd - 18);
-    const normalized = normalizeCustomDaySteps(nextStart, nextEnd, getLatestAllowedStepForDate(datePart, latestAvailableTime));
-
-    exportRange.seed(datePart, normalized.start, normalized.end);
-  };
-
   type AnimationRangeSpec = { preset: AnimationPreset; customStart: string; customEnd: string };
 
-  const exportRangeSpec: AnimationRangeSpec = {
-    preset: animationPreset,
-    customStart: customAnimationStart,
-    customEnd: customAnimationEnd,
-  };
   const playbackRangeSpec: AnimationRangeSpec = {
     preset: playbackPreset,
     customStart: playbackRange.start,
@@ -1727,7 +1702,7 @@ export default function DualMapViewer() {
     // Booleans, not the state itself: `playbackPreload` is a fresh object on every rendered frame,
     // so depending on it detached and reattached these Leaflet listeners once per frame — 73 times
     // over a twelve-hour sequence.
-  }, [hasPlaybackOverlay, isPreparingPlayback]);
+  }, [hasPlaybackOverlay, isPreparingPlayback, map2Instance]);
 
   const restorePlaybackView = () => {
     const map = map2Instance.current;
@@ -1784,11 +1759,14 @@ export default function DualMapViewer() {
   // The rendered frames belong to one layer set; keeping them across a toggle would replay the
   // wrong imagery.
   const playbackLayersKeyRef = useRef(renderedWmsLayersKey);
+  // Must fire on a layer-set change and on nothing else: adding the playback state would re-run
+  // this whenever a sequence starts or stops, throwing away the cache it exists to protect.
   useEffect(() => {
     if (playbackLayersKeyRef.current === renderedWmsLayersKey) return;
     playbackLayersKeyRef.current = renderedWmsLayersKey;
     releasePlaybackCache();
     if (hasPlaybackOverlay || isPreparingPlayback) closePlayback();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [renderedWmsLayersKey]);
 
   // A hidden tab throttles the timer; pause rather than close, so coming back resumes where it was.
@@ -1812,24 +1790,6 @@ export default function DualMapViewer() {
   }, [isPlaybackBusy]);
 
   useEffect(() => releasePlaybackCache, []);
-
-  // Computed once per render (buildAnimationFrameTimes previously ran twice per render:
-  // once to check for an error, once more to get the frame count).
-  let computedAnimationRangeError: string | null = null;
-  let animationFrameTimesPreview: string[] = [];
-  try {
-    animationFrameTimesPreview = buildAnimationFrameTimes(exportRangeSpec);
-  } catch (error) {
-    computedAnimationRangeError = mapAnimationErrorCode(error instanceof Error ? error.message : '');
-  }
-  const animationEstimatedFrameCount = animationFrameTimesPreview.length;
-  const gifFileName = animationFrameTimesPreview.length > 0
-    ? `MTG_ANIMATION_${getExportFileBaseName(effectiveGifKind, hdEnhanceEnabled)}_${gifMaxDimension}px_${
-      animationFrameTimesPreview[0].replace('T', '_').replace(/:/g, '-')
-    }_to_${
-      animationFrameTimesPreview[animationFrameTimesPreview.length - 1].replace('T', '_').replace(/:/g, '-')
-    }.gif`
-    : '';
 
   const buildBaseExportOptions = () => {
     if (!map2Instance.current || !map2Ref.current) return null;
@@ -2006,8 +1966,31 @@ export default function DualMapViewer() {
     }
   };
 
+  /**
+   * The shortcut handlers, always current. A window listener rebuilt on every render is both waste
+   * and a trap: the version that closed over stale state is exactly how the arrow keys came to
+   * skip the animation's exit confirmation. Reading them from a ref at keypress time removes both
+   * problems at once.
+   */
+  const shortcutActionsRef = useRef({
+    handleTimeChange, jumpToLatest, openExportModal, requestPlaybackExit, resetAdjustments,
+    setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
+    setIsInfoOpen, shareCurrentViewWithFeedback,
+  });
+  // Writes a ref, never state: the rule sees the stored setState functions and assumes they are
+  // being called. Runs after every render deliberately — keeping the handlers current is the point.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    shortcutActionsRef.current = {
+      handleTimeChange, jumpToLatest, openExportModal, requestPlaybackExit, resetAdjustments,
+      setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
+      setIsInfoOpen, shareCurrentViewWithFeedback,
+    };
+  });
+
   useEffect(() => {
     const handleGlobalShortcuts = (event: KeyboardEvent) => {
+      const actions = shortcutActionsRef.current;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase() ?? '';
       const isEditable = target?.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select';
@@ -2018,7 +2001,7 @@ export default function DualMapViewer() {
 
       if (event.shiftKey && lowerKey === 's') {
         event.preventDefault();
-        void shareCurrentViewWithFeedback();
+        void actions.shareCurrentViewWithFeedback();
         return;
       }
 
@@ -2026,19 +2009,19 @@ export default function DualMapViewer() {
       // of `D`. It now opens the animation panel, which is where GIF and WebM live.
       if (lowerKey === 'a') {
         event.preventDefault();
-        setIsAnimationPanelOpen((previous) => !previous);
+        actions.setIsAnimationPanelOpen((previous) => !previous);
         return;
       }
 
       if (lowerKey === 'd') {
         event.preventDefault();
-        openExportModal();
+        actions.openExportModal();
         return;
       }
 
       if (lowerKey === 'f') {
         event.preventDefault();
-        setFireHotspotEnabled((prev) => !prev);
+        actions.setFireHotspotEnabled((prev) => !prev);
         return;
       }
 
@@ -2047,49 +2030,42 @@ export default function DualMapViewer() {
         // Same guard as the "Dernier" button: jumping to the latest image ends a running
         // animation, and a shortcut that skips the confirmation the button raises would make the
         // rule impossible to trust.
-        if (requestPlaybackExit(() => { void jumpToLatest(); })) return;
-        void jumpToLatest();
+        if (actions.requestPlaybackExit(() => { void actions.jumpToLatest(); })) return;
+        void actions.jumpToLatest();
         return;
       }
 
       if (lowerKey === 'r') {
         event.preventDefault();
-        resetAdjustments();
+        actions.resetAdjustments();
         return;
       }
 
       if (lowerKey === 's') {
         event.preventDefault();
-        setIsAdjustmentsOpen((prev) => !prev);
+        actions.setIsAdjustmentsOpen((prev) => !prev);
         return;
       }
 
       if (lowerKey === 'i') {
         event.preventDefault();
-        setIsInfoOpen((prev) => !prev);
+        actions.setIsInfoOpen((prev) => !prev);
         return;
       }
 
       if (key === '?') {
         event.preventDefault();
-        setIsHelpOpen((prev) => !prev);
+        actions.setIsHelpOpen((prev) => !prev);
       }
     };
 
     window.addEventListener('keydown', handleGlobalShortcuts);
     return () => window.removeEventListener('keydown', handleGlobalShortcuts);
-  }, [
-    handleTimeChange,
-    jumpToLatest,
-    openExportModal,
-    requestPlaybackExit,
-    resetAdjustments,
-    setFireHotspotEnabled,
-    setIsAdjustmentsOpen,
-    setIsHelpOpen,
-    setIsInfoOpen,
-    shareCurrentViewWithFeedback,
-  ]);
+    // Empty on purpose: every action the handler calls is read from `shortcutActionsRef` at the
+    // moment the key is pressed, so the listener is attached once for the life of the component
+    // instead of being torn down and rebuilt on every render — which is what listing the handlers
+    // here amounted to, since each one is a new function on each pass.
+  }, []);
 
   const dynamicTileStyleVars = {
     '--mtg-vis-brightness': visBrightness,
@@ -2257,22 +2233,16 @@ export default function DualMapViewer() {
 
           <button
             onClick={() => openExportModal()}
-            disabled={isExporting || isGifExporting || isWebmExporting}
+            disabled={isExporting}
             className={`flex items-center justify-center gap-2 w-11 h-11 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-md font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
               resolvedTheme === 'light'
                 ? 'bg-slate-900 text-white hover:bg-slate-700'
                 : 'bg-white text-black hover:bg-slate-200'
             }`}
           >
-            {isExporting || isGifExporting || isWebmExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
+            {isExporting ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Download className="w-4 h-4 shrink-0" />}
             <span className="hidden sm:inline">
-              {isExporting
-                ? `${t('generating')} ${downloadProgress}%`
-                : isGifExporting
-                  ? `${t('generating')} ${gifExportProgress}%`
-                  : isWebmExporting
-                    ? `${t('generating')} ${webmExportProgress}%`
-                    : t('export')}
+              {isExporting ? `${t('generating')} ${downloadProgress}%` : t('export')}
             </span>
           </button>
         </div>

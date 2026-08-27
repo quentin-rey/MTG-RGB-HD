@@ -342,12 +342,64 @@ export function TimeDock(props: TimeDockProps) {
   const totalMinutes = Number(hourPart) * 60 + Number(minutePart);
   const timeBehindLabel = formatTimeBehind(currentTime, latestAvailableTime);
 
+  /**
+   * While the time slider is being dragged, the position is held here instead of being pushed
+   * upward. Every ten-minute step used to commit immediately, so dragging across six hours fired
+   * thirty-six time changes — each one a full WMS grid prewarm for a frame the user was only
+   * passing through. The handle still tracks the finger and the read-out still follows it; only
+   * the loading waits for the release.
+   *
+   * Keyboard and track-clicks are unaffected: they never open a drag, so they commit at once.
+   */
+  const [scrubMinutes, setScrubMinutes] = useState<number | null>(null);
+
   const updateTimeFromTotalMinutes = (nextTotalMinutes: number) => {
     const normalized = Math.max(0, Math.min(23 * 60 + 50, Math.round(nextTotalMinutes / 10) * 10));
     const nextHour = String(Math.floor(normalized / 60)).padStart(2, '0');
     const nextMinute = String(normalized % 60).padStart(2, '0');
     onTimeChange(`${datePart}T${nextHour}:${nextMinute}`);
   };
+
+  // The pending value lives in a ref as well as in state: `pointerup` and `lostpointercapture`
+  // both fire at the end of a drag, and reading the state would let the second one commit again
+  // before React has flushed the first — which during playback means raising the exit dialog
+  // twice for one gesture.
+  const scrubRef = useRef<number | null>(null);
+
+  const beginScrub = () => {
+    scrubRef.current = totalMinutes;
+    setScrubMinutes(totalMinutes);
+  };
+
+  const moveScrub = (value: number) => {
+    scrubRef.current = value;
+    setScrubMinutes(value);
+  };
+
+  const commitScrub = () => {
+    const target = scrubRef.current;
+    if (target === null) return;
+    scrubRef.current = null;
+    setScrubMinutes(null);
+    if (target !== totalMinutes) updateTimeFromTotalMinutes(target);
+  };
+
+  // What the dock should read out: the position under the finger while dragging, the real current
+  // time otherwise.
+  const displayedMinutes = scrubMinutes ?? totalMinutes;
+  const displayedHour = String(Math.floor(displayedMinutes / 60)).padStart(2, '0');
+  const displayedMinute = String(displayedMinutes % 60).padStart(2, '0');
+
+  // Same reason as DualMapViewer's shortcut listener: read the action at keypress time rather than
+  // capturing it. Depending on the derived `totalMinutes` alone was what let the first arrow press
+  // during an animation slip past the exit confirmation, since that value is frozen while a
+  // sequence plays and the effect therefore never re-subscribed with a current callback.
+  const stepTimeRef = useRef(updateTimeFromTotalMinutes);
+  const totalMinutesRef = useRef(totalMinutes);
+  useEffect(() => {
+    stepTimeRef.current = updateTimeFromTotalMinutes;
+    totalMinutesRef.current = totalMinutes;
+  });
 
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
@@ -365,19 +417,13 @@ export function TimeDock(props: TimeDockProps) {
       const delta = event.key === 'ArrowLeft' ? -baseStep : baseStep;
       event.preventDefault();
       event.stopPropagation();
-      updateTimeFromTotalMinutes(totalMinutes + delta);
+      stepTimeRef.current(totalMinutesRef.current + delta);
     };
 
     // Capture phase ensures map keyboard handlers (Leaflet) do not consume arrows first.
     window.addEventListener('keydown', handleKeydown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-    // `onTimeChange` belongs here even though it changes on every render. During playback
-    // `currentTime` is frozen on the frame the animation was opened from, so `totalMinutes` never
-    // moves — and depending on it alone kept the callback captured *before* the animation started,
-    // the one whose playback guard still saw no session. The first arrow press then changed the
-    // time with no confirmation dialog at all (issue #78). Re-subscribing a window listener is far
-    // cheaper than rendering the frame that caused the re-render.
-  }, [datePart, onTimeChange, totalMinutes]);
+  }, []);
 
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
@@ -424,7 +470,7 @@ export function TimeDock(props: TimeDockProps) {
             }`}>
               {hasPlaybackSession
                 ? playbackFrames[Math.min(playbackIndex, playbackFrames.length - 1)].replace('T', ' ')
-                : `${datePart} ${hourPart}:${minutePart}`}
+                : `${datePart} ${displayedHour}:${displayedMinute}`}
             </span>
           </span>
         </div>
@@ -857,8 +903,17 @@ export function TimeDock(props: TimeDockProps) {
               min={0}
               max={23 * 60 + 50}
               step={10}
-              value={totalMinutes}
-              onChange={(e) => updateTimeFromTotalMinutes(Number(e.target.value))}
+              value={displayedMinutes}
+              onPointerDown={beginScrub}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (scrubRef.current !== null) moveScrub(next);
+                else updateTimeFromTotalMinutes(next);
+              }}
+              onPointerUp={commitScrub}
+              onPointerCancel={commitScrub}
+              onLostPointerCapture={commitScrub}
+              onBlur={commitScrub}
               className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
                 themedClass(isLight, 'bg-slate-300', 'bg-white/10')
               }`}
@@ -1763,7 +1818,6 @@ export function InfoModal(props: InfoModalProps) {
   );
 }
 
-type ExportMode = 'image' | 'gif' | 'webm';
 
 type ExportKindGridProps = {
   availableExportKinds: ExportKind[];
@@ -1884,7 +1938,6 @@ export function ExportModal(props: ExportModalProps) {
     onExportResolutionChange,
     onToggleImageKind,
     previewImages,
-    selectedExports,
     selectedExportKinds,
     t,
     theme,

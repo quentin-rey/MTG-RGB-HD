@@ -22,7 +22,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check
+      # `npm run lint` is tsc *and* oxlint. The type checker sees none of the hook dependency
+      # rules, and a stale dependency array is the shape of bug this project keeps producing: an
+      # effect that captured a callback from an earlier render, which type-checks perfectly. The
+      # first oxlint run also turned up two dozen unused declarations tsc had never mentioned,
+      # because `noUnusedLocals` is off.
+      - name: Type check and lint
         run: npm run lint
 
   # `npm run build` used to run only in deploy.yml, which triggers on push to main — i.e. after
