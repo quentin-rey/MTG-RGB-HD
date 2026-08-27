@@ -1785,9 +1785,15 @@ export default function DualMapViewer() {
   const wasPlaybackBusyRef = useRef(false);
   const isPlaybackBusy = playbackFrames.length > 0 || isPreparingPlayback;
   useEffect(() => {
-    if (isPlaybackBusy && !wasPlaybackBusyRef.current) setIsAnimationPanelOpen(true);
+    if (isPlaybackBusy && !wasPlaybackBusyRef.current) {
+      setIsAnimationPanelOpen(true);
+      // Both live in the map's own layer, underneath the frames: left open, they would sit there
+      // invisible for the whole sequence.
+      setIsAdjustmentsOpen(false);
+      setIsFireHotspotOpen(false);
+    }
     wasPlaybackBusyRef.current = isPlaybackBusy;
-  }, [isPlaybackBusy]);
+  }, [isPlaybackBusy, setIsAdjustmentsOpen, setIsFireHotspotOpen]);
 
   useEffect(() => releasePlaybackCache, []);
 
@@ -2262,6 +2268,7 @@ export default function DualMapViewer() {
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
           <Map2ControlBar
+            isLocked={hasPlaybackOverlay || isPreparingPlayback}
             activeLayers={activeLayers}
             adjustmentsRef={adjustmentsRef}
             autoReduceVisAtNight={autoReduceVisAtNight}

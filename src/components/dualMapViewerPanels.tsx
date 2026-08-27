@@ -2438,6 +2438,8 @@ export function ZoomControl(props: ZoomControlProps) {
 
 type Map2ControlBarProps = {
   activeLayers: ActiveLayers;
+  /** True while an animation covers the map: the bar is unreachable rather than merely unseen. */
+  isLocked: boolean;
   adjustmentsRef: React.RefObject<HTMLDivElement | null>;
   autoReduceVisAtNight: boolean;
   effectiveHybridVisOpacity: number;
@@ -2501,6 +2503,7 @@ type Map2ControlBarProps = {
 export function Map2ControlBar(props: Map2ControlBarProps) {
   const {
     activeLayers,
+    isLocked,
     adjustmentsRef,
     autoReduceVisAtNight,
     effectiveHybridVisOpacity,
@@ -2569,7 +2572,20 @@ export function Map2ControlBar(props: Map2ControlBarProps) {
   };
 
   return (
-    <div className="relative ml-auto pointer-events-auto flex items-center gap-2 flex-wrap justify-end">
+    /*
+     * `inert` while an animation plays. The rendered frames sit above this bar (z-410 against
+     * z-400) so none of it can be seen, but they are `pointer-events-none` so every click went
+     * straight through to controls the user could no longer see — opening the adjustments panel,
+     * which is itself hidden, changed state with no feedback whatsoever. `inert` blocks the
+     * pointer, the keyboard and the accessibility tree in one attribute, which is the honest
+     * treatment for something invisible.
+     */
+    <div
+      inert={isLocked}
+      className={`relative ml-auto pointer-events-auto flex items-center gap-2 flex-wrap justify-end ${
+        isLocked ? 'opacity-0' : ''
+      }`}
+    >
       <div className={`flex items-center gap-1 backdrop-blur-md p-1 rounded-md border shadow-xl ${
         themedClass(isLight, 'bg-white/95 border-slate-300', 'bg-black/60 border-white/10')
       }`}>
