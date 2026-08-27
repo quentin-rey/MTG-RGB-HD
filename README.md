@@ -59,9 +59,11 @@ area) stay readable instead of turning into overlapping clutter.
 - **Still images** (PNG/JPEG, up to 4096px) — a genuine WMS re-render at the
   requested resolution, not a browser-side upscale — with live preview
   thumbnails and automatic ZIP bundling for multi-format selections
-- **Animations** as GIF or WebM video, sharing the same time-range picker:
-  up to 73 frames (a full 12h window), configurable FPS and resolution, plus
-  format-specific controls (GIF palette/dithering, WebM quality)
+- **In-app animation playback**: pick a range (3h / 6h / 12h / custom, up to
+  73 frames), a render quality and a speed, watch the sequence play over the
+  map with an optional boomerang, then download exactly what you just watched
+  as a GIF or a WebM — no second render. GIF palette/dithering, final pause
+  and WebM quality live in the panel's collapsible **File settings**
 - Borders, departments, cities, the fire hotspot layer, and a source
   watermark are baked directly into every export, at every resolution
 - Resolution- and timestamp-tagged filenames that always match what you get
@@ -88,8 +90,8 @@ area) stay readable instead of turning into overlapping clutter.
   | --- | --- |
   | `←` `→` | ±10 min (Shift: ±30 min, Ctrl/Cmd: ±60 min) |
   | `L` | Jump to latest available time |
-  | `A` | Open Export on the animation tab (GIF/WebM) |
-  | `D` | Open Export on the still-image tab |
+  | `A` | Open/close the animation panel |
+  | `D` | Open the export modal (still images) |
   | `F` | Toggle fire hotspot overlay |
   | `S` | Toggle adjustments panel |
   | `I` | Toggle info modal |
@@ -243,11 +245,14 @@ that *increases* file size, so it's not a size-reduction lever.
 5. **Spot fires**: Click the 🔥 button to open its own panel, enable the fire
    hotspot overlay, and tune opacity/sensitivity/brightness thresholds live
    against the current view
-6. **Export**: Click "Export" to open the export modal. On the **Image** tab
-   you preview each available format as a thumbnail, pick a file format
-   (PNG/JPEG) and resolution, then export — a single file if one format is
-   selected, a ZIP if several are. The **Animation GIF** and **Vidéo WebM**
-   tabs share a time-range picker for animated exports
+6. **Export a still**: Click "Export" to open the export modal. You preview
+   each available format as a thumbnail, pick a file format (PNG/JPEG) and
+   resolution, then export — a single file if one format is selected, a ZIP
+   if several are
+7. **Animate**: Click the film button in the time dock (or press `A`) to open
+   the animation panel. Choose a range and quality, launch it, and the
+   sequence plays over the map; the GIF and WEBM buttons then write the
+   frames already in memory straight to a file
 
 ---
 

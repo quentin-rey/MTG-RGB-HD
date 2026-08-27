@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import { Bug, CircleHelp, Clock, History, Info, Loader2, Minus, Monitor, Moon, Plus, RefreshCw, Sliders, Sun, Wrench, X } from 'lucide-react';
+import { ArrowLeftRight, Bug, CircleHelp, Clock, Download, Film, History, Info, Loader2, Minus, Monitor, Moon, Pause, Play, Plus, RefreshCw, Sliders, Square, Sun, Wrench, X } from 'lucide-react';
 
 import {
   type ActiveLayers,
@@ -14,6 +14,7 @@ import {
   type MapOptions,
 } from './dualMapViewerShared';
 import type { StillImageFormat } from './dualMapExport';
+import type { AnimationPreset } from './shareSnapshot';
 import type { Language, Translator } from './i18n';
 
 type UiTheme = 'dark' | 'light';
@@ -33,12 +34,57 @@ type TimeDockProps = {
   currentTime: string;
   isAtLatest: boolean;
   isBackgroundRefreshing: boolean;
+  isPlaying: boolean;
   isSyncingLatest: boolean;
+  latestAvailableDatePart: string;
   latestAvailableTime: string;
+  playbackCustomDate: string;
+  playbackCustomDayMaxStep: number;
+  playbackCustomEndStep: number;
+  playbackCustomStartStep: number;
+  playbackFps: number;
+  playbackFpsMax: number;
+  playbackFpsMin: number;
+  isAnimationPanelOpen: boolean;
+  isPlaybackStale: boolean;
+  gifColorCount: 64 | 128 | 256;
+  gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
+  gifFinalPauseMs: number;
+  gifPaletteMode: 'per-frame' | 'global';
+  webmQuality: number;
+  playbackFramePreview: { count: number; start: string; end: string } | null;
+  playbackFrames: string[];
+  playbackIndex: number;
+  playbackPreload: { done: number; total: number } | null;
+  playbackBoomerang: boolean;
+  playbackSkippedCount: number;
+  playbackDownloadFormat: 'gif' | 'webm' | null;
+  playbackDownloadProgress: number;
+  playbackPreset: AnimationPreset;
+  playbackQuality: number;
+  playbackQualityChoices: readonly number[];
   t: Translator;
   theme: UiTheme;
   onAutoUpdateToggle: () => void;
   onLatest: () => void;
+  onPlaybackCustomDateChange: (date: string) => void;
+  onPlaybackCustomEndStepChange: (step: number) => void;
+  onPlaybackCustomStartStepChange: (step: number) => void;
+  onPlaybackFpsChange: (fps: number) => void;
+  onPlaybackBoomerangToggle: () => void;
+  onAnimationPanelToggle: () => void;
+  onPlaybackRelaunch: () => void;
+  onGifColorCountChange: (value: 64 | 128 | 256) => void;
+  onGifDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
+  onGifFinalPauseChange: (value: number) => void;
+  onGifPaletteModeChange: (value: 'per-frame' | 'global') => void;
+  onWebmQualityChange: (value: number) => void;
+  onPlaybackDownload: (format: 'gif' | 'webm') => void;
+  onPlaybackPresetChange: (preset: AnimationPreset) => void;
+  onPlaybackQualityChange: (quality: number) => void;
+  onPlaybackSeek: (index: number) => void;
+  onPlaybackStop: () => void;
+  onPlaybackToggle: () => void;
   onTimeChange: (newTime: string) => void;
 };
 
@@ -59,21 +105,237 @@ function formatTimeBehind(currentTime: string, latestAvailableTime: string): str
   return `${Math.floor(hours / 24)} j`;
 }
 
+/**
+ * Asked when the map is panned or zoomed while an animation is running or being prepared. The
+ * frames are rendered for one framing, so a move makes them describe a view that is no longer
+ * there — but silently ending the animation for a stray scroll is worse than asking (issue #78).
+ */
+export function PlaybackExitModal(props: {
+  mode: 'session' | 'preload';
+  reason: 'view' | 'time';
+  t: Translator;
+  theme: UiTheme;
+  onLeave: () => void;
+  onResume: () => void;
+}) {
+  const { mode, reason, t, theme, onLeave, onResume } = props;
+  const isLight = theme === 'light';
+  // Escape resumes rather than leaves: it is the conventional "cancel what I just did" key, and
+  // here the thing being cancelled is the gesture that would have thrown the sequence away.
+  useEffect(() => {
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onResume();
+    };
+    window.addEventListener('keydown', handleEsc, { capture: true });
+    return () => window.removeEventListener('keydown', handleEsc, { capture: true });
+  }, [onResume]);
+  const resumeLabel = t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume');
+  const resumeOutcome = reason === 'time'
+    ? t('playbackExitTimeResumeOutcome')
+    : t(mode === 'preload' ? 'playbackExitRestartOutcome' : 'playbackExitResumeOutcome');
+  // During preparation nothing is laid over the map, so the move *is* visible and the wording has
+  // to differ: only a running animation hides what the user just did.
+  const leaveOutcome = reason === 'time'
+    ? t('playbackExitTimeLeaveOutcome')
+    : t(mode === 'preload' ? 'playbackExitLeavePreloadOutcome' : 'playbackExitLeaveOutcome');
+  const lead = reason === 'time'
+    ? t('playbackExitTimeLead')
+    : t(mode === 'preload' ? 'playbackExitPreloadLead' : 'playbackExitLead');
+
+  // Each choice is spelled out against its own button label rather than buried in a sentence:
+  // the point of this dialog is that both gestures cannot win, and that has to be readable at a
+  // glance rather than parsed out of a semicolon.
+  const outcome = (label: string, text: string, emphasised: boolean) => (
+    <li className="flex gap-2">
+      <span className={`mt-[0.45rem] w-1 h-1 rounded-full shrink-0 ${
+        emphasised
+          ? themedClass(isLight, 'bg-slate-900', 'bg-blue-400')
+          : themedClass(isLight, 'bg-slate-400', 'bg-slate-500')
+      }`} />
+      <span>
+        <span className={`font-medium ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{label}</span>
+        {' '}
+        {text}
+      </span>
+    </li>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[560] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('playbackExitTitle')}
+        className={`w-[min(92vw,30rem)] rounded-xl border shadow-2xl ${
+          themedClass(isLight, 'bg-white border-slate-300', 'bg-[#141414] border-white/15')
+        }`}
+      >
+        <div className="flex items-start gap-3 p-4 sm:p-5">
+          <span className={`mt-0.5 shrink-0 flex items-center justify-center w-8 h-8 rounded-full ${
+            themedClass(isLight, 'bg-amber-100 text-amber-700', 'bg-amber-500/15 text-amber-300')
+          }`}>
+            <Film className="w-4 h-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className={`text-sm sm:text-base font-semibold leading-snug ${
+              themedClass(isLight, 'text-slate-900', 'text-white')
+            }`}>
+              {t('playbackExitTitle')}
+            </h2>
+            <p className={`mt-1.5 text-xs sm:text-[13px] leading-relaxed ${
+              themedClass(isLight, 'text-slate-600', 'text-slate-300')
+            }`}>
+              {lead}
+            </p>
+            <ul className={`mt-3 space-y-1.5 text-xs sm:text-[13px] leading-relaxed ${
+              themedClass(isLight, 'text-slate-600', 'text-slate-300')
+            }`}>
+              {outcome(resumeLabel, resumeOutcome, true)}
+              {outcome(t('playbackExitLeave'), leaveOutcome, false)}
+            </ul>
+          </div>
+        </div>
+        <div className={`flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-4 sm:px-5 py-3 border-t rounded-b-xl ${
+          themedClass(isLight, 'bg-slate-50 border-slate-200', 'bg-white/[0.03] border-white/10')
+        }`}>
+          <button
+            onClick={onLeave}
+            className={`rounded-md border px-3 py-2 text-xs sm:text-sm transition-colors ${
+              isLight
+                ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
+            }`}
+          >
+            {t('playbackExitLeave')}
+          </button>
+          <button
+            onClick={onResume}
+            autoFocus
+            className={`rounded-md border px-3 py-2 text-xs sm:text-sm font-medium transition-colors ${
+              isLight
+                ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
+                : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+            }`}
+          >
+            {resumeLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TimeDock(props: TimeDockProps) {
   const {
     autoUpdateEnabled,
     currentTime,
     isAtLatest,
     isBackgroundRefreshing,
+    isPlaying,
     isSyncingLatest,
+    latestAvailableDatePart,
     latestAvailableTime,
+    playbackCustomDate,
+    playbackCustomDayMaxStep,
+    playbackCustomEndStep,
+    playbackCustomStartStep,
+    playbackFps,
+    playbackFpsMax,
+    playbackFpsMin,
+    isAnimationPanelOpen,
+    isPlaybackStale,
+    gifColorCount,
+    gifDitherLevel,
+    gifFinalPauseMs,
+    gifPaletteMode,
+    webmQuality,
+    playbackFramePreview,
+    playbackFrames,
+    playbackIndex,
+    playbackPreload,
+    playbackBoomerang,
+    playbackSkippedCount,
+    playbackDownloadFormat,
+    playbackDownloadProgress,
+    playbackPreset,
+    playbackQuality,
+    playbackQualityChoices,
     onAutoUpdateToggle,
     onLatest,
+    onPlaybackCustomDateChange,
+    onPlaybackCustomEndStepChange,
+    onPlaybackCustomStartStepChange,
+    onPlaybackFpsChange,
+    onPlaybackBoomerangToggle,
+    onAnimationPanelToggle,
+    onPlaybackRelaunch,
+    onGifColorCountChange,
+    onGifDitherLevelChange,
+    onGifFinalPauseChange,
+    onGifPaletteModeChange,
+    onWebmQualityChange,
+    onPlaybackDownload,
+    onPlaybackPresetChange,
+    onPlaybackQualityChange,
+    onPlaybackSeek,
+    onPlaybackStop,
+    onPlaybackToggle,
     onTimeChange,
     t,
     theme,
   } = props;
+  const hasPlaybackSession = playbackFrames.length > 0;
+  // Collapsed by default: these change what the *file* looks like, not what plays, and the dock
+  // is already dense on a phone. They live here rather than in the export modal because since
+  // issue #78 that modal produces stills only.
+  const [areFileSettingsOpen, setAreFileSettingsOpen] = useState(false);
+  // Owned by DualMapViewer since the `A` shortcut has to reach it too; the panel stays
+  // collapsible while a sequence runs, because folding it away is a legitimate way to watch the
+  // map without the controls in front of it.
+  const showAnimationPanel = isAnimationPanelOpen;
+  const playbackRangeLabel = hasPlaybackSession
+    ? `${playbackFrames[0].slice(11)} → ${playbackFrames[playbackFrames.length - 1].slice(11)}`
+    : null;
   const isLight = theme === 'light';
+  const playbackSpeedControls = (
+    <>
+      {t('playbackSpeed')}
+      <input
+        type="range"
+        min={playbackFpsMin}
+        max={playbackFpsMax}
+        step={1}
+        value={playbackFps}
+        onChange={(e) => onPlaybackFpsChange(Number(e.target.value))}
+        aria-label={`${t('playbackSpeed')} (${t('playbackSpeedUnit')})`}
+        className={`w-20 sm:w-24 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+          themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+        }`}
+      />
+      <span className="font-mono tabular-nums w-[3.5rem] shrink-0">{playbackFps} {t('playbackSpeedUnit')}</span>
+      <button
+        onClick={onPlaybackBoomerangToggle}
+        title={t('playbackBoomerangHint')}
+        aria-label={t('playbackBoomerang')}
+        aria-pressed={playbackBoomerang}
+        className={`inline-flex items-center gap-1 border rounded px-1.5 py-0.5 transition-colors ${
+          playbackBoomerang
+            ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+            : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+        }`}
+      >
+        <ArrowLeftRight className="w-3 h-3 shrink-0" />
+      </button>
+    </>
+  );
+
+  const stepToLabel = (step: number) => {
+    const total = Math.max(0, Math.min(143, Math.round(step))) * 10;
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  };
   const [isMobileActionsExpanded, setIsMobileActionsExpanded] = useState(false);
   const [datePart, timePart] = currentTime.split('T');
   const [hourPart, minutePart] = timePart.split(':');
@@ -109,7 +371,13 @@ export function TimeDock(props: TimeDockProps) {
     // Capture phase ensures map keyboard handlers (Leaflet) do not consume arrows first.
     window.addEventListener('keydown', handleKeydown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-  }, [totalMinutes]);
+    // `onTimeChange` belongs here even though it changes on every render. During playback
+    // `currentTime` is frozen on the frame the animation was opened from, so `totalMinutes` never
+    // moves — and depending on it alone kept the callback captured *before* the animation started,
+    // the one whose playback guard still saw no session. The first arrow press then changed the
+    // time with no confirmation dialog at all (issue #78). Re-subscribing a window listener is far
+    // cheaper than rendering the frame that caused the re-render.
+  }, [datePart, onTimeChange, totalMinutes]);
 
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
@@ -131,7 +399,7 @@ export function TimeDock(props: TimeDockProps) {
                 forget about — this is the cue that you are not on live imagery, and a shortcut
                 back. Only shown once genuinely behind (>= one 10-min slot), so it can't flicker
                 on the boundary. */}
-            {!isAtLatest && timeBehindLabel && (
+            {!isAtLatest && timeBehindLabel && !hasPlaybackSession && (
               <button
                 onClick={onLatest}
                 disabled={isSyncingLatest}
@@ -147,9 +415,426 @@ export function TimeDock(props: TimeDockProps) {
                 <span className="font-mono">−{timeBehindLabel}</span>
               </button>
             )}
-            <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{datePart} {hourPart}:{minutePart}</span>
+            {/* While a sequence is on screen the headline time is the frame being shown, not the
+                map's own time — which stays where the animation was opened from. */}
+            <span className={`font-mono ${
+              hasPlaybackSession
+                ? themedClass(isLight, 'text-blue-700', 'text-blue-300')
+                : themedClass(isLight, 'text-slate-900', 'text-white')
+            }`}>
+              {hasPlaybackSession
+                ? playbackFrames[Math.min(playbackIndex, playbackFrames.length - 1)].replace('T', ' ')
+                : `${datePart} ${hourPart}:${minutePart}`}
+            </span>
           </span>
         </div>
+
+        {/* Animation panel (issue #78). Collapsed by default so the dock keeps its usual height,
+            and never a modal: an animation is something you watch, so covering the map would
+            defeat it — the same reason AdjustmentsPanel is an anchored dropdown. */}
+        {showAnimationPanel && (
+          <div className={`mb-2 rounded-lg border px-2.5 py-2 space-y-2 ${
+            themedClass(isLight, 'bg-slate-50 border-slate-300', 'bg-white/5 border-white/10')
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+              <span className={`text-[9px] sm:text-[10px] uppercase tracking-wide shrink-0 ${
+                themedClass(isLight, 'text-slate-500', 'text-slate-400')
+              }`}>
+                {t('playbackRangeSetting')}
+              </span>
+              <div className="grid grid-cols-4 gap-1 sm:flex sm:gap-1 flex-1 min-w-0">
+                {([['3h', 'animationLast3h'], ['6h', 'animationLast6h'], ['12h', 'animationLast12h'], ['custom', 'playbackRangeCustomShort']] as const).map(([value, key]) => (
+                  <button
+                    key={value}
+                    onClick={() => onPlaybackPresetChange(value)}
+                    className={`border rounded-md px-1.5 py-1 text-[10px] sm:text-[11px] truncate transition-colors ${
+                      playbackPreset === value
+                        ? isLight
+                          ? 'bg-slate-900 border-slate-900 text-white'
+                          : 'bg-white/20 border-white/30 text-white'
+                        : isLight
+                          ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                          : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                    }`}
+                    title={t(key)}
+                  >
+                    {value === 'custom' ? t('playbackRangeCustomShort') : value}
+                  </button>
+                ))}
+              </div>
+              <span className={`hidden sm:inline-flex items-center gap-1.5 shrink-0 text-[10px] ${
+                themedClass(isLight, 'text-slate-600', 'text-slate-400')
+              }`}>
+                {playbackSpeedControls}
+              </span>
+            </div>
+
+            {playbackPreset === 'custom' && (
+              <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+                <input
+                  type="date"
+                  max={latestAvailableDatePart}
+                  value={playbackCustomDate}
+                  onChange={(e) => { if (e.target.value) onPlaybackCustomDateChange(e.target.value); }}
+                  className={`sm:w-[9.5rem] w-full border rounded-md px-2 py-1 text-[11px] outline-none focus:border-blue-500 cursor-pointer ${
+                    isLight
+                      ? 'bg-white border-slate-300 text-slate-900'
+                      : 'bg-[#222] border-white/10 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert'
+                  }`}
+                />
+                <div className="flex-1 min-w-0 grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
+                  <span className={`font-mono text-[10px] ${themedClass(isLight, 'text-slate-600', 'text-slate-400')}`}>
+                    {stepToLabel(playbackCustomStartStep)}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, playbackCustomDayMaxStep)}
+                    step={1}
+                    value={playbackCustomStartStep}
+                    onChange={(e) => onPlaybackCustomStartStepChange(Number(e.target.value))}
+                    aria-label={t('animationStart')}
+                    className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                      themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                    }`}
+                  />
+                  <span className={`font-mono text-[10px] ${themedClass(isLight, 'text-slate-600', 'text-slate-400')}`}>
+                    {stepToLabel(playbackCustomEndStep)}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, playbackCustomDayMaxStep)}
+                    step={1}
+                    value={playbackCustomEndStep}
+                    onChange={(e) => onPlaybackCustomEndStepChange(Number(e.target.value))}
+                    aria-label={t('animationEnd')}
+                    className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                      themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                    }`}
+                  />
+                </div>
+              </div>
+            )}
+
+            {playbackPreload ? (
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-blue-400" />
+                <div className="flex-1 min-w-0">
+                  <div className={`flex items-center justify-between text-[10px] sm:text-[11px] ${
+                    themedClass(isLight, 'text-slate-700', 'text-slate-300')
+                  }`}>
+                    <span className="truncate">{t('playbackPreparing')}</span>
+                    <span className="font-mono shrink-0">{playbackPreload.done}/{playbackPreload.total}</span>
+                  </div>
+                  <div className={`mt-1 h-1 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-200 ease-out"
+                      style={{ width: `${Math.round((playbackPreload.done / Math.max(1, playbackPreload.total)) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={onPlaybackToggle}
+                  className={`shrink-0 border rounded-md px-2 py-1 text-[10px] sm:text-[11px] transition-colors ${
+                    isLight
+                      ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                      : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
+                  }`}
+                >
+                  {t('playbackCancel')}
+                </button>
+              </div>
+            ) : hasPlaybackSession ? (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onPlaybackToggle}
+                    title={isPlaying ? t('playbackPause') : t('playbackPlay')}
+                    aria-label={isPlaying ? t('playbackPause') : t('playbackPlay')}
+                    className={`shrink-0 flex items-center justify-center rounded-md border w-9 h-9 sm:w-8 sm:h-8 transition-colors ${
+                      isLight
+                        ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
+                        : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+                    }`}
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, playbackFrames.length - 1)}
+                    step={1}
+                    value={Math.min(playbackIndex, playbackFrames.length - 1)}
+                    onChange={(e) => onPlaybackSeek(Number(e.target.value))}
+                    aria-label={t('playbackSeekAria')}
+                    className={`flex-1 min-w-0 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                      themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                    }`}
+                  />
+                  <span className="shrink-0 inline-flex">
+                    {(['gif', 'webm'] as const).map((format, index) => {
+                      const isWriting = playbackDownloadFormat === format;
+                      return (
+                        <button
+                          key={format}
+                          onClick={() => onPlaybackDownload(format)}
+                          disabled={playbackDownloadFormat !== null}
+                          title={`${t('playbackDownload')} — ${format.toUpperCase()} · ${t('playbackDownloadHint')}`}
+                          aria-label={`${t('playbackDownload')} ${format.toUpperCase()}`}
+                          className={`flex items-center justify-center gap-1 border px-1.5 h-9 sm:h-8 text-[10px] font-medium tabular-nums transition-colors disabled:opacity-60 disabled:cursor-wait ${
+                            index === 0 ? 'rounded-l-md' : 'rounded-r-md -ml-px'
+                          } ${
+                            isLight
+                              ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                              : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                          }`}
+                        >
+                          {isWriting
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : index === 0 ? <Download className="w-3 h-3" /> : null}
+                          {isWriting && playbackDownloadProgress > 0
+                            ? `${playbackDownloadProgress}%`
+                            : format.toUpperCase()}
+                        </button>
+                      );
+                    })}
+                  </span>
+                  <button
+                    onClick={onPlaybackStop}
+                    title={t('playbackStop')}
+                    aria-label={t('playbackStop')}
+                    className={`shrink-0 flex items-center justify-center rounded-md border w-9 h-9 sm:w-8 sm:h-8 transition-colors ${
+                      isLight
+                        ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                        : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                    }`}
+                  >
+                    <Square className="w-3 h-3" />
+                  </button>
+                </div>
+                {/* The range and quality controls stay live during a session, but pressing play
+                    replays the cached sequence — so when the selection no longer matches what is
+                    on screen, say so and offer the rebuild rather than letting them look inert. */}
+                {hasPlaybackSession && (
+                  <div className={`rounded-md border ${themedClass(isLight, 'border-slate-300 bg-white', 'border-white/10 bg-black/20')}`}>
+                    <button
+                      onClick={() => setAreFileSettingsOpen((previous) => !previous)}
+                      aria-expanded={areFileSettingsOpen}
+                      className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-[10px] transition-colors ${
+                        themedClass(isLight, 'text-slate-600 hover:text-slate-900', 'text-slate-400 hover:text-slate-200')
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <Wrench className="w-3 h-3 shrink-0" />
+                        {t('playbackFileSettings')}
+                      </span>
+                      <span className="font-mono opacity-70">{areFileSettingsOpen ? '−' : '+'}</span>
+                    </button>
+                    {areFileSettingsOpen && (
+                      <div className={`px-2 pb-2 pt-1 space-y-1.5 text-[10px] border-t ${
+                        themedClass(isLight, 'border-slate-200 text-slate-600', 'border-white/10 text-slate-400')
+                      }`}>
+                        <p className={themedClass(isLight, 'text-slate-500', 'text-slate-500')}>{t('playbackFileSettingsHint')}</p>
+                        {([
+                          [t('animationGifColorCount'), [64, 128, 256], gifColorCount, (v: number) => onGifColorCountChange(v as 64 | 128 | 256), (v: number) => String(v)],
+                        ] as const).map(([label, choices, value, onChange, render]) => (
+                          <div key={label} className="flex items-center justify-between gap-2">
+                            <span className="truncate">{label}</span>
+                            <span className="inline-flex shrink-0">
+                              {choices.map((choice, index) => (
+                                <button
+                                  key={choice}
+                                  onClick={() => onChange(choice)}
+                                  className={`border px-1.5 py-0.5 transition-colors ${
+                                    index === 0 ? 'rounded-l' : index === choices.length - 1 ? 'rounded-r -ml-px' : '-ml-px'
+                                  } ${
+                                    value === choice
+                                      ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                      : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                  }`}
+                                >
+                                  {render(choice)}
+                                </button>
+                              ))}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifPaletteMode')}</span>
+                          <span className="inline-flex shrink-0">
+                            {(['per-frame', 'global'] as const).map((mode, index) => (
+                              <button
+                                key={mode}
+                                onClick={() => onGifPaletteModeChange(mode)}
+                                className={`border px-1.5 py-0.5 transition-colors ${index === 0 ? 'rounded-l' : 'rounded-r -ml-px'} ${
+                                  gifPaletteMode === mode
+                                    ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                    : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                }`}
+                              >
+                                {t(mode === 'per-frame' ? 'animationPaletteModePerFrame' : 'animationPaletteModeGlobal')}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifDither')}</span>
+                          <span className="inline-flex shrink-0">
+                            {([
+                              ['none', 'animationDitherNone'],
+                              ['low', 'animationDitherLow'],
+                              ['medium', 'animationDitherMedium'],
+                              ['high', 'animationDitherHigh'],
+                            ] as const).map(([level, levelKey], index) => (
+                              <button
+                                key={level}
+                                onClick={() => onGifDitherLevelChange(level)}
+                                className={`border px-1.5 py-0.5 transition-colors ${
+                                  index === 0 ? 'rounded-l' : index === 3 ? 'rounded-r -ml-px' : '-ml-px'
+                                } ${
+                                  gifDitherLevel === level
+                                    ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                    : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                }`}
+                              >
+                                {t(levelKey)}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifFinalPause')}</span>
+                          <span className="inline-flex items-center gap-1.5 shrink-0">
+                            <input
+                              type="range"
+                              min={0}
+                              max={2000}
+                              step={500}
+                              value={gifFinalPauseMs}
+                              onChange={(e) => onGifFinalPauseChange(Number(e.target.value))}
+                              aria-label={t('animationGifFinalPause')}
+                              className={`w-20 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                                themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                              }`}
+                            />
+                            <span className="font-mono tabular-nums w-8 text-right">{(gifFinalPauseMs / 1000).toFixed(1)}s</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationWebmQuality')}</span>
+                          <span className="inline-flex items-center gap-1.5 shrink-0">
+                            <input
+                              type="range"
+                              min={0.5}
+                              max={1}
+                              step={0.05}
+                              value={webmQuality}
+                              onChange={(e) => onWebmQualityChange(Number(e.target.value))}
+                              aria-label={t('animationWebmQuality')}
+                              className={`w-20 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                                themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                              }`}
+                            />
+                            <span className="font-mono tabular-nums w-8 text-right">{Math.round(webmQuality * 100)}%</span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {isPlaybackStale && (
+                  <button
+                    onClick={onPlaybackRelaunch}
+                    className={`w-full flex items-center justify-center gap-1.5 border rounded-md px-2 py-1.5 text-[10px] sm:text-[11px] font-medium transition-colors ${
+                      isLight
+                        ? 'bg-amber-100 hover:bg-amber-200 border-amber-400 text-amber-900'
+                        : 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <RefreshCw className="w-3 h-3 shrink-0" />
+                    {playbackFramePreview
+                      ? `${t('playbackRelaunch')} · ${t('playbackFramesCount').replace('{count}', String(playbackFramePreview.count))}`
+                      : t('playbackRelaunch')}
+                  </button>
+                )}
+                <div className={`flex items-center justify-between gap-2 text-[10px] ${
+                  themedClass(isLight, 'text-slate-600', 'text-slate-400')
+                }`}>
+                  <span className="font-mono truncate">
+                    {playbackFrames[Math.min(playbackIndex, playbackFrames.length - 1)].slice(11)}
+                    {' · '}
+                    {t('playbackFrameOf')
+                      .replace('{current}', String(playbackIndex + 1))
+                      .replace('{total}', String(playbackFrames.length))}
+                  </span>
+                  <span className="hidden sm:inline font-mono truncate opacity-80">{playbackRangeLabel}</span>
+                  {playbackSkippedCount > 0 && (
+                    <span
+                      className={`shrink-0 ${themedClass(isLight, 'text-amber-700', 'text-amber-300')}`}
+                      title={t('playbackSkipped').replace('{count}', String(playbackSkippedCount))}
+                    >
+                      {t('playbackSkipped').replace('{count}', String(playbackSkippedCount))}
+                    </span>
+                  )}
+                  <span className={`inline-flex sm:hidden items-center gap-1.5 shrink-0 text-[10px] ${
+                    themedClass(isLight, 'text-slate-600', 'text-slate-400')
+                  }`}>
+                    {playbackSpeedControls}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className={`flex items-center justify-between gap-2 text-[10px] ${
+                  themedClass(isLight, 'text-slate-600', 'text-slate-400')
+                }`}>
+                  <span className="inline-flex items-center gap-1.5 shrink-0">
+                    {t('playbackQuality')}
+                    {playbackQualityChoices.map((quality, index) => (
+                      <button
+                        key={quality}
+                        onClick={() => onPlaybackQualityChange(quality)}
+                        title={`${quality} px`}
+                        className={`border rounded px-1.5 py-0.5 transition-colors ${
+                          quality === playbackQuality
+                            ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                            : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                        }`}
+                      >
+                        {t(index === 0 ? 'playbackQualityFast' : index === 1 ? 'playbackQualityBalanced' : 'playbackQualityDetailed')}
+                      </button>
+                    ))}
+                  </span>
+                  {playbackFramePreview && (
+                    <span className="font-mono truncate text-right">
+                      {t('playbackResolvedRange')
+                        .replace('{start}', playbackFramePreview.start.replace('T', ' '))
+                        .replace('{end}', playbackFramePreview.end.replace('T', ' '))}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={onPlaybackToggle}
+                  className={`w-full flex items-center justify-center gap-2 border rounded-md px-2 py-2 sm:py-1.5 text-[11px] sm:text-xs font-medium transition-colors ${
+                    isLight
+                      ? 'bg-slate-900 hover:bg-slate-700 border-slate-900 text-white'
+                      : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+                  }`}
+                >
+                  <Play className="w-3.5 h-3.5 shrink-0" />
+                  {t('playbackStart')}
+                  {playbackFramePreview && (
+                    <span className="font-mono opacity-80">
+                      · {t('playbackFramesCount').replace('{count}', String(playbackFramePreview.count))}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <input
@@ -200,10 +885,10 @@ export function TimeDock(props: TimeDockProps) {
             {isMobileActionsExpanded ? t('hideActions') : t('showActions')}
           </button>
 
-          {/* 6 actions: two rows of 3 on mobile rather than a 6-wide grid, which would squeeze
+          {/* 7 actions: rows of 3 on mobile rather than one wide grid, which would squeeze
               each button well below the ~44px minimum touch target on narrow phones. Unchanged
               single flex row from sm: up. */}
-          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-center sm:gap-1 sm:!flex`}>
+          <div className={`${isMobileActionsExpanded ? 'grid' : 'hidden'} grid-cols-3 gap-1 sm:flex sm:items-stretch sm:gap-1 sm:!flex`}>
             <button
               onClick={() => updateTimeFromTotalMinutes(totalMinutes - 30)}
               className={`border rounded-md px-2 py-1 text-[11px] transition-colors ${
@@ -243,6 +928,27 @@ export function TimeDock(props: TimeDockProps) {
               }`}
             >
               +30m
+            </button>
+            {/* Issue #78: the animation lives in the time dock rather than the export modal — it
+                is a way of *looking* at the imagery, not of producing a file. The button opens the
+                panel rather than starting straight away: preparing a sequence costs a render per
+                frame, which is not something to trigger by a stray click. */}
+            <button
+              onClick={onAnimationPanelToggle}
+              title={t('playbackPanelToggle')}
+              aria-label={t('playbackPanelToggle')}
+              aria-expanded={showAnimationPanel}
+              className={`flex items-center justify-center gap-1 border rounded-md px-2 py-1 text-[11px] transition-colors ${
+                showAnimationPanel || hasPlaybackSession || playbackPreload
+                  ? isLight
+                    ? 'bg-blue-600 hover:bg-blue-700 border-blue-600 text-white'
+                    : 'bg-blue-500/80 hover:bg-blue-500 border-blue-400/60 text-white'
+                  : isLight
+                    ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                    : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-200'
+              }`}
+            >
+              <Film className="w-3.5 h-3.5 shrink-0" />
             </button>
             <button
               onClick={onLatest}
@@ -1138,9 +1844,7 @@ type ExportModalProps = {
   hdEnhanceEnabled: boolean;
   isOpen: boolean;
   isPreviewLoading: boolean;
-  mode: ExportMode;
   onClose: () => void;
-  onModeChange: (mode: ExportMode) => void;
   previewImages: Partial<Record<ExportKind, string>>;
   t: Translator;
   theme: UiTheme;
@@ -1158,185 +1862,44 @@ type ExportModalProps = {
   selectedExports: Record<ExportKind, boolean>;
   selectedExportKinds: ExportKind[];
 
-  // GIF mode
-  customDate: string;
-  customEnd: string;
-  customEndStep: number;
-  customLatestDate: string;
-  customMaxStep: number;
-  customStart: string;
-  customStartStep: number;
-  estimatedFrameCount: number;
-  resolvedRangeStart: string;
-  resolvedRangeEnd: string;
-  fps: number;
-  gifColorCount: 64 | 128 | 256;
-  gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
-  gifFileName: string;
-  gifFinalPauseMs: number;
-  gifMaxDimension: 960 | 1280 | 1600;
-  gifPaletteMode: 'per-frame' | 'global';
-  gifProgress: number;
-  gifSelectedKind: ExportKind;
-  isExportingGif: boolean;
-  isExportingWebm: boolean;
-  onColorCountChange: (value: 64 | 128 | 256) => void;
-  onCustomDateChange: (value: string) => void;
-  onCustomEndStepChange: (value: number) => void;
-  onCustomStartStepChange: (value: number) => void;
-  onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
-  onExportGif: () => void;
-  onExportWebm: () => void;
-  onFinalPauseChange: (value: number) => void;
-  onFpsChange: (value: number) => void;
-  onGifKindChange: (kind: ExportKind) => void;
-  onPaletteModeChange: (value: 'per-frame' | 'global') => void;
-  onPresetChange: (value: '3h' | '6h' | '12h' | 'custom') => void;
-  onResolutionChange: (value: 960 | 1280 | 1600) => void;
-  onWebmQualityChange: (value: number) => void;
-  preset: '3h' | '6h' | '12h' | 'custom';
-  rangeError: string | null;
-  webmProgress: number;
-  webmQuality: number;
 };
 
 export function ExportModal(props: ExportModalProps) {
   const {
     availableExportKinds,
     currentTime,
-    customDate,
-    customEnd,
-    customEndStep,
-    customLatestDate,
-    customMaxStep,
-    customStart,
-    customStartStep,
     downloadProgress,
-    estimatedFrameCount,
-    resolvedRangeStart,
-    resolvedRangeEnd,
     exportFormat,
     exportModalRef,
     exportResolution,
     exportResolutionText,
     fireHotspotEnabled,
-    fps,
-    gifColorCount,
-    gifDitherLevel,
-    gifFileName,
-    gifFinalPauseMs,
-    gifMaxDimension,
-    gifPaletteMode,
-    gifProgress,
-    gifSelectedKind,
     hdEnhanceEnabled,
     isExporting,
-    isExportingGif,
-    isExportingWebm,
     isOpen,
     isPreviewLoading,
-    mode,
     onClose,
-    onColorCountChange,
     onConfirmImage,
-    onCustomDateChange,
-    onDitherLevelChange,
-    onFinalPauseChange,
-    onCustomEndStepChange,
-    onCustomStartStepChange,
     onExportFormatChange,
-    onExportGif,
     onExportResolutionChange,
-    onExportWebm,
-    onFpsChange,
-    onGifKindChange,
-    onModeChange,
-    onPaletteModeChange,
-    onPresetChange,
-    onResolutionChange,
     onToggleImageKind,
-    onWebmQualityChange,
-    preset,
     previewImages,
-    rangeError,
     selectedExports,
     selectedExportKinds,
     t,
     theme,
-    webmProgress,
-    webmQuality,
   } = props;
   const isLight = theme === 'light';
-  const sliderMin = 0;
-  const sliderMax = Math.max(0, customMaxStep);
-  const rangeSliderRef = useRef<HTMLDivElement | null>(null);
-  const startStep = Math.max(sliderMin, Math.min(sliderMax, customStartStep));
-  const endStep = Math.max(sliderMin, Math.min(sliderMax, customEndStep));
-  const startRatio = sliderMax === 0 ? 0 : startStep / sliderMax;
-  const endRatio = sliderMax === 0 ? 0 : endStep / sliderMax;
-
-  const stepToTime = (step: number): string => {
-    const safeStep = Math.max(sliderMin, Math.min(sliderMax, Math.round(step)));
-    const totalMinutes = safeStep * 10;
-    const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
-    const mm = String(totalMinutes % 60).padStart(2, '0');
-    return `${hh}:${mm}`;
-  };
-
-  const finalPauseLabel = `${(gifFinalPauseMs / 1000).toFixed(1)}s`;
-
-  const getStepFromClientX = (clientX: number): number => {
-    if (!rangeSliderRef.current || sliderMax <= sliderMin) return sliderMin;
-    const rect = rangeSliderRef.current.getBoundingClientRect();
-    const ratio = (clientX - rect.left) / Math.max(1, rect.width);
-    const clamped = Math.max(0, Math.min(1, ratio));
-    return Math.round(sliderMin + clamped * (sliderMax - sliderMin));
-  };
-
-  const startDrag = (handle: 'start' | 'end', pointerId: number) => {
-    const onMove = (event: PointerEvent) => {
-      const nextStep = getStepFromClientX(event.clientX);
-      if (handle === 'start') onCustomStartStepChange(nextStep);
-      else onCustomEndStepChange(nextStep);
-    };
-
-    const onUp = (event: PointerEvent) => {
-      if (event.pointerId !== pointerId) return;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-  };
-
-  const handleTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    const nextStep = getStepFromClientX(event.clientX);
-    const useStart = Math.abs(nextStep - startStep) <= Math.abs(nextStep - endStep);
-    if (useStart) onCustomStartStepChange(nextStep);
-    else onCustomEndStepChange(nextStep);
-    startDrag(useStart ? 'start' : 'end', event.pointerId);
-  };
-
-  const handleKnobPointerDown = (handle: 'start' | 'end') => (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    startDrag(handle, event.pointerId);
-  };
-
   if (!isOpen) return null;
 
-  const isImageMode = mode === 'image';
-  const isGifMode = mode === 'gif';
-  const isWebmMode = mode === 'webm';
-  const isExportingCurrent = isImageMode ? isExporting : isGifMode ? isExportingGif : isExportingWebm;
-  const currentProgress = isImageMode ? downloadProgress : isGifMode ? gifProgress : webmProgress;
+  // Image-only since issue #78: GIF and WebM are produced from the animation panel, where the
+  // sequence can be watched before it is downloaded.
+  const isExportingCurrent = isExporting;
+  const currentProgress = downloadProgress;
   const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
   const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
   const isSingleFile = selectedExportKinds.length === 1;
-  const canConfirm = isImageMode ? selectedExportKinds.length > 0 : estimatedFrameCount > 0;
+  const canConfirm = selectedExportKinds.length > 0;
 
   return (
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
@@ -1360,30 +1923,8 @@ export function ExportModal(props: ExportModalProps) {
 
         <div className="ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 pb-4">
 
-        <div className={`mb-4 grid grid-cols-3 gap-1 p-1 rounded-lg ${themedClass(isLight, 'bg-slate-100', 'bg-black/30')}`}>
-          {([
-            ['image', t('exportModeImage')],
-            ['gif', t('exportModeGif')],
-            ['webm', t('exportModeWebm')],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => onModeChange(value)}
-              disabled={isExportingCurrent}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:cursor-not-allowed ${
-                mode === value
-                  ? isLight ? 'bg-white text-slate-900 shadow' : 'bg-white/10 text-white shadow'
-                  : themedClass(isLight, 'text-slate-500 hover:text-slate-800', 'text-slate-400 hover:text-slate-200')
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
-          {isImageMode ? t('downloadModalDescription') : t('animationDescription')}
+<p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
+          {t('downloadModalDescription')}
         </p>
 
         {fireHotspotEnabled && (
@@ -1395,7 +1936,6 @@ export function ExportModal(props: ExportModalProps) {
           </div>
         )}
 
-        {isImageMode ? (
           <>
             <div className={`mb-3 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
               {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
@@ -1462,294 +2002,6 @@ export function ExportModal(props: ExportModalProps) {
               </div>
             )}
           </>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('exportGifKindLabel')}</label>
-              <ExportKindGrid
-                availableExportKinds={availableExportKinds}
-                hdEnhanceEnabled={hdEnhanceEnabled}
-                isDisabled={isExportingGif}
-                isLight={isLight}
-                isPreviewLoading={isPreviewLoading}
-                previewImages={previewImages}
-                selectedKinds={[gifSelectedKind]}
-                selectionMode="single"
-                onSelect={(kind) => onGifKindChange(kind)}
-                t={t}
-              />
-            </div>
-
-            <div>
-              <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationPreset')}</label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {([
-                  ['3h', t('animationLast3h')],
-                  ['6h', t('animationLast6h')],
-                  ['12h', t('animationLast12h')],
-                  ['custom', t('animationCustom')],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => onPresetChange(value)}
-                    className={`px-2 py-1.5 rounded border text-xs transition-colors ${
-                      preset === value
-                        ? 'bg-blue-500 text-white border-blue-500'
-                        : isLight
-                          ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
-                          : 'bg-[#222] border-white/10 text-slate-200 hover:bg-[#333]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {preset === 'custom' && (
-              <div className="space-y-3">
-                <div>
-                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationCustomDate')}</label>
-                  <input
-                    type="date"
-                    max={customLatestDate}
-                    value={customDate}
-                    onChange={(event) => onCustomDateChange(event.target.value)}
-                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 cursor-pointer ${
-                      isLight
-                        ? 'bg-slate-100 border-slate-300 text-slate-900'
-                        : 'bg-[#222] border-white/10 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert'
-                    }`}
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
-                    <div className="text-[11px] opacity-75 mb-0.5">{t('animationStart')}</div>
-                    <div className="font-mono text-xs">{customStart.replace('T', ' ')} UTC</div>
-                  </div>
-                  <div className={`rounded-md px-3 py-2 ${themedClass(isLight, 'bg-slate-100 border border-slate-300 text-slate-700', 'bg-[#222] border border-white/10 text-slate-200')}`}>
-                    <div className="text-[11px] opacity-75 mb-0.5">{t('animationEnd')}</div>
-                    <div className="font-mono text-xs">{customEnd.replace('T', ' ')} UTC</div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationCustomWindow')}</span>
-                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{customStart.split('T')[1]} - {customEnd.split('T')[1]}</span>
-                  </div>
-                  <div
-                    ref={rangeSliderRef}
-                    onPointerDown={handleTrackPointerDown}
-                    className={`relative h-10 rounded-md px-3 py-2 touch-none cursor-pointer ${themedClass(isLight, 'bg-slate-100 border border-slate-300', 'bg-[#222] border border-white/10')}`}
-                  >
-                    <div className={`absolute left-3 right-3 top-1/2 -translate-y-1/2 h-1 rounded ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`} />
-                    <div
-                      className="absolute top-1/2 -translate-y-1/2 h-1 rounded bg-blue-500"
-                      style={{
-                        left: `calc(12px + (100% - 24px) * ${startRatio})`,
-                        width: `calc((100% - 24px) * ${Math.max(0, endRatio - startRatio)})`,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      aria-label={t('animationStart')}
-                      onPointerDown={handleKnobPointerDown('start')}
-                      className={`absolute z-10 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
-                      style={{ left: `calc(12px + (100% - 24px) * ${startRatio} - 8px)` }}
-                    />
-                    <button
-                      type="button"
-                      aria-label={t('animationEnd')}
-                      onPointerDown={handleKnobPointerDown('end')}
-                      className={`absolute z-20 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 shadow ${themedClass(isLight, 'bg-white border-blue-600', 'bg-slate-100 border-blue-500')}`}
-                      style={{ left: `calc(12px + (100% - 24px) * ${endRatio} - 8px)` }}
-                    />
-                  </div>
-
-                  <div className={`mt-2 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                    <span>{t('animationWindowStart')}: 00:00</span>
-                    <span>{t('animationWindowEnd')}: {stepToTime(sliderMax)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationFps')}</span>
-                <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{fps}</span>
-              </div>
-              <input
-                type="range"
-                min="4"
-                max="12"
-                step="1"
-                value={fps}
-                onChange={(event) => onFpsChange(parseInt(event.target.value, 10))}
-                className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{isGifMode ? t('animationGifResolution') : t('animationResolution')}</label>
-                <select
-                  value={gifMaxDimension}
-                  onChange={(event) => onResolutionChange(parseInt(event.target.value, 10) as 960 | 1280 | 1600)}
-                  className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                    themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                  }`}
-                >
-                  <option value={960}>{t('animationResolution960')}</option>
-                  <option value={1280}>{t('animationResolution1280')}</option>
-                  <option value={1600}>{t('animationResolution1600')}</option>
-                </select>
-              </div>
-              {isGifMode ? (
-                <div>
-                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifColorCount')}</label>
-                  <select
-                    value={gifColorCount}
-                    onChange={(event) => onColorCountChange(parseInt(event.target.value, 10) as 64 | 128 | 256)}
-                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                    }`}
-                  >
-                    <option value={64}>64</option>
-                    <option value={128}>128</option>
-                    <option value={256}>256</option>
-                  </select>
-                </div>
-              ) : null}
-              {isWebmMode ? (
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationWebmQuality')}</span>
-                    <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{Math.round(webmQuality * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0.2}
-                    max={1}
-                    step={0.1}
-                    value={webmQuality}
-                    onChange={(event) => onWebmQualityChange(parseFloat(event.target.value))}
-                    className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-                  />
-                </div>
-              ) : null}
-            </div>
-
-            {isGifMode && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifPaletteMode')}</label>
-                  <select
-                    value={gifPaletteMode}
-                    onChange={(event) => onPaletteModeChange(event.target.value as 'per-frame' | 'global')}
-                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                    }`}
-                  >
-                    <option value="per-frame">{t('animationPaletteModePerFrame')}</option>
-                    <option value="global">{t('animationPaletteModeGlobal')}</option>
-                  </select>
-                </div>
-                <div>
-                  <label className={`block text-xs font-medium mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationGifDither')}</label>
-                  <select
-                    value={gifDitherLevel}
-                    onChange={(event) => onDitherLevelChange(event.target.value as 'none' | 'low' | 'medium' | 'high')}
-                    className={`w-full border rounded-md px-3 py-2 text-sm outline-none focus:border-blue-500 ${
-                      themedClass(isLight, 'bg-slate-100 border-slate-300 text-slate-900', 'bg-[#222] border-white/10 text-white')
-                    }`}
-                  >
-                    <option value="none">{t('animationDitherNone')}</option>
-                    <option value="low">{t('animationDitherLow')}</option>
-                    <option value="medium">{t('animationDitherMedium')}</option>
-                    <option value="high">{t('animationDitherHigh')}</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {isGifMode && (
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className={themedClass(isLight, 'text-slate-600', 'text-slate-300')}>{t('animationGifFinalPause')}</span>
-                  <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{finalPauseLabel}</span>
-                </div>
-                <input
-                  type="range"
-                  min={100}
-                  max={2000}
-                  step={100}
-                  value={gifFinalPauseMs}
-                  onChange={(event) => onFinalPauseChange(parseInt(event.target.value, 10))}
-                  className={`w-full h-1 rounded-lg appearance-none cursor-pointer accent-blue-500 ${themedClass(isLight, 'bg-slate-300', 'bg-white/10')}`}
-                />
-                <div className={`mt-1 flex justify-between text-[11px] font-mono ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                  <span>0.1s</span>
-                  <span>1.0s</span>
-                  <span>2.0s</span>
-                </div>
-              </div>
-            )}
-
-            <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-              {t('animationFrameCount')}: <span className="font-mono">{estimatedFrameCount}</span>
-            </div>
-
-            {/* The range the presets actually resolve to. Without it the only clue was the
-                filename preview further down, which meant a preset pointing at the wrong moment
-                stayed invisible until the export came back (see #73, where the presets were
-                anchored to the latest image instead of the time on screen). */}
-            {estimatedFrameCount > 0 && (
-              <div className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                {t('animationResolvedRange')}:{' '}
-                <span className="font-mono">{resolvedRangeStart.replace('T', ' ')}</span>
-                {' → '}
-                <span className="font-mono">{resolvedRangeEnd.replace('T', ' ')}</span>
-                {' UTC'}
-              </div>
-            )}
-
-            {rangeError && (
-              <p className={`text-xs ${themedClass(isLight, 'text-rose-600', 'text-rose-300')}`}>{rangeError}</p>
-            )}
-
-            {estimatedFrameCount === 0 && !rangeError ? (
-              <p className={`text-xs ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>{t('animationNoFrames')}</p>
-            ) : null}
-
-            {estimatedFrameCount > 0 && (
-              <div className={`rounded-lg border p-3 text-xs ${themedClass(isLight, 'border-slate-200 bg-slate-50 text-slate-700', 'border-white/10 bg-black/20 text-slate-300')}`}>
-                <div className={`font-medium mb-1 ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{t('downloadFilePreview')}</div>
-                <div className="font-mono break-all">{gifFileName}</div>
-              </div>
-            )}
-          </div>
-        )}
-        </div>
-
-        <div className={`shrink-0 px-6 pb-6 pt-3 border-t ${themedClass(isLight, 'border-slate-200', 'border-white/10')}`}>
-          {isExportingCurrent && (
-            <div className="mb-3">
-              <div className={`flex justify-between text-xs mb-1 ${themedClass(isLight, 'text-slate-600', 'text-slate-300')}`}>
-                <span>{t('generating')}</span>
-                <span className="font-mono">{currentProgress}%</span>
-              </div>
-              <div className={`h-1.5 rounded-full overflow-hidden ${themedClass(isLight, 'bg-slate-200', 'bg-white/10')}`}>
-                <div
-                  className="h-full bg-blue-500 transition-all duration-200 ease-out"
-                  style={{ width: `${currentProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
 
           <div className="flex items-center justify-end gap-2">
             <button
@@ -1764,7 +2016,7 @@ export function ExportModal(props: ExportModalProps) {
               {t('cancel')}
             </button>
             <button
-              onClick={isImageMode ? onConfirmImage : isGifMode ? onExportGif : onExportWebm}
+              onClick={onConfirmImage}
               disabled={!canConfirm || isExportingCurrent}
               className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                 isLight
@@ -1774,7 +2026,7 @@ export function ExportModal(props: ExportModalProps) {
             >
               {isExportingCurrent
                 ? `${t('generating')} ${currentProgress}%`
-                : isImageMode ? t('downloadSelection') : isGifMode ? t('animationExportGif') : t('animationExportWebm')}
+                : t('downloadSelection')}
             </button>
           </div>
         </div>
