@@ -45,12 +45,21 @@ type TimeDockProps = {
   playbackFps: number;
   playbackFpsMax: number;
   playbackFpsMin: number;
+  isAnimationPanelOpen: boolean;
+  isPlaybackStale: boolean;
+  gifColorCount: 64 | 128 | 256;
+  gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
+  gifFinalPauseMs: number;
+  gifPaletteMode: 'per-frame' | 'global';
+  webmQuality: number;
   playbackFramePreview: { count: number; start: string; end: string } | null;
   playbackFrames: string[];
   playbackIndex: number;
   playbackPreload: { done: number; total: number } | null;
   playbackBoomerang: boolean;
-  playbackDownloadBusy: boolean;
+  playbackSkippedCount: number;
+  playbackDownloadFormat: 'gif' | 'webm' | null;
+  playbackDownloadProgress: number;
   playbackPreset: AnimationPreset;
   playbackQuality: number;
   playbackQualityChoices: readonly number[];
@@ -63,6 +72,13 @@ type TimeDockProps = {
   onPlaybackCustomStartStepChange: (step: number) => void;
   onPlaybackFpsChange: (fps: number) => void;
   onPlaybackBoomerangToggle: () => void;
+  onAnimationPanelToggle: () => void;
+  onPlaybackRelaunch: () => void;
+  onGifColorCountChange: (value: 64 | 128 | 256) => void;
+  onGifDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
+  onGifFinalPauseChange: (value: number) => void;
+  onGifPaletteModeChange: (value: 'per-frame' | 'global') => void;
+  onWebmQualityChange: (value: number) => void;
   onPlaybackDownload: (format: 'gif' | 'webm') => void;
   onPlaybackPresetChange: (preset: AnimationPreset) => void;
   onPlaybackQualityChange: (quality: number) => void;
@@ -104,6 +120,18 @@ export function PlaybackExitModal(props: {
 }) {
   const { mode, reason, t, theme, onLeave, onResume } = props;
   const isLight = theme === 'light';
+  // Escape resumes rather than leaves: it is the conventional "cancel what I just did" key, and
+  // here the thing being cancelled is the gesture that would have thrown the sequence away.
+  useEffect(() => {
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onResume();
+    };
+    window.addEventListener('keydown', handleEsc, { capture: true });
+    return () => window.removeEventListener('keydown', handleEsc, { capture: true });
+  }, [onResume]);
   const resumeLabel = t(mode === 'preload' ? 'playbackExitRestart' : 'playbackExitResume');
   const resumeOutcome = reason === 'time'
     ? t('playbackExitTimeResumeOutcome')
@@ -217,12 +245,21 @@ export function TimeDock(props: TimeDockProps) {
     playbackFps,
     playbackFpsMax,
     playbackFpsMin,
+    isAnimationPanelOpen,
+    isPlaybackStale,
+    gifColorCount,
+    gifDitherLevel,
+    gifFinalPauseMs,
+    gifPaletteMode,
+    webmQuality,
     playbackFramePreview,
     playbackFrames,
     playbackIndex,
     playbackPreload,
     playbackBoomerang,
-    playbackDownloadBusy,
+    playbackSkippedCount,
+    playbackDownloadFormat,
+    playbackDownloadProgress,
     playbackPreset,
     playbackQuality,
     playbackQualityChoices,
@@ -233,6 +270,13 @@ export function TimeDock(props: TimeDockProps) {
     onPlaybackCustomStartStepChange,
     onPlaybackFpsChange,
     onPlaybackBoomerangToggle,
+    onAnimationPanelToggle,
+    onPlaybackRelaunch,
+    onGifColorCountChange,
+    onGifDitherLevelChange,
+    onGifFinalPauseChange,
+    onGifPaletteModeChange,
+    onWebmQualityChange,
     onPlaybackDownload,
     onPlaybackPresetChange,
     onPlaybackQualityChange,
@@ -244,20 +288,13 @@ export function TimeDock(props: TimeDockProps) {
     theme,
   } = props;
   const hasPlaybackSession = playbackFrames.length > 0;
-  const [isAnimationPanelOpen, setIsAnimationPanelOpen] = useState(false);
-  // Opens itself when a sequence starts, then stays collapsible: folding it away while the
-  // animation runs is a legitimate way to watch the map without the controls in front of it.
-  // Deriving the panel's visibility from the session instead made the button dead during
-  // playback, which is exactly what it looked like — a broken button.
-  // Only on the rising edge — when an animation starts existing. Reacting to the state itself
-  // reopened the panel the moment preparation turned into a ready sequence, undoing a fold the
-  // user had just asked for.
-  const wasPlaybackBusyRef = useRef(false);
-  useEffect(() => {
-    const busy = hasPlaybackSession || Boolean(playbackPreload);
-    if (busy && !wasPlaybackBusyRef.current) setIsAnimationPanelOpen(true);
-    wasPlaybackBusyRef.current = busy;
-  }, [hasPlaybackSession, playbackPreload]);
+  // Collapsed by default: these change what the *file* looks like, not what plays, and the dock
+  // is already dense on a phone. They live here rather than in the export modal because since
+  // issue #78 that modal produces stills only.
+  const [areFileSettingsOpen, setAreFileSettingsOpen] = useState(false);
+  // Owned by DualMapViewer since the `A` shortcut has to reach it too; the panel stays
+  // collapsible while a sequence runs, because folding it away is a legitimate way to watch the
+  // map without the controls in front of it.
   const showAnimationPanel = isAnimationPanelOpen;
   const playbackRangeLabel = hasPlaybackSession
     ? `${playbackFrames[0].slice(11)} → ${playbackFrames[playbackFrames.length - 1].slice(11)}`
@@ -334,7 +371,13 @@ export function TimeDock(props: TimeDockProps) {
     // Capture phase ensures map keyboard handlers (Leaflet) do not consume arrows first.
     window.addEventListener('keydown', handleKeydown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-  }, [totalMinutes]);
+    // `onTimeChange` belongs here even though it changes on every render. During playback
+    // `currentTime` is frozen on the frame the animation was opened from, so `totalMinutes` never
+    // moves — and depending on it alone kept the callback captured *before* the animation started,
+    // the one whose playback guard still saw no session. The first arrow press then changed the
+    // time with no confirmation dialog at all (issue #78). Re-subscribing a window listener is far
+    // cheaper than rendering the frame that caused the re-render.
+  }, [datePart, onTimeChange, totalMinutes]);
 
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
@@ -413,8 +456,9 @@ export function TimeDock(props: TimeDockProps) {
                           ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
                           : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
                     }`}
+                    title={t(key)}
                   >
-                    {t(key).replace('Dernières ', '').replace('Last ', '')}
+                    {value === 'custom' ? t('playbackRangeCustomShort') : value}
                   </button>
                 ))}
               </div>
@@ -529,27 +573,32 @@ export function TimeDock(props: TimeDockProps) {
                     }`}
                   />
                   <span className="shrink-0 inline-flex">
-                    {(['gif', 'webm'] as const).map((format, index) => (
-                      <button
-                        key={format}
-                        onClick={() => onPlaybackDownload(format)}
-                        disabled={playbackDownloadBusy}
-                        title={`${t('playbackDownload')} — ${format.toUpperCase()} · ${t('playbackDownloadHint')}`}
-                        aria-label={`${t('playbackDownload')} ${format.toUpperCase()}`}
-                        className={`flex items-center justify-center gap-1 border px-1.5 h-9 sm:h-8 text-[10px] font-medium transition-colors disabled:opacity-60 disabled:cursor-wait ${
-                          index === 0 ? 'rounded-l-md' : 'rounded-r-md -ml-px'
-                        } ${
-                          isLight
-                            ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
-                            : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
-                        }`}
-                      >
-                        {playbackDownloadBusy && index === 0
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : index === 0 ? <Download className="w-3 h-3" /> : null}
-                        {format.toUpperCase()}
-                      </button>
-                    ))}
+                    {(['gif', 'webm'] as const).map((format, index) => {
+                      const isWriting = playbackDownloadFormat === format;
+                      return (
+                        <button
+                          key={format}
+                          onClick={() => onPlaybackDownload(format)}
+                          disabled={playbackDownloadFormat !== null}
+                          title={`${t('playbackDownload')} — ${format.toUpperCase()} · ${t('playbackDownloadHint')}`}
+                          aria-label={`${t('playbackDownload')} ${format.toUpperCase()}`}
+                          className={`flex items-center justify-center gap-1 border px-1.5 h-9 sm:h-8 text-[10px] font-medium tabular-nums transition-colors disabled:opacity-60 disabled:cursor-wait ${
+                            index === 0 ? 'rounded-l-md' : 'rounded-r-md -ml-px'
+                          } ${
+                            isLight
+                              ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                              : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                          }`}
+                        >
+                          {isWriting
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : index === 0 ? <Download className="w-3 h-3" /> : null}
+                          {isWriting && playbackDownloadProgress > 0
+                            ? `${playbackDownloadProgress}%`
+                            : format.toUpperCase()}
+                        </button>
+                      );
+                    })}
                   </span>
                   <button
                     onClick={onPlaybackStop}
@@ -564,6 +613,152 @@ export function TimeDock(props: TimeDockProps) {
                     <Square className="w-3 h-3" />
                   </button>
                 </div>
+                {/* The range and quality controls stay live during a session, but pressing play
+                    replays the cached sequence — so when the selection no longer matches what is
+                    on screen, say so and offer the rebuild rather than letting them look inert. */}
+                {hasPlaybackSession && (
+                  <div className={`rounded-md border ${themedClass(isLight, 'border-slate-300 bg-white', 'border-white/10 bg-black/20')}`}>
+                    <button
+                      onClick={() => setAreFileSettingsOpen((previous) => !previous)}
+                      aria-expanded={areFileSettingsOpen}
+                      className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-[10px] transition-colors ${
+                        themedClass(isLight, 'text-slate-600 hover:text-slate-900', 'text-slate-400 hover:text-slate-200')
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <Wrench className="w-3 h-3 shrink-0" />
+                        {t('playbackFileSettings')}
+                      </span>
+                      <span className="font-mono opacity-70">{areFileSettingsOpen ? '−' : '+'}</span>
+                    </button>
+                    {areFileSettingsOpen && (
+                      <div className={`px-2 pb-2 pt-1 space-y-1.5 text-[10px] border-t ${
+                        themedClass(isLight, 'border-slate-200 text-slate-600', 'border-white/10 text-slate-400')
+                      }`}>
+                        <p className={themedClass(isLight, 'text-slate-500', 'text-slate-500')}>{t('playbackFileSettingsHint')}</p>
+                        {([
+                          [t('animationGifColorCount'), [64, 128, 256], gifColorCount, (v: number) => onGifColorCountChange(v as 64 | 128 | 256), (v: number) => String(v)],
+                        ] as const).map(([label, choices, value, onChange, render]) => (
+                          <div key={label} className="flex items-center justify-between gap-2">
+                            <span className="truncate">{label}</span>
+                            <span className="inline-flex shrink-0">
+                              {choices.map((choice, index) => (
+                                <button
+                                  key={choice}
+                                  onClick={() => onChange(choice)}
+                                  className={`border px-1.5 py-0.5 transition-colors ${
+                                    index === 0 ? 'rounded-l' : index === choices.length - 1 ? 'rounded-r -ml-px' : '-ml-px'
+                                  } ${
+                                    value === choice
+                                      ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                      : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                  }`}
+                                >
+                                  {render(choice)}
+                                </button>
+                              ))}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifPaletteMode')}</span>
+                          <span className="inline-flex shrink-0">
+                            {(['per-frame', 'global'] as const).map((mode, index) => (
+                              <button
+                                key={mode}
+                                onClick={() => onGifPaletteModeChange(mode)}
+                                className={`border px-1.5 py-0.5 transition-colors ${index === 0 ? 'rounded-l' : 'rounded-r -ml-px'} ${
+                                  gifPaletteMode === mode
+                                    ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                    : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                }`}
+                              >
+                                {t(mode === 'per-frame' ? 'animationPaletteModePerFrame' : 'animationPaletteModeGlobal')}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifDither')}</span>
+                          <span className="inline-flex shrink-0">
+                            {([
+                              ['none', 'animationDitherNone'],
+                              ['low', 'animationDitherLow'],
+                              ['medium', 'animationDitherMedium'],
+                              ['high', 'animationDitherHigh'],
+                            ] as const).map(([level, levelKey], index) => (
+                              <button
+                                key={level}
+                                onClick={() => onGifDitherLevelChange(level)}
+                                className={`border px-1.5 py-0.5 transition-colors ${
+                                  index === 0 ? 'rounded-l' : index === 3 ? 'rounded-r -ml-px' : '-ml-px'
+                                } ${
+                                  gifDitherLevel === level
+                                    ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                    : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                }`}
+                              >
+                                {t(levelKey)}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationGifFinalPause')}</span>
+                          <span className="inline-flex items-center gap-1.5 shrink-0">
+                            <input
+                              type="range"
+                              min={0}
+                              max={2000}
+                              step={500}
+                              value={gifFinalPauseMs}
+                              onChange={(e) => onGifFinalPauseChange(Number(e.target.value))}
+                              aria-label={t('animationGifFinalPause')}
+                              className={`w-20 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                                themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                              }`}
+                            />
+                            <span className="font-mono tabular-nums w-8 text-right">{(gifFinalPauseMs / 1000).toFixed(1)}s</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate">{t('animationWebmQuality')}</span>
+                          <span className="inline-flex items-center gap-1.5 shrink-0">
+                            <input
+                              type="range"
+                              min={0.5}
+                              max={1}
+                              step={0.05}
+                              value={webmQuality}
+                              onChange={(e) => onWebmQualityChange(Number(e.target.value))}
+                              aria-label={t('animationWebmQuality')}
+                              className={`w-20 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
+                                themedClass(isLight, 'bg-slate-200', 'bg-white/10')
+                              }`}
+                            />
+                            <span className="font-mono tabular-nums w-8 text-right">{Math.round(webmQuality * 100)}%</span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {isPlaybackStale && (
+                  <button
+                    onClick={onPlaybackRelaunch}
+                    className={`w-full flex items-center justify-center gap-1.5 border rounded-md px-2 py-1.5 text-[10px] sm:text-[11px] font-medium transition-colors ${
+                      isLight
+                        ? 'bg-amber-100 hover:bg-amber-200 border-amber-400 text-amber-900'
+                        : 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <RefreshCw className="w-3 h-3 shrink-0" />
+                    {playbackFramePreview
+                      ? `${t('playbackRelaunch')} · ${t('playbackFramesCount').replace('{count}', String(playbackFramePreview.count))}`
+                      : t('playbackRelaunch')}
+                  </button>
+                )}
                 <div className={`flex items-center justify-between gap-2 text-[10px] ${
                   themedClass(isLight, 'text-slate-600', 'text-slate-400')
                 }`}>
@@ -575,6 +770,14 @@ export function TimeDock(props: TimeDockProps) {
                       .replace('{total}', String(playbackFrames.length))}
                   </span>
                   <span className="hidden sm:inline font-mono truncate opacity-80">{playbackRangeLabel}</span>
+                  {playbackSkippedCount > 0 && (
+                    <span
+                      className={`shrink-0 ${themedClass(isLight, 'text-amber-700', 'text-amber-300')}`}
+                      title={t('playbackSkipped').replace('{count}', String(playbackSkippedCount))}
+                    >
+                      {t('playbackSkipped').replace('{count}', String(playbackSkippedCount))}
+                    </span>
+                  )}
                   <span className={`inline-flex sm:hidden items-center gap-1.5 shrink-0 text-[10px] ${
                     themedClass(isLight, 'text-slate-600', 'text-slate-400')
                   }`}>
@@ -731,7 +934,7 @@ export function TimeDock(props: TimeDockProps) {
                 panel rather than starting straight away: preparing a sequence costs a render per
                 frame, which is not something to trigger by a stray click. */}
             <button
-              onClick={() => setIsAnimationPanelOpen((previous) => !previous)}
+              onClick={onAnimationPanelToggle}
               title={t('playbackPanelToggle')}
               aria-label={t('playbackPanelToggle')}
               aria-expanded={showAnimationPanel}
@@ -1659,171 +1862,44 @@ type ExportModalProps = {
   selectedExports: Record<ExportKind, boolean>;
   selectedExportKinds: ExportKind[];
 
-  // GIF mode
-  customDate: string;
-  customEnd: string;
-  customEndStep: number;
-  customLatestDate: string;
-  customMaxStep: number;
-  customStart: string;
-  customStartStep: number;
-  estimatedFrameCount: number;
-  resolvedRangeStart: string;
-  resolvedRangeEnd: string;
-  fps: number;
-  gifColorCount: 64 | 128 | 256;
-  gifDitherLevel: 'none' | 'low' | 'medium' | 'high';
-  gifFileName: string;
-  gifFinalPauseMs: number;
-  gifMaxDimension: 960 | 1280 | 1600;
-  gifPaletteMode: 'per-frame' | 'global';
-  gifSelectedKind: ExportKind;
-  onColorCountChange: (value: 64 | 128 | 256) => void;
-  onCustomDateChange: (value: string) => void;
-  onCustomEndStepChange: (value: number) => void;
-  onCustomStartStepChange: (value: number) => void;
-  onDitherLevelChange: (value: 'none' | 'low' | 'medium' | 'high') => void;
-  onFinalPauseChange: (value: number) => void;
-  onFpsChange: (value: number) => void;
-  onGifKindChange: (kind: ExportKind) => void;
-  onPaletteModeChange: (value: 'per-frame' | 'global') => void;
-  onPresetChange: (value: '3h' | '6h' | '12h' | 'custom') => void;
-  onResolutionChange: (value: 960 | 1280 | 1600) => void;
-  onWebmQualityChange: (value: number) => void;
-  preset: '3h' | '6h' | '12h' | 'custom';
-  rangeError: string | null;
-  webmQuality: number;
 };
 
 export function ExportModal(props: ExportModalProps) {
   const {
     availableExportKinds,
     currentTime,
-    customDate,
-    customEnd,
-    customEndStep,
-    customLatestDate,
-    customMaxStep,
-    customStart,
-    customStartStep,
     downloadProgress,
-    estimatedFrameCount,
-    resolvedRangeStart,
-    resolvedRangeEnd,
     exportFormat,
     exportModalRef,
     exportResolution,
     exportResolutionText,
     fireHotspotEnabled,
-    fps,
-    gifColorCount,
-    gifDitherLevel,
-    gifFileName,
-    gifFinalPauseMs,
-    gifMaxDimension,
-    gifPaletteMode,
-    gifSelectedKind,
     hdEnhanceEnabled,
     isExporting,
     isOpen,
     isPreviewLoading,
     onClose,
-    onColorCountChange,
     onConfirmImage,
-    onCustomDateChange,
-    onDitherLevelChange,
-    onFinalPauseChange,
-    onCustomEndStepChange,
-    onCustomStartStepChange,
     onExportFormatChange,
     onExportResolutionChange,
-    onFpsChange,
-    onGifKindChange,
-    onPaletteModeChange,
-    onPresetChange,
-    onResolutionChange,
     onToggleImageKind,
-    onWebmQualityChange,
-    preset,
     previewImages,
-    rangeError,
     selectedExports,
     selectedExportKinds,
     t,
     theme,
-    webmQuality,
   } = props;
   const isLight = theme === 'light';
-  const sliderMin = 0;
-  const sliderMax = Math.max(0, customMaxStep);
-  const rangeSliderRef = useRef<HTMLDivElement | null>(null);
-  const startStep = Math.max(sliderMin, Math.min(sliderMax, customStartStep));
-  const endStep = Math.max(sliderMin, Math.min(sliderMax, customEndStep));
-  const startRatio = sliderMax === 0 ? 0 : startStep / sliderMax;
-  const endRatio = sliderMax === 0 ? 0 : endStep / sliderMax;
-
-  const stepToTime = (step: number): string => {
-    const safeStep = Math.max(sliderMin, Math.min(sliderMax, Math.round(step)));
-    const totalMinutes = safeStep * 10;
-    const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
-    const mm = String(totalMinutes % 60).padStart(2, '0');
-    return `${hh}:${mm}`;
-  };
-
-  const finalPauseLabel = `${(gifFinalPauseMs / 1000).toFixed(1)}s`;
-
-  const getStepFromClientX = (clientX: number): number => {
-    if (!rangeSliderRef.current || sliderMax <= sliderMin) return sliderMin;
-    const rect = rangeSliderRef.current.getBoundingClientRect();
-    const ratio = (clientX - rect.left) / Math.max(1, rect.width);
-    const clamped = Math.max(0, Math.min(1, ratio));
-    return Math.round(sliderMin + clamped * (sliderMax - sliderMin));
-  };
-
-  const startDrag = (handle: 'start' | 'end', pointerId: number) => {
-    const onMove = (event: PointerEvent) => {
-      const nextStep = getStepFromClientX(event.clientX);
-      if (handle === 'start') onCustomStartStepChange(nextStep);
-      else onCustomEndStepChange(nextStep);
-    };
-
-    const onUp = (event: PointerEvent) => {
-      if (event.pointerId !== pointerId) return;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-  };
-
-  const handleTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    const nextStep = getStepFromClientX(event.clientX);
-    const useStart = Math.abs(nextStep - startStep) <= Math.abs(nextStep - endStep);
-    if (useStart) onCustomStartStepChange(nextStep);
-    else onCustomEndStepChange(nextStep);
-    startDrag(useStart ? 'start' : 'end', event.pointerId);
-  };
-
-  const handleKnobPointerDown = (handle: 'start' | 'end') => (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    startDrag(handle, event.pointerId);
-  };
-
   if (!isOpen) return null;
 
   // Image-only since issue #78: GIF and WebM are produced from the animation panel, where the
   // sequence can be watched before it is downloaded.
-  const isImageMode = true;
   const isExportingCurrent = isExporting;
   const currentProgress = downloadProgress;
   const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
   const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
   const isSingleFile = selectedExportKinds.length === 1;
-  const canConfirm = isImageMode ? selectedExportKinds.length > 0 : estimatedFrameCount > 0;
+  const canConfirm = selectedExportKinds.length > 0;
 
   return (
     <div className={`fixed inset-0 z-[510] flex items-center justify-center p-4 backdrop-blur-sm ${
@@ -1860,7 +1936,6 @@ export function ExportModal(props: ExportModalProps) {
           </div>
         )}
 
-        {isImageMode && (
           <>
             <div className={`mb-3 text-xs ${themedClass(isLight, 'text-slate-500', 'text-slate-400')}`}>
               {t('downloadSelectedCount')}: <span className={`font-mono ${themedClass(isLight, 'text-slate-900', 'text-white')}`}>{selectedExportKinds.length}</span>
@@ -1927,7 +2002,6 @@ export function ExportModal(props: ExportModalProps) {
               </div>
             )}
           </>
-        )}
 
           <div className="flex items-center justify-end gap-2">
             <button

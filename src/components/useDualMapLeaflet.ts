@@ -1176,17 +1176,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     return blank / tiles.length < 0.1;
   };
 
-  /**
-   * Only the layers actually on the map: `getTileUrl` reads `layer._map`, and the IR fallback and
-   * IR overlay are both added conditionally.
-   */
-  const collectWarmableLayers = () => [
-    secondaryBaseLayerRef.current,
-    irFallbackBaseLayerRef.current,
-    visOverlayLayerRef.current,
-    irOverlayLayerRef.current,
-  ].filter((layer): layer is L.TileLayer.WMS => Boolean(layer) && Boolean((layer as any)._map));
-
   const prewarmTilesForTime = (
     layers: L.TileLayer.WMS[],
     isoTime: string,
@@ -1289,7 +1278,14 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         irOverlayLayerRef.current?.setParams({ time: isoTime } as any);
       };
 
-      const layers = collectWarmableLayers();
+      // Only the layers actually on the map: `getTileUrl` reads `layer._map`, and the IR fallback
+      // and IR overlay are both added conditionally.
+      const layers = [
+        secondaryBaseLayerRef.current,
+        irFallbackBaseLayerRef.current,
+        visOverlayLayerRef.current,
+        irOverlayLayerRef.current,
+      ].filter((layer): layer is L.TileLayer.WMS => Boolean(layer) && Boolean((layer as any)._map));
 
       // Nothing to preserve on the very first pass: the mount effect built these layers with this
       // time already, and redrawing them here would fetch the whole grid a second time.

@@ -30,6 +30,8 @@ import { getTranslator, type Language } from './i18n';
 import {
   downloadSatellitePack,
   exportAnimationGif,
+  RENDER_CANCELLED,
+  WMS_TIME_UNAVAILABLE,
   renderAnimationFrameBlobs,
   exportAnimationWebm,
   generateExportPreviews,
@@ -1328,6 +1330,19 @@ export default function DualMapViewer() {
   };
   const [playbackExitPrompt, setPlaybackExitPrompt] = useState<PlaybackExitIntent | null>(null);
 
+  // The animation panel's visibility. Owned here rather than by TimeDock because the `A` shortcut
+  // opens it, and because the auto-open below needs the playback state anyway.
+  const [isAnimationPanelOpen, setIsAnimationPanelOpen] = useState(false);
+  // What the sequence currently on screen was built from. Lets the panel say so when the range or
+  // quality controls no longer describe what is playing — they stay live during a session, and
+  // silently doing nothing until the next launch is what made them look broken.
+  const [playbackLoadedSpec, setPlaybackLoadedSpec] = useState<{ quality: number; frames: string[] } | null>(null);
+  // How many ten-minute slots MTG had no image for. Surfaced in the panel so a 73-frame request
+  // that yields 71 frames reads as the archive having gaps, not as the app losing frames.
+  const [playbackSkippedCount, setPlaybackSkippedCount] = useState(0);
+  const hasPlaybackOverlay = playbackUrls.length > 0;
+  const isPreparingPlayback = playbackPreload !== null;
+
   const releasePlaybackCache = () => {
     playbackCacheRef.current?.urls.forEach((url) => URL.revokeObjectURL(url));
     playbackCacheRef.current = null;
@@ -1366,6 +1381,8 @@ export default function DualMapViewer() {
     setPlaybackFrames([]);
     setPlaybackUrls([]);
     setPlaybackIndex(0);
+    setPlaybackLoadedSpec(null);
+    setPlaybackSkippedCount(0);
     // The rendered frames are kept: reopening the same animation is then instant.
   };
 
@@ -1403,6 +1420,7 @@ export default function DualMapViewer() {
         setPlaybackFrames(cached.frames);
         setPlaybackUrls(cached.urls);
         setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
+        setPlaybackLoadedSpec({ quality: playbackQuality, frames: cached.frames });
         setIsPlaying(true);
         return;
       }
@@ -1416,18 +1434,24 @@ export default function DualMapViewer() {
     };
     setPlaybackPreload({ done: 0, total: frames.length });
     let cancelled = false;
-    playbackCancelRef.current = () => { cancelled = true; };
+    const controller = new AbortController();
+    playbackCancelRef.current = () => { cancelled = true; controller.abort(); };
 
     try {
       // The same renderer the GIF and WebM exports use, so what plays is what an export of the
       // same range produces. Playing off Leaflet's own tiles instead was measured at 58% of the
       // time showing a blank map: `setParams` drops every tile on each frame, and at 8 frames a
       // second the grid never finishes coming back before the next one wipes it again.
+      // Slots MTG never published are dropped by the renderer; the frame list has to lose them too
+      // or the timestamps on screen would drift off the images being shown.
+      let skippedFrames: string[] = [];
       const blobs = await renderAnimationFrameBlobs({
+        onSkippedFrames: (times) => { skippedFrames = times; },
         frameTimes: frames,
         kind: effectiveGifKind,
         maxDimension: playbackQuality,
         imageFormat: 'jpeg',
+        signal: controller.signal,
         map: map2Instance.current,
         mapContainer: map2Ref.current,
         activeLayers,
@@ -1468,19 +1492,28 @@ export default function DualMapViewer() {
         setPlaybackPreload(null);
         return;
       }
+      const skipped = new Set(skippedFrames);
+      const renderedFrames = skipped.size > 0 ? frames.filter((frame) => !skipped.has(frame)) : frames;
       const urls = blobs.map((blob) => URL.createObjectURL(blob));
       releasePlaybackCache();
-      playbackCacheRef.current = { renderKey, frames, urls, blobs };
+      playbackCacheRef.current = { renderKey, frames: renderedFrames, urls, blobs };
       playbackCancelRef.current = null;
-      setPlaybackFrames(frames);
+      setPlaybackFrames(renderedFrames);
       setPlaybackUrls(urls);
+      setPlaybackSkippedCount(skipped.size);
+      setPlaybackLoadedSpec({ quality: playbackQuality, frames: renderedFrames });
       setPlaybackPreload(null);
       setIsPlaying(true);
     } catch (error) {
-      console.error('Playback preparation failed:', error);
       setPlaybackPreload(null);
       playbackCancelRef.current = null;
-      window.alert(isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('playbackPrepareFailed'));
+      // The user asked for this one; it is not a failure to report back to them.
+      if (cancelled || (error instanceof Error && error.message === RENDER_CANCELLED)) return;
+      console.error('Playback preparation failed:', error);
+      const message = error instanceof Error && error.message === WMS_TIME_UNAVAILABLE
+        ? t('playbackNoImagery')
+        : isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('playbackPrepareFailed');
+      window.alert(message);
     }
   };
 
@@ -1498,7 +1531,28 @@ export default function DualMapViewer() {
     playbackFramePreview = null;
   }
 
-  const [isDownloadingPlayback, setIsDownloadingPlayback] = useState(false);
+  // Which format is being written, not merely whether one is: the spinner used to sit on the GIF
+  // button whatever you had clicked.
+  /** True when relaunching would produce something other than what is on screen. */
+  const isPlaybackStale = playbackLoadedSpec !== null
+    && playbackFramePreview !== null
+    && (playbackLoadedSpec.quality !== playbackQuality
+      || playbackLoadedSpec.frames.length !== playbackFramePreview.count
+      || playbackLoadedSpec.frames[0] !== playbackFramePreview.start
+      || playbackLoadedSpec.frames[playbackLoadedSpec.frames.length - 1] !== playbackFramePreview.end);
+
+  const relaunchPlayback = () => {
+    setIsPlaying(false);
+    setPlaybackUrls([]);
+    setPlaybackFrames([]);
+    setPlaybackIndex(0);
+    setPlaybackLoadedSpec(null);
+    void startPlayback();
+  };
+
+  const [playbackDownloadFormat, setPlaybackDownloadFormat] = useState<'gif' | 'webm' | null>(null);
+  const [playbackDownloadProgress, setPlaybackDownloadProgress] = useState(0);
+  const isDownloadingPlayback = playbackDownloadFormat !== null;
 
   /**
    * Encodes the sequence already in memory into a GIF. No frame is rendered again: the animation
@@ -1509,7 +1563,8 @@ export default function DualMapViewer() {
     if (!cached || cached.blobs.length === 0 || isDownloadingPlayback) return;
     if (!map2Instance.current || !map2Ref.current) return;
 
-    setIsDownloadingPlayback(true);
+    setPlaybackDownloadFormat(format);
+    setPlaybackDownloadProgress(0);
     try {
       const { saveAs } = await import('file-saver');
       // Resolution and speed are the playback's, deliberately: the promise of this button is that
@@ -1517,6 +1572,11 @@ export default function DualMapViewer() {
       const shared = {
         frameBlobs: cached.blobs,
         frameTimes: cached.frames,
+        // No render pass to account for, so the reported progress is the encode alone. Both
+        // encoders reserve 0-45% for rendering, hence the rescale onto the remaining 55%.
+        onProgress: (value: number) => setPlaybackDownloadProgress(
+          Math.max(0, Math.min(100, Math.round(((value - 45) / 55) * 100))),
+        ),
         fps: playbackFps,
         kind: effectiveGifKind,
         maxDimension: playbackQuality,
@@ -1573,7 +1633,8 @@ export default function DualMapViewer() {
         : isWmsCorsBlocked(error) ? t('exportCorsBlocked') : t('animationExportFailed');
       window.alert(message);
     } finally {
-      setIsDownloadingPlayback(false);
+      setPlaybackDownloadFormat(null);
+      setPlaybackDownloadProgress(0);
     }
   };
 
@@ -1642,10 +1703,10 @@ export default function DualMapViewer() {
   // a view that is no longer there, so the animation closes and the cache goes with it.
   useEffect(() => {
     const map = map2Instance.current;
-    if (!map || (playbackUrls.length === 0 && !playbackPreload)) return;
+    if (!map || (!hasPlaybackOverlay && !isPreparingPlayback)) return;
     const handleMove = () => {
       if (restoringPlaybackViewRef.current) return;
-      if (playbackPreload) {
+      if (isPreparingPlayback) {
         // Each frame is rendered from the map's bounds at the moment it is drawn, so letting the
         // render continue past a pan would mix two framings in one sequence.
         playbackCancelRef.current?.();
@@ -1663,7 +1724,10 @@ export default function DualMapViewer() {
       map.off('movestart', handleMove);
       map.off('zoomstart', handleMove);
     };
-  }, [playbackUrls, playbackPreload, playbackFrames]);
+    // Booleans, not the state itself: `playbackPreload` is a fresh object on every rendered frame,
+    // so depending on it detached and reattached these Leaflet listeners once per frame — 73 times
+    // over a twelve-hour sequence.
+  }, [hasPlaybackOverlay, isPreparingPlayback]);
 
   const restorePlaybackView = () => {
     const map = map2Instance.current;
@@ -1707,10 +1771,10 @@ export default function DualMapViewer() {
    * Returns true when the action has been held back and the dialog is up.
    */
   const requestPlaybackExit = (apply: () => void): boolean => {
-    if (playbackUrls.length === 0 && !playbackPreload) return false;
+    if (!hasPlaybackOverlay && !isPreparingPlayback) return false;
     setIsPlaying(false);
     setPlaybackExitPrompt({
-      mode: playbackPreload ? 'preload' : 'session',
+      mode: isPreparingPlayback ? 'preload' : 'session',
       reason: 'time',
       apply,
     });
@@ -1724,7 +1788,7 @@ export default function DualMapViewer() {
     if (playbackLayersKeyRef.current === renderedWmsLayersKey) return;
     playbackLayersKeyRef.current = renderedWmsLayersKey;
     releasePlaybackCache();
-    if (playbackUrls.length > 0 || playbackPreload) closePlayback();
+    if (hasPlaybackOverlay || isPreparingPlayback) closePlayback();
   }, [renderedWmsLayersKey]);
 
   // A hidden tab throttles the timer; pause rather than close, so coming back resumes where it was.
@@ -1736,6 +1800,16 @@ export default function DualMapViewer() {
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [isPlaying]);
+
+  // Opens the panel when a sequence starts existing — on the rising edge only. Reacting to the
+  // state itself reopened it the moment preparation turned into a ready sequence, undoing a fold
+  // the user had just asked for.
+  const wasPlaybackBusyRef = useRef(false);
+  const isPlaybackBusy = playbackFrames.length > 0 || isPreparingPlayback;
+  useEffect(() => {
+    if (isPlaybackBusy && !wasPlaybackBusyRef.current) setIsAnimationPanelOpen(true);
+    wasPlaybackBusyRef.current = isPlaybackBusy;
+  }, [isPlaybackBusy]);
 
   useEffect(() => releasePlaybackCache, []);
 
@@ -1948,9 +2022,11 @@ export default function DualMapViewer() {
         return;
       }
 
+      // Since issue #78 the export modal is image-only, so `A` opening it too made it a duplicate
+      // of `D`. It now opens the animation panel, which is where GIF and WebM live.
       if (lowerKey === 'a') {
         event.preventDefault();
-        openExportModal();
+        setIsAnimationPanelOpen((previous) => !previous);
         return;
       }
 
@@ -1968,6 +2044,10 @@ export default function DualMapViewer() {
 
       if (lowerKey === 'l') {
         event.preventDefault();
+        // Same guard as the "Dernier" button: jumping to the latest image ends a running
+        // animation, and a shortcut that skips the confirmation the button raises would make the
+        // rule impossible to trust.
+        if (requestPlaybackExit(() => { void jumpToLatest(); })) return;
         void jumpToLatest();
         return;
       }
@@ -2002,6 +2082,7 @@ export default function DualMapViewer() {
     handleTimeChange,
     jumpToLatest,
     openExportModal,
+    requestPlaybackExit,
     resetAdjustments,
     setFireHotspotEnabled,
     setIsAdjustmentsOpen,
@@ -2320,6 +2401,8 @@ export default function DualMapViewer() {
             isSyncingLatest={isJumpingToLatest}
             latestAvailableTime={latestAvailableTime}
             latestAvailableDatePart={latestAvailableDatePart}
+            isAnimationPanelOpen={isAnimationPanelOpen}
+            onAnimationPanelToggle={() => setIsAnimationPanelOpen((previous) => !previous)}
             playbackCustomDate={playbackRange.date}
             playbackCustomDayMaxStep={playbackRange.dayMaxStep}
             playbackCustomEndStep={playbackRange.endStep}
@@ -2328,7 +2411,21 @@ export default function DualMapViewer() {
             playbackFpsMax={MAX_PLAYBACK_FPS}
             playbackFpsMin={MIN_PLAYBACK_FPS}
             playbackFramePreview={playbackFramePreview}
-            playbackDownloadBusy={isDownloadingPlayback}
+            isPlaybackStale={isPlaybackStale}
+            onPlaybackRelaunch={relaunchPlayback}
+            gifColorCount={gifColorCount}
+            gifDitherLevel={gifDitherLevel}
+            gifFinalPauseMs={gifFinalPauseMs}
+            gifPaletteMode={gifPaletteMode}
+            webmQuality={webmQuality}
+            onGifColorCountChange={setGifColorCount}
+            onGifDitherLevelChange={setGifDitherLevel}
+            onGifFinalPauseChange={setGifFinalPauseMs}
+            onGifPaletteModeChange={setGifPaletteMode}
+            onWebmQualityChange={setWebmQuality}
+            playbackSkippedCount={playbackSkippedCount}
+            playbackDownloadFormat={playbackDownloadFormat}
+            playbackDownloadProgress={playbackDownloadProgress}
             playbackFrames={playbackFrames}
             playbackIndex={playbackIndex}
             playbackPreload={playbackPreload}
@@ -2424,17 +2521,7 @@ export default function DualMapViewer() {
       <ExportModal
         availableExportKinds={availableExportKinds}
         currentTime={currentTime}
-        customDate={customAnimationDate}
-        customEnd={customAnimationEnd}
-        customEndStep={customEndStep}
-        customLatestDate={latestAvailableDatePart}
-        customMaxStep={customDayMaxStep}
-        customStart={customAnimationStart}
-        customStartStep={customStartStep}
         downloadProgress={downloadProgress}
-        estimatedFrameCount={animationEstimatedFrameCount}
-        resolvedRangeStart={animationFrameTimesPreview[0] ?? ''}
-        resolvedRangeEnd={animationFrameTimesPreview[animationFrameTimesPreview.length - 1] ?? ''}
         exportFormat={exportFormat}
         exportModalRef={exportModalRef}
         exportResolution={exportResolution}
@@ -2450,45 +2537,22 @@ export default function DualMapViewer() {
           const height = Math.max(64, Math.round(rawHeight * scale));
           return `${width}x${height}`;
         })()}
-        fps={animationFps}
-        gifColorCount={gifColorCount}
-        gifDitherLevel={gifDitherLevel}
-        gifFileName={gifFileName}
-        gifFinalPauseMs={gifFinalPauseMs}
-        gifMaxDimension={gifMaxDimension}
-        gifPaletteMode={gifPaletteMode}
-        gifSelectedKind={effectiveGifKind}
         hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
         isOpen={isExportModalOpen}
         isPreviewLoading={isPreviewLoading}
         onClose={closeExportModal}
-        onColorCountChange={setGifColorCount}
         onConfirmImage={() => {
           if (selectedExportKinds.length === 0) return;
           void downloadPack(selectedExportKinds);
         }}
-        onCustomDateChange={handleCustomDateChange}
-        onCustomEndStepChange={handleCustomEndStepChange}
-        onCustomStartStepChange={handleCustomStartStepChange}
-        onDitherLevelChange={setGifDitherLevel}
         onExportFormatChange={setExportFormat}
         onExportResolutionChange={setExportResolution}
-        onFinalPauseChange={setGifFinalPauseMs}
-        onFpsChange={setAnimationFps}
-        onGifKindChange={setGifSelectedKind}
-        onPaletteModeChange={setGifPaletteMode}
-        onPresetChange={handleAnimationPresetChange}
-        onResolutionChange={setGifMaxDimension}
         onToggleImageKind={(kind, checked) => setSelectedExports((prev) => ({ ...prev, [kind]: checked }))}
-        onWebmQualityChange={setWebmQuality}
-        preset={animationPreset}
         previewImages={previewImages}
-        rangeError={computedAnimationRangeError ?? animationRangeError}
         selectedExports={selectedExports}
         selectedExportKinds={selectedExportKinds}
         t={t}
-        webmQuality={webmQuality}
         theme={resolvedTheme}
       />
 

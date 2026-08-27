@@ -517,18 +517,72 @@ function isReachableWithoutCors(url: string): Promise<boolean> {
   });
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
+/**
+ * Backoff for a GetMap that failed to load. GeoServer answers `x-rate-limit-limit: 20` with
+ * "Delay excess requests 1000ms", and a 73-frame animation asks for up to four layers per frame:
+ * sustained long enough, one of those requests eventually comes back empty. Without a retry a
+ * single such miss rejected the whole render and threw away every frame already produced — a 12h
+ * sequence failed around frame 18 of 73, reproducibly.
+ *
+ * Jittered for the same reason the tile retries are (PR #81): identical delays across the four
+ * layers of a frame just rebuild the burst that caused the failure.
+ */
+const IMAGE_RETRY_DELAYS_MS = [600, 1800, 4500];
+const IMAGE_RETRY_JITTER = 0.4;
+
+function loadImageOnce(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
     img.onload = () => resolve(img);
-    img.onerror = () => {
-      void isReachableWithoutCors(url).then((reachable) => {
-        reject(new Error(reachable ? WMS_CORS_BLOCKED : `Failed to load: ${url}`));
-      });
-    };
+    img.onerror = () => reject(new Error(`Failed to load: ${url}`));
     img.src = url;
   });
+}
+
+/** The slot exists in the request but not in the archive — see `WMS_TIME_UNAVAILABLE`. */
+export const WMS_TIME_UNAVAILABLE = 'wms-time-unavailable';
+
+/**
+ * An `<img>` that fails tells you nothing about why. GeoServer in particular answers a request for
+ * a timestamp it has no scan for with **HTTP 200** and a `ServiceExceptionReport` XML body, which
+ * an image element can only report as a generic error — so a perfectly ordinary gap in the archive
+ * was indistinguishable from the network being down.
+ */
+async function diagnoseImageFailure(url: string): Promise<'cors' | 'time' | 'network'> {
+  try {
+    const response = await fetch(url);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('xml')) {
+      const body = await response.text();
+      if (body.includes('InvalidDimensionValue') || body.includes('ServiceException')) return 'time';
+    }
+    return 'network';
+  } catch {
+    // `fetch` refused where the image element got far enough to fire `onerror`: either the CORS
+    // header is gone or the endpoint is unreachable. The no-CORS probe separates the two.
+    return await isReachableWithoutCors(url) ? 'cors' : 'network';
+  }
+}
+
+async function loadImage(url: string): Promise<HTMLImageElement> {
+  for (let attempt = 0; attempt <= IMAGE_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await loadImageOnce(url);
+    } catch {
+      const cause = await diagnoseImageFailure(url);
+      // Neither of these clears up by asking again.
+      if (cause === 'cors') throw new Error(WMS_CORS_BLOCKED);
+      if (cause === 'time') throw new Error(WMS_TIME_UNAVAILABLE);
+      if (attempt === IMAGE_RETRY_DELAYS_MS.length) break;
+      const base = IMAGE_RETRY_DELAYS_MS[attempt];
+      const spread = base * IMAGE_RETRY_JITTER;
+      const delay = base + (Math.random() * 2 - 1) * spread;
+      await new Promise((resolve) => window.setTimeout(resolve, Math.max(0, delay)));
+    }
+  }
+
+  throw new Error(`Failed to load: ${url}`);
 }
 
 async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Promise<{
@@ -1091,6 +1145,10 @@ type RenderAnimationFramesOptions = Omit<DownloadSatellitePackOptions, 'requeste
   kind: ExportKind;
   maxDimension: number;
   onFrameProgress?: (fraction: number) => void;
+  /** Called once at the end with the timestamps MTG had no scan for, if any. */
+  onSkippedFrames?: (times: string[]) => void;
+  /** Aborts the sequence between two frames. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -1099,18 +1157,41 @@ type RenderAnimationFramesOptions = Omit<DownloadSatellitePackOptions, 'requeste
  * export here is a fixed sequence of pre-rendered stills replayed at `fps`, not a live capture of
  * a continuously-redrawing map, since each frame requires its own round-trip to the WMS endpoint.
  */
+export const RENDER_CANCELLED = 'render-cancelled';
+
 export async function renderAnimationFrameBlobs(options: RenderAnimationFramesOptions): Promise<Blob[]> {
-  const { frameTimes, kind, maxDimension, onFrameProgress, ...shared } = options;
+  const { frameTimes, kind, maxDimension, onFrameProgress, onSkippedFrames, signal, ...shared } = options;
   const frameBlobs: Blob[] = [];
+  const skipped: string[] = [];
 
   for (let index = 0; index < frameTimes.length; index += 1) {
+    // Checked between frames rather than mid-frame: a frame is four parallel GetMap round-trips
+    // and a canvas pass, and abandoning one halfway leaves nothing worth keeping anyway. Without
+    // this the loop ran to completion after a cancel, and cancelling then relaunching put two
+    // full renders on a rate-limited endpoint at once.
+    if (signal?.aborted) throw new Error(RENDER_CANCELLED);
     const time = frameTimes[index];
-    const frame = await renderSatelliteFrames({
-      ...shared,
-      currentTime: time,
-      requestedKinds: [kind],
-      maxDimension,
-    });
+    let frame;
+    try {
+      frame = await renderSatelliteFrames({
+        ...shared,
+        currentTime: time,
+        requestedKinds: [kind],
+        maxDimension,
+      });
+    } catch (error) {
+      // MTG does not publish every ten-minute slot: a scan can be missing, and GeoServer answers
+      // a request for one with `InvalidDimensionValue`. That is an ordinary gap in the archive,
+      // not a failure of the export — dropping the frame and carrying on is what the user wants.
+      // Aborting instead is what made a twelve-hour animation fail outright around frame 18 of 73
+      // while a three-hour one, short enough to miss every gap, always worked.
+      if (error instanceof Error && error.message === WMS_TIME_UNAVAILABLE) {
+        skipped.push(time);
+        onFrameProgress?.((index + 1) / frameTimes.length);
+        continue;
+      }
+      throw error;
+    }
 
     if (frame.files.length === 0) {
       throw new Error(`No render output for frame at ${time}`);
@@ -1120,11 +1201,17 @@ export async function renderAnimationFrameBlobs(options: RenderAnimationFramesOp
     onFrameProgress?.((index + 1) / frameTimes.length);
   }
 
+  if (frameBlobs.length === 0) {
+    throw new Error(WMS_TIME_UNAVAILABLE);
+  }
+  if (skipped.length > 0) onSkippedFrames?.(skipped);
+
   return frameBlobs;
 }
 
 export async function exportAnimationGif(options: ExportAnimationGifOptions): Promise<Blob> {
   const {
+    frameBlobs: providedFrameBlobs,
     frameTimes,
     fps,
     kind,
@@ -1154,7 +1241,7 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
   let targetHeight = 0;
   // Frames the caller already holds — the in-app animation keeps its rendered sequence, so
   // downloading what is on screen costs an encode rather than a full re-render (issue #78).
-  const frameBlobs = options.frameBlobs ?? await renderAnimationFrameBlobs({
+  const frameBlobs = providedFrameBlobs ?? await renderAnimationFrameBlobs({
     ...shared,
     frameTimes,
     kind,
@@ -1242,6 +1329,8 @@ export async function exportAnimationGif(options: ExportAnimationGifOptions): Pr
 }
 
 type ExportAnimationWebmOptions = Omit<DownloadSatellitePackOptions, 'requestedKinds' | 'currentTime' | 'imageFormat'> & {
+  /** Pre-rendered frames, one per `frameTimes` entry. Skips the render pass entirely. */
+  frameBlobs?: Blob[];
   frameTimes: string[];
   fps: number;
   kind: ExportKind;
@@ -1271,6 +1360,7 @@ function pickSupportedWebmMimeType(): string | undefined {
  */
 export async function exportAnimationWebm(options: ExportAnimationWebmOptions): Promise<Blob> {
   const {
+    frameBlobs: providedFrameBlobs,
     frameTimes,
     fps,
     kind,
@@ -1289,7 +1379,9 @@ export async function exportAnimationWebm(options: ExportAnimationWebmOptions): 
     throw new Error('webm-unsupported');
   }
 
-  const frameBlobs = await renderAnimationFrameBlobs({
+  // Frames the caller already holds — same contract as the GIF export, so downloading the
+  // animation on screen costs an encode rather than a second pass over the WMS endpoint.
+  const frameBlobs = providedFrameBlobs ?? await renderAnimationFrameBlobs({
     ...shared,
     frameTimes,
     kind,
