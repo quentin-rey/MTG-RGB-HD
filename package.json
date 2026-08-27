@@ -8,8 +8,9 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rimraf dist",
-    "lint": "tsc --noEmit",
-    "export:composite": "tsx scripts/export-composite.ts"
+    "lint": "tsc --noEmit && oxlint",
+    "export:composite": "tsx scripts/export-composite.ts",
+    "lint:fix": "oxlint --fix"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.5.4",
     "esbuild": "^0.28.2",
+    "oxlint": "^1.80.0",
     "playwright": "^1.55.0",
     "rimraf": "^6.0.1",
     "tailwindcss": "^4.3.3",

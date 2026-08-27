@@ -673,7 +673,6 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     shouldPreferIrBaseAtNight,
     effectiveRgbVisOnlyVisOpacity: exportRgbVisOnlyVisOpacity,
     effectiveHybridOnlyVisOpacity: exportHybridVisOpacity,
-    effectiveHybridIrOpacity: exportHybridIrOpacity,
     effectiveCloudOnlyIrOpacity: exportCloudOnlyIrOpacity,
     cloudOnlyIrVisMaskWeight: hybridVisMaskWeight,
     cloudOnlyIrNightFloor,
@@ -886,7 +885,8 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   })() : null;
 
   const drawOverlays = async (context: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
-    const drawGeoJsonFeatures = (geoJsonData: any, strokeStyle: string, lineWidth: number) => {
+    // Stroke style and width are read from the context, which every caller sets just above.
+    const drawGeoJsonFeatures = (geoJsonData: any) => {
       const drawLineString = (coords: any[]) => {
         coords.forEach((coord, index) => {
           const projected = L.CRS.EPSG3857.project(L.latLng(coord[1], coord[0]));
@@ -921,7 +921,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
       context.lineWidth = Math.max(1, Math.round(canvasWidth / rect.width));
       context.beginPath();
-      drawGeoJsonFeatures(data, `rgba(255, 255, 255, ${bordersOpacity})`, Math.max(1, Math.round(canvasWidth / rect.width)));
+      drawGeoJsonFeatures(data);
       context.restore();
     }
 
@@ -932,7 +932,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.strokeStyle = `rgba(200, 220, 255, ${departmentsOpacity})`;
       context.lineWidth = Math.max(0.5, Math.round(canvasWidth / rect.width) * 0.6);
       context.beginPath();
-      drawGeoJsonFeatures(data, `rgba(200, 220, 255, ${departmentsOpacity})`, Math.max(0.5, Math.round(canvasWidth / rect.width) * 0.6));
+      drawGeoJsonFeatures(data);
       context.restore();
     }
 

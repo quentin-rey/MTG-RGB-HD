@@ -695,15 +695,6 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     return `${WMS_URL_DIRECT}?service=WMS&request=GetMap&layers=${encodeURIComponent(layer)}&styles=${encodeURIComponent(style)}&format=image/png&transparent=true&version=1.1.1&srs=EPSG:3857&bbox=${bbox}&width=256&height=256&time=${encodeURIComponent(isoTime)}`;
   };
 
-  const loadImage = (url: string) => {
-    return new Promise<HTMLImageElement>((resolve, reject) => {
-      const image = new Image();
-      image.crossOrigin = 'Anonymous';
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error(`Failed to load tile: ${url}`));
-      image.src = url;
-    });
-  };
 
   /**
    * `loadImage` plus a way to call the request off. Needed by the two canvas GridLayers below:
@@ -1140,6 +1131,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         loadingStuckTimeoutRef.current = null;
       }
     };
+    // Mount-only by design: this builds the two Leaflet instances. Re-running it for any of the
+    // values it reads would tear the maps down and rebuild them.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -1314,6 +1308,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     }
 
     return cleanUp;
+    // `irStyle` changes are handled by the layer-building effect, which recreates the layers; a
+    // second path here would refetch the grid for a change already taken care of.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTime]);
 
   useEffect(() => {
@@ -1444,6 +1441,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
         overlayFadeOutTimeoutRef.current = null;
       }
     };
+    // Deliberately narrow. `currentTime` is absent because including it made `setParams` wipe the
+    // entire tile grid on every time change (PR #82), and the opacities are applied by the sync
+    // effect below instead of by tearing these layers down.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     baseLayer,
     irStyle,
@@ -1495,6 +1496,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     return () => {
       unbindHybridLoading();
     };
+    // The opacities are applied by the sync effect below rather than by rebuilding this layer:
+    // panning nudges the mask weight continuously, and this canvas layer is expensive to remake.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [isCloudOnlyIrMode, isVisIrMode, currentTime, irStyle, cloudOnlyIrVisMaskWeight, cloudOnlyIrNightFloor]);
 
   // Fire hotspot overlay: isolated from the WMS base/overlay effect above for the same reason
@@ -1522,6 +1526,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     fireHotspotLayerRef.current = createFireHotspotLayer(isoTime, debouncedFireHotspotThresholds);
     fireHotspotLayerRef.current.addTo(map2);
     fireHotspotLayerRef.current.setOpacity(fireHotspotOpacity);
+    // `fireHotspotOpacity` is applied by the opacity-sync effect below, which lists it. Adding it
+    // here would rebuild the whole hotspot layer on every drag of the slider.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [fireHotspotEnabled, currentTime, debouncedFireHotspotThresholds]);
 
   useEffect(() => {
@@ -1675,6 +1682,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     return () => {
       map2Instance.current?.off('moveend zoomend', refreshCityLabels);
     };
+    // `borderStrokeOpacity` and `departmentsStrokeOpacity` are clamps *of* `mapOptions`, which is
+    // already listed, and `renderCityLabelsOnMap` is a pure renderer recreated on every pass.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [mapOptions, mapsReady]);
 
   return {

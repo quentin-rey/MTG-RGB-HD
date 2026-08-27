@@ -307,7 +307,7 @@ export function getRenderedWmsLayers(params: {
   >;
   fireHotspotEnabled: boolean;
 }): string[] {
-  const { activeLayers, blendState, fireHotspotEnabled } = params;
+  const { blendState, fireHotspotEnabled } = params;
   const layers = new Set<string>();
 
   if (blendState.baseLayer === 'rgb') layers.add(LAYER_RGB);
