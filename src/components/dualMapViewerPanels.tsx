@@ -390,6 +390,17 @@ export function TimeDock(props: TimeDockProps) {
   const displayedHour = String(Math.floor(displayedMinutes / 60)).padStart(2, '0');
   const displayedMinute = String(displayedMinutes % 60).padStart(2, '0');
 
+  // Same reason as DualMapViewer's shortcut listener: read the action at keypress time rather than
+  // capturing it. Depending on the derived `totalMinutes` alone was what let the first arrow press
+  // during an animation slip past the exit confirmation, since that value is frozen while a
+  // sequence plays and the effect therefore never re-subscribed with a current callback.
+  const stepTimeRef = useRef(updateTimeFromTotalMinutes);
+  const totalMinutesRef = useRef(totalMinutes);
+  useEffect(() => {
+    stepTimeRef.current = updateTimeFromTotalMinutes;
+    totalMinutesRef.current = totalMinutes;
+  });
+
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -406,19 +417,13 @@ export function TimeDock(props: TimeDockProps) {
       const delta = event.key === 'ArrowLeft' ? -baseStep : baseStep;
       event.preventDefault();
       event.stopPropagation();
-      updateTimeFromTotalMinutes(totalMinutes + delta);
+      stepTimeRef.current(totalMinutesRef.current + delta);
     };
 
     // Capture phase ensures map keyboard handlers (Leaflet) do not consume arrows first.
     window.addEventListener('keydown', handleKeydown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-    // `onTimeChange` belongs here even though it changes on every render. During playback
-    // `currentTime` is frozen on the frame the animation was opened from, so `totalMinutes` never
-    // moves — and depending on it alone kept the callback captured *before* the animation started,
-    // the one whose playback guard still saw no session. The first arrow press then changed the
-    // time with no confirmation dialog at all (issue #78). Re-subscribing a window listener is far
-    // cheaper than rendering the frame that caused the re-render.
-  }, [datePart, onTimeChange, totalMinutes]);
+  }, []);
 
   return (
     <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-[420] w-[min(96vw,48rem)] pointer-events-auto">
@@ -1813,7 +1818,6 @@ export function InfoModal(props: InfoModalProps) {
   );
 }
 
-type ExportMode = 'image' | 'gif' | 'webm';
 
 type ExportKindGridProps = {
   availableExportKinds: ExportKind[];
@@ -1934,7 +1938,6 @@ export function ExportModal(props: ExportModalProps) {
     onExportResolutionChange,
     onToggleImageKind,
     previewImages,
-    selectedExports,
     selectedExportKinds,
     t,
     theme,
