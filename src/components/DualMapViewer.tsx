@@ -1291,7 +1291,14 @@ export default function DualMapViewer() {
    * the layers, every image adjustment, and the map's framing — so a stale set can never be
    * replayed as if it described the current view.
    */
-  const playbackCacheRef = useRef<{ renderKey: string; frames: string[]; urls: string[]; blobs: Blob[] } | null>(null);
+  const playbackCacheRef = useRef<{
+    renderKey: string;
+    /** The range *selection* the frames were built from, not the resolved list — see startPlayback. */
+    rangeSpec: string;
+    frames: string[];
+    urls: string[];
+    blobs: Blob[];
+  } | null>(null);
   const playbackRenderedViewRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
   // Set while we put the map back ourselves, so the guard below doesn't mistake it for the user
   // moving the map again.
@@ -1377,28 +1384,33 @@ export default function DualMapViewer() {
     setPlaybackIndex(0);
 
     const renderKey = buildPlaybackRenderKey();
+    const rangeSpec = JSON.stringify(playbackRangeSpec);
     const cached = playbackCacheRef.current;
-    if (cached && cached.renderKey === renderKey) {
-      // Same frames, or the time we are sitting on is one of the frames already rendered. The
-      // second case is the ordinary stop-and-replay: closing the animation moves the current time
-      // onto the frame you stopped at, which shifts a preset range's anchor — rebuilding an
-      // identical-looking sequence for that would waste a render per frame.
-      const sameFrames = cached.frames.length === frames.length
-        && cached.frames.every((frame, index) => frame === frames[index]);
+    /*
+     * Reuse is keyed on the range *selection* — the preset and the custom bounds — rather than on
+     * the resolved frame list. That is what makes the ordinary stop-and-replay free: closing the
+     * animation moves the current time onto the frame you stopped at, which shifts a preset's
+     * anchor and therefore its frame list, while the selection itself has not changed.
+     *
+     * The previous version inferred that from `cached.frames.indexOf(currentTime) >= 0`, which is
+     * always true — the current time is where the animation was opened from, so it is necessarily
+     * one of the frames already rendered. Picking a different range and pressing "Recharger" then
+     * replayed the old sequence with no render at all (issue #91).
+     */
+    if (cached && cached.renderKey === renderKey && cached.rangeSpec === rangeSpec) {
+      // Resume on the frame being viewed when it belongs to the sequence, otherwise from the top.
       const resumeIndex = cached.frames.indexOf(currentTime);
-      if (sameFrames || resumeIndex >= 0) {
-        playbackRenderedViewRef.current = {
-          lat: map2Instance.current.getCenter().lat,
-          lng: map2Instance.current.getCenter().lng,
-          zoom: map2Instance.current.getZoom(),
-        };
-        setPlaybackFrames(cached.frames);
-        setPlaybackUrls(cached.urls);
-        setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
-        setPlaybackLoadedSpec({ quality: playbackQuality, frames: cached.frames });
-        setIsPlaying(true);
-        return;
-      }
+      playbackRenderedViewRef.current = {
+        lat: map2Instance.current.getCenter().lat,
+        lng: map2Instance.current.getCenter().lng,
+        zoom: map2Instance.current.getZoom(),
+      };
+      setPlaybackFrames(cached.frames);
+      setPlaybackUrls(cached.urls);
+      setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
+      setPlaybackLoadedSpec({ quality: playbackQuality, frames: cached.frames });
+      setIsPlaying(true);
+      return;
     }
 
     const map = map2Instance.current;
@@ -1471,7 +1483,7 @@ export default function DualMapViewer() {
       const renderedFrames = skipped.size > 0 ? frames.filter((frame) => !skipped.has(frame)) : frames;
       const urls = blobs.map((blob) => URL.createObjectURL(blob));
       releasePlaybackCache();
-      playbackCacheRef.current = { renderKey, frames: renderedFrames, urls, blobs };
+      playbackCacheRef.current = { renderKey, rangeSpec, frames: renderedFrames, urls, blobs };
       playbackCancelRef.current = null;
       setPlaybackFrames(renderedFrames);
       setPlaybackUrls(urls);
