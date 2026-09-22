@@ -477,8 +477,12 @@ export default function DualMapViewer() {
   });
   const [exportFormat, setExportFormat] = useState<StillImageFormat>('png');
   const [exportResolution, setExportResolution] = useState<1920 | 2560 | 4096>(4096);
-  const [webmQuality, setWebmQuality] = useState(0.8);
-  const [gifSelectedKind] = useState<ExportKind | null>(null);
+  const [webmQuality, setWebmQuality] = useState(() => {
+    const value = Number(sharedSnapshot?.webmQuality);
+    return Number.isFinite(value) && typeof sharedSnapshot?.webmQuality === 'number'
+      ? Math.max(0.5, Math.min(1, value))
+      : 0.8;
+  });
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [previewImages, setPreviewImages] = useState<Partial<Record<ExportKind, string>>>({});
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -760,14 +764,6 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.currentTime, JSON.stringify(currentTime));
   }, [currentTime]);
-  const [animationPreset] = useState<AnimationPreset>(() => {
-    const preset = sharedSnapshot?.animationPreset;
-    return preset === '3h' || preset === '6h' || preset === '12h' || preset === 'custom' ? preset : '3h';
-  });
-  const [animationFps] = useState(() => {
-    const fps = Number(sharedSnapshot?.animationFps ?? 6);
-    return Math.max(2, Math.min(20, Math.round(fps)));
-  });
 
   // In-app animation (issue #78). `playbackFrames` is the resolved sequence for the current
   // session, `playbackIndex` the frame on screen; `isPlaybackActive` is what tells the map hook to
@@ -777,22 +773,26 @@ export default function DualMapViewer() {
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [playbackPreload, setPlaybackPreload] = useState<{ done: number; total: number } | null>(null);
   const [playbackUrls, setPlaybackUrls] = useState<string[]>([]);
+  // A share link outranks what this browser remembers, for the same reason it does for every other
+  // setting: the link describes a view someone chose to send.
   const [playbackFps, setPlaybackFps] = useState<number>(() => {
-    const stored = readStoredJson<number>(STORAGE_KEYS.playbackFps, DEFAULT_PLAYBACK_FPS);
-    return Number.isFinite(stored)
-      ? Math.max(MIN_PLAYBACK_FPS, Math.min(MAX_PLAYBACK_FPS, Math.round(stored)))
+    const value = sharedSnapshot?.playbackFps ?? readStoredJson<number>(STORAGE_KEYS.playbackFps, DEFAULT_PLAYBACK_FPS);
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(MIN_PLAYBACK_FPS, Math.min(MAX_PLAYBACK_FPS, Math.round(value)))
       : DEFAULT_PLAYBACK_FPS;
   });
-  const [playbackBoomerang, setPlaybackBoomerang] = useState<boolean>(
-    () => readStoredJson<boolean>(STORAGE_KEYS.playbackBoomerang, false),
-  );
+  const [playbackBoomerang, setPlaybackBoomerang] = useState<boolean>(() => (
+    typeof sharedSnapshot?.playbackBoomerang === 'boolean'
+      ? sharedSnapshot.playbackBoomerang
+      : readStoredJson<boolean>(STORAGE_KEYS.playbackBoomerang, false) === true
+  ));
   const [playbackQuality, setPlaybackQuality] = useState<PlaybackQuality>(() => {
-    const stored = readStoredJson<PlaybackQuality>(STORAGE_KEYS.playbackQuality, DEFAULT_PLAYBACK_QUALITY);
-    return PLAYBACK_QUALITY_CHOICES.includes(stored) ? stored : DEFAULT_PLAYBACK_QUALITY;
+    const value = sharedSnapshot?.playbackQuality ?? readStoredJson<unknown>(STORAGE_KEYS.playbackQuality, DEFAULT_PLAYBACK_QUALITY);
+    return PLAYBACK_QUALITY_CHOICES.find((choice) => choice === value) ?? DEFAULT_PLAYBACK_QUALITY;
   });
   const [playbackPreset, setPlaybackPreset] = useState<AnimationPreset>(() => {
-    const stored = readStoredJson<AnimationPreset>(STORAGE_KEYS.playbackPreset, '3h');
-    return stored === '3h' || stored === '6h' || stored === '12h' || stored === 'custom' ? stored : '3h';
+    const value = sharedSnapshot?.playbackPreset ?? readStoredJson<unknown>(STORAGE_KEYS.playbackPreset, '3h');
+    return value === '3h' || value === '6h' || value === '12h' || value === 'custom' ? value : '3h';
   });
   const playbackCancelRef = useRef<(() => void) | null>(null);
   useEffect(() => {
@@ -807,10 +807,6 @@ export default function DualMapViewer() {
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.playbackBoomerang, JSON.stringify(playbackBoomerang));
   }, [playbackBoomerang]);
-  const [gifMaxDimension] = useState<960 | 1280 | 1600>(() => {
-    const value = sharedSnapshot?.gifMaxDimension;
-    return value === 960 || value === 1280 || value === 1600 ? value : 1280;
-  });
   const [gifColorCount, setGifColorCount] = useState<64 | 128 | 256>(() => {
     const value = sharedSnapshot?.gifColorCount;
     return value === 64 || value === 128 || value === 256 ? value : 128;
@@ -879,24 +875,28 @@ export default function DualMapViewer() {
   // export renderers did before their blending math was centralised into
   // `computeLayerBlendState` (dualMapViewerShared.ts).
   const isAtLatest = currentTime >= latestAvailableTime;
-  const exportRange = useCustomAnimationRange({
-    initialDate: sanitizeUtcDateValue(sharedSnapshot?.customAnimationDate) ?? currentTime.split('T')[0],
-    initialStartStep: typeof sharedSnapshot?.customStartStep === 'number'
-      ? Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customStartStep)))
-      : Math.max(0, getStepFromUtcValue(latestAvailableTime) - 18),
-    initialEndStep: typeof sharedSnapshot?.customEndStep === 'number'
-      ? Math.max(0, Math.min(DAY_MAX_STEP, Math.round(sharedSnapshot.customEndStep)))
-      : getStepFromUtcValue(latestAvailableTime),
-    latestAvailableTime,
-    latestAvailableDatePart,
-  });
-
-  // Playback's own range, independent of the export's (see useCustomAnimationRange).
+  // A step is only usable as a finite number: anything else from a link or from storage would put
+  // NaN in the range and "NaN:NaN" on the sliders.
+  const readStep = (shared: unknown, key: string, fallback: number): number => {
+    const value = typeof shared === 'number' ? shared : readStoredJson<unknown>(key, fallback);
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(DAY_MAX_STEP, Math.round(value)))
+      : fallback;
+  };
   const playbackRange = useCustomAnimationRange({
-    initialDate: sanitizeUtcDateValue(readStoredJson<string | null>(STORAGE_KEYS.playbackCustomDate, null))
+    initialDate: sanitizeUtcDateValue(sharedSnapshot?.playbackCustomDate)
+      ?? sanitizeUtcDateValue(readStoredJson<string | null>(STORAGE_KEYS.playbackCustomDate, null))
       ?? currentTime.split('T')[0],
-    initialStartStep: readStoredJson<number>(STORAGE_KEYS.playbackCustomStartStep, Math.max(0, getStepFromUtcValue(latestAvailableTime) - 18)),
-    initialEndStep: readStoredJson<number>(STORAGE_KEYS.playbackCustomEndStep, getStepFromUtcValue(latestAvailableTime)),
+    initialStartStep: readStep(
+      sharedSnapshot?.playbackCustomStartStep,
+      STORAGE_KEYS.playbackCustomStartStep,
+      Math.max(0, getStepFromUtcValue(latestAvailableTime) - 18),
+    ),
+    initialEndStep: readStep(
+      sharedSnapshot?.playbackCustomEndStep,
+      STORAGE_KEYS.playbackCustomEndStep,
+      getStepFromUtcValue(latestAvailableTime),
+    ),
     latestAvailableTime,
     latestAvailableDatePart,
   });
@@ -906,10 +906,6 @@ export default function DualMapViewer() {
     safeSetLocalStorage(STORAGE_KEYS.playbackCustomStartStep, JSON.stringify(playbackRange.startStep));
     safeSetLocalStorage(STORAGE_KEYS.playbackCustomEndStep, JSON.stringify(playbackRange.endStep));
   }, [playbackRange.date, playbackRange.startStep, playbackRange.endStep]);
-
-  const customAnimationDate = exportRange.date;
-  const customStartStep = exportRange.startStep;
-  const customEndStep = exportRange.endStep;
 
   const {
     cityLoadPromiseRef,
@@ -1058,9 +1054,8 @@ export default function DualMapViewer() {
   const visHdLegacyContrast = Math.min(2.4, visContrast * RGB_VIS_FUSION.visContrastBoost * hdPreviewVisContrastBoost);
   const availableExportKinds: ExportKind[] = getAvailableExportKindsFromLayers(activeLayers);
   const selectedExportKinds = availableExportKinds.filter((kind) => selectedExports[kind]);
-  const effectiveGifKind: ExportKind = gifSelectedKind && availableExportKinds.includes(gifSelectedKind)
-    ? gifSelectedKind
-    : getAnimationExportKind(activeLayers);
+  // The one kind an animation is rendered as: the composite of whatever layers are on.
+  const animationKind = getAnimationExportKind(activeLayers);
 
   // True while an auto-update refresh is loading tiles nobody asked for. Used only to keep the
   // blocking "Chargement des tuiles" modal from popping up unattended every 10 minutes, which is
@@ -1337,7 +1332,7 @@ export default function DualMapViewer() {
       ? `${map.getCenter().lat.toFixed(4)},${map.getCenter().lng.toFixed(4)},${map.getZoom()},${container.clientWidth}x${container.clientHeight}`
       : 'no-map';
     return [
-      effectiveGifKind, playbackQuality, view,
+      animationKind, playbackQuality, view,
       `${activeLayers.rgb}${activeLayers.vis}${activeLayers.ir}`,
       fireHotspotEnabled, fireHotspotMinBrightness, fireHotspotMinRedBlueDiff, fireHotspotOpacity,
       irStyle, visBrightness, visContrast,
@@ -1435,7 +1430,7 @@ export default function DualMapViewer() {
       const blobs = await renderAnimationFrameBlobs({
         onSkippedFrames: (times) => { skippedFrames = times; },
         frameTimes: frames,
-        kind: effectiveGifKind,
+        kind: animationKind,
         maxDimension: playbackQuality,
         imageFormat: 'jpeg',
         signal: controller.signal,
@@ -1565,7 +1560,7 @@ export default function DualMapViewer() {
           Math.max(0, Math.min(100, Math.round(((value - 45) / 55) * 100))),
         ),
         fps: playbackFps,
-        kind: effectiveGifKind,
+        kind: animationKind,
         maxDimension: playbackQuality,
         map: map2Instance.current,
         mapContainer: map2Ref.current,
@@ -1611,7 +1606,7 @@ export default function DualMapViewer() {
 
       const safeStart = cached.frames[0].replace('T', '_').replace(/:/g, '-');
       const safeEnd = cached.frames[cached.frames.length - 1].replace('T', '_').replace(/:/g, '-');
-      const baseName = getExportFileBaseName(effectiveGifKind, hdEnhanceEnabled);
+      const baseName = getExportFileBaseName(animationKind, hdEnhanceEnabled);
       saveAs(blob, `MTG_ANIMATION_${baseName}_${playbackQuality}px_${safeStart}_to_${safeEnd}.${format}`);
     } catch (error) {
       console.error('Playback download failed:', error);
@@ -1935,12 +1930,7 @@ export default function DualMapViewer() {
 
     const snapshot: ShareSnapshot = {
       activeLayers,
-      animationFps,
-      animationPreset,
       autoReduceVisAtNight,
-      customAnimationDate,
-      customEndStep,
-      customStartStep,
       currentTime,
       fireHotspotEnabled,
       fireHotspotMinBrightness,
@@ -1949,7 +1939,6 @@ export default function DualMapViewer() {
       gifColorCount,
       gifDitherLevel,
       gifFinalPauseMs,
-      gifMaxDimension,
       gifPaletteMode,
       hdEnhanceEnabled,
       hdEnhanceHighlightProtection,
@@ -1965,12 +1954,20 @@ export default function DualMapViewer() {
       language,
       mapOptions,
       mapView: shareMapView,
+      playbackBoomerang,
+      playbackCustomDate: playbackRange.date,
+      playbackCustomEndStep: playbackRange.endStep,
+      playbackCustomStartStep: playbackRange.startStep,
+      playbackFps,
+      playbackPreset,
+      playbackQuality,
       rgbHdOpacity,
       rgbSaturation,
       sandwichOpacity,
       themeMode,
       visBrightness,
       visContrast,
+      webmQuality,
     };
 
     return copyShareLink(snapshot, { copied: t('shareCopied'), failed: t('shareCopyFailed') });

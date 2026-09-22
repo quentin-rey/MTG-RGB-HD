@@ -1827,14 +1827,13 @@ type ExportKindGridProps = {
   isPreviewLoading: boolean;
   previewImages: Partial<Record<ExportKind, string>>;
   selectedKinds: ExportKind[];
-  selectionMode: 'multiple' | 'single';
   onSelect: (kind: ExportKind, checked: boolean) => void;
   t: Translator;
 };
 
-/** Shared by both export modes: multi-select checkboxes for still images, single-select radios for the GIF's source layer. */
+/** One tile per exportable kind, with its real preview render and a checkbox. */
 function ExportKindGrid(props: ExportKindGridProps) {
-  const { availableExportKinds, hdEnhanceEnabled, isDisabled, isLight, isPreviewLoading, previewImages, selectedKinds, selectionMode, onSelect, t } = props;
+  const { availableExportKinds, hdEnhanceEnabled, isDisabled, isLight, isPreviewLoading, previewImages, selectedKinds, onSelect, t } = props;
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -1868,8 +1867,7 @@ function ExportKindGrid(props: ExportKindGridProps) {
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
 
             <input
-              type={selectionMode === 'multiple' ? 'checkbox' : 'radio'}
-              name={selectionMode === 'single' ? 'export-kind-single' : undefined}
+              type="checkbox"
               checked={isSelected}
               disabled={isDisabled}
               onChange={(e) => onSelect(kind, e.target.checked)}
@@ -1890,7 +1888,6 @@ function ExportKindGrid(props: ExportKindGridProps) {
 }
 
 type ExportModalProps = {
-  // Shared
   availableExportKinds: ExportKind[];
   currentTime: string;
   exportModalRef: React.RefObject<HTMLDivElement | null>;
@@ -1902,8 +1899,6 @@ type ExportModalProps = {
   previewImages: Partial<Record<ExportKind, string>>;
   t: Translator;
   theme: UiTheme;
-
-  // Image mode
   downloadProgress: number;
   exportFormat: StillImageFormat;
   exportResolution: 1920 | 2560 | 4096;
@@ -1915,7 +1910,6 @@ type ExportModalProps = {
   onToggleImageKind: (kind: ExportKind, checked: boolean) => void;
   selectedExports: Record<ExportKind, boolean>;
   selectedExportKinds: ExportKind[];
-
 };
 
 export function ExportModal(props: ExportModalProps) {
@@ -1947,8 +1941,6 @@ export function ExportModal(props: ExportModalProps) {
 
   // Image-only since issue #78: GIF and WebM are produced from the animation panel, where the
   // sequence can be watched before it is downloaded.
-  const isExportingCurrent = isExporting;
-  const currentProgress = downloadProgress;
   const fileExtension = exportFormat === 'jpeg' ? 'jpg' : 'png';
   const safeZipSuffix = currentTime.replace('T', '_').replace(/:/g, '-');
   const isSingleFile = selectedExportKinds.length === 1;
@@ -1975,8 +1967,7 @@ export function ExportModal(props: ExportModalProps) {
         </div>
 
         <div className="ui-scrollbar overflow-y-auto flex-1 min-h-0 px-6 pb-4">
-
-<p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
+        <p className={`text-sm mb-4 ${themedClass(isLight, 'text-slate-700', 'text-slate-300')}`}>
           {t('downloadModalDescription')}
         </p>
 
@@ -2002,7 +1993,6 @@ export function ExportModal(props: ExportModalProps) {
               isPreviewLoading={isPreviewLoading}
               previewImages={previewImages}
               selectedKinds={selectedExportKinds}
-              selectionMode="multiple"
               onSelect={onToggleImageKind}
               t={t}
             />
@@ -2059,7 +2049,7 @@ export function ExportModal(props: ExportModalProps) {
           <div className="flex items-center justify-end gap-2">
             <button
               onClick={onClose}
-              disabled={isExportingCurrent}
+              disabled={isExporting}
               className={`px-3 py-2 text-sm rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 isLight
                   ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
@@ -2070,15 +2060,15 @@ export function ExportModal(props: ExportModalProps) {
             </button>
             <button
               onClick={onConfirmImage}
-              disabled={!canConfirm || isExportingCurrent}
+              disabled={!canConfirm || isExporting}
               className={`px-3 py-2 text-sm rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                 isLight
                   ? 'bg-slate-900 text-white hover:bg-slate-700'
                   : 'bg-white text-black hover:bg-slate-200'
               }`}
             >
-              {isExportingCurrent
-                ? `${t('generating')} ${currentProgress}%`
+              {isExporting
+                ? `${t('generating')} ${downloadProgress}%`
                 : t('downloadSelection')}
             </button>
           </div>
