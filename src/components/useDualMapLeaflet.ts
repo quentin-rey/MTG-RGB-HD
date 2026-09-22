@@ -61,6 +61,12 @@ const TILE_RETRY_SPACING_MS = 150;
  */
 const TIME_PREWARM_TIMEOUT_MS = 25000;
 
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+}
+
 /** Per-tile retry counter, carried on the <img> element Leaflet hands back with 'tileerror'. */
 type RetriableTile = HTMLImageElement & { __tileRetryCount?: number };
 
@@ -284,7 +290,10 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     const sizeClass = zoom >= 8 ? 'city-label-lg' : zoom >= 6 ? 'city-label-md' : 'city-label-sm';
     return L.divIcon({
       className: `city-label ${sizeClass}`,
-      html: `<span class="city-dot"></span><span class="city-label-text">${text}</span>`,
+      // The name is escaped because Leaflet assigns `html` through innerHTML, and the names come
+      // from a third-party dataset fetched at runtime: one `<img onerror=...>` in it would run in
+      // this page. A place name has no business containing markup.
+      html: `<span class="city-dot"></span><span class="city-label-text">${escapeHtml(text)}</span>`,
       iconSize: undefined,
       iconAnchor: [0, 0],
     });
