@@ -15,7 +15,7 @@ import {
   LAYER_VIS,
   RGB_VIS_FUSION,
   type ActiveLayers,
-  type CityFeature,
+  type City,
   type ExportKind,
   type HdEnhancementPreset,
   type IrStyle,
@@ -55,10 +55,11 @@ type DownloadSatellitePackOptions = {
   autoReduceVisAtNight: boolean;
   mapOptions: MapOptions;
   language: Language;
-  map1BordersLayer: L.GeoJSON | null;
-  map1DepartmentsLayer: L.GeoJSON | null;
+  /** Overlay data, pending until its first download ends; null while the overlay was never enabled. */
+  bordersData: Promise<GeoJSON.GeoJsonObject | null> | null;
+  departmentsData: Promise<GeoJSON.GeoJsonObject | null> | null;
   cityLoadPromise: Promise<void> | null;
-  getVisibleCityFeatures: (bounds: L.LatLngBounds, zoom: number) => CityFeature[];
+  getVisibleCities: (bounds: L.LatLngBounds, zoom: number) => City[];
   maxDimension?: number;
   imageFormat?: StillImageFormat;
   onProgress?: (progress: number) => void;
@@ -627,10 +628,10 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     autoReduceVisAtNight,
     mapOptions,
     language,
-    map1BordersLayer,
-    map1DepartmentsLayer,
+    bordersData,
+    departmentsData,
     cityLoadPromise,
-    getVisibleCityFeatures,
+    getVisibleCities,
     imageFormat = 'png',
     onProgress,
   } = options;
@@ -914,8 +915,11 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.stroke();
     };
 
-    if (mapOptions.showBorders && map1BordersLayer) {
-      const data = map1BordersLayer.toGeoJSON() as any;
+    // The raw data, not the map layer: converting a Leaflet layer back to GeoJSON cost a full
+    // traversal of every country outline on every frame of an animation.
+    const borders = mapOptions.showBorders && bordersData ? await bordersData : null;
+    if (borders) {
+      const data = borders as any;
       const bordersOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
       context.save();
       context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
@@ -925,8 +929,9 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.restore();
     }
 
-    if (mapOptions.showFranceDepartments && map1DepartmentsLayer) {
-      const data = map1DepartmentsLayer.toGeoJSON() as any;
+    const departments = mapOptions.showFranceDepartments && departmentsData ? await departmentsData : null;
+    if (departments) {
+      const data = departments as any;
       const departmentsOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
       context.save();
       context.strokeStyle = `rgba(200, 220, 255, ${departmentsOpacity})`;
@@ -941,7 +946,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
         await cityLoadPromise;
       }
       const zoom = Math.round(map.getZoom());
-      const visibleCities = getVisibleCityFeatures(map.getBounds(), zoom);
+      const visibleCities = getVisibleCities(map.getBounds(), zoom);
       const dotRadius = (zoom >= 8 ? 2.5 : zoom >= 6 ? 2 : 1.5) * overlayScale;
       const cityFontSize = Math.round((zoom >= 8 ? 13 : zoom >= 6 ? 12 : 11) * overlayScale);
       context.save();
@@ -951,11 +956,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.shadowBlur = 4 * overlayScale;
       context.font = `${cityFontSize}px "Inter", sans-serif`;
 
-      visibleCities.forEach((feature) => {
-        const [lng, lat] = feature.geometry.coordinates;
-        const name = feature.properties.NAME ?? feature.properties.NAMEASCII;
-        if (!name) return;
-
+      visibleCities.forEach(({ lng, lat, name }) => {
         const projected = L.CRS.EPSG3857.project(L.latLng(lat, lng));
         const xPercentage = (projected.x - sw.x) / (ne.x - sw.x);
         const yPercentage = (ne.y - projected.y) / (ne.y - sw.y);

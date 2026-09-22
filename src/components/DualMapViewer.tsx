@@ -915,16 +915,15 @@ export default function DualMapViewer() {
     cityLoadPromiseRef,
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
-    getVisibleCityFeatures,
+    getVisibleCities,
     isNightIrFallbackActive,
     isRgbVisOnlyMode,
     rgbVisOnlyNightBrightness,
     isMapLoading,
     loadingProgress,
     loadingTileCount,
-    map1BordersRef,
-    map1DepartmentsRef,
-    map1Ref,
+    bordersDataRef,
+    departmentsDataRef,
     map2Instance,
     map2Ref,
     solarElevation,
@@ -1465,10 +1464,10 @@ export default function DualMapViewer() {
         autoReduceVisAtNight,
         mapOptions,
         language,
-        map1BordersLayer: map1BordersRef.current,
-        map1DepartmentsLayer: map1DepartmentsRef.current,
+        bordersData: bordersDataRef.current,
+        departmentsData: departmentsDataRef.current,
         cityLoadPromise: cityLoadPromiseRef.current,
-        getVisibleCityFeatures,
+        getVisibleCities,
         onFrameProgress: (fraction) => {
           if (cancelled) return;
           setPlaybackPreload({ done: Math.round(fraction * frames.length), total: frames.length });
@@ -1593,10 +1592,10 @@ export default function DualMapViewer() {
         autoReduceVisAtNight,
         mapOptions,
         language,
-        map1BordersLayer: map1BordersRef.current,
-        map1DepartmentsLayer: map1DepartmentsRef.current,
+        bordersData: bordersDataRef.current,
+        departmentsData: departmentsDataRef.current,
         cityLoadPromise: cityLoadPromiseRef.current,
-        getVisibleCityFeatures,
+        getVisibleCities,
       };
 
       const blob = format === 'gif'
@@ -1840,10 +1839,10 @@ export default function DualMapViewer() {
       autoReduceVisAtNight,
       mapOptions,
       language,
-      map1BordersLayer: map1BordersRef.current,
-      map1DepartmentsLayer: map1DepartmentsRef.current,
+      bordersData: bordersDataRef.current,
+      departmentsData: departmentsDataRef.current,
       cityLoadPromise: cityLoadPromiseRef.current,
-      getVisibleCityFeatures,
+      getVisibleCities,
     };
   };
 
@@ -2269,12 +2268,6 @@ export default function DualMapViewer() {
       {/* Maps Layout */}
       <div className="flex-1 w-full min-h-0 relative z-0">
         <div className="w-full h-full relative z-0">
-          <div
-            ref={map1Ref}
-            className="absolute -left-[99999px] top-0 w-px h-px opacity-0 pointer-events-none"
-            aria-hidden="true"
-          />
-
           <div className="absolute top-4 left-4 right-4 z-[400] flex flex-col gap-2 pointer-events-none">
           <div className="flex flex-wrap items-start gap-2">
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
