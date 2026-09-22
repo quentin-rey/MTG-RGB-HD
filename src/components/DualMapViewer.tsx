@@ -121,7 +121,7 @@ const DYNAMIC_TILE_STYLES = `
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.65);
     white-space: nowrap;
     pointer-events: none;
-    font-family: Inter, system-ui, -apple-system, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-weight: 500;
   }
   .city-label-text {
@@ -708,6 +708,8 @@ export default function DualMapViewer() {
 
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.language, JSON.stringify(language));
+    // Screen readers pick their pronunciation from this, and browsers their translate prompt.
+    document.documentElement.lang = language;
   }, [language]);
 
   useEffect(() => {

@@ -56,10 +56,11 @@ jobs:
       # Type checking cannot catch a server that builds and then dies on startup: Express 5
       # rejecting the old `app.get('*', ...)` wildcard did exactly that, cleanly type-checked.
       # Booting the built bundle and asking it for one page is the cheapest guard against that
-      # whole class of failure.
+      # whole class of failure. The bundle lives in build/, not dist/: dist/ is what GitHub Pages
+      # publishes, and the server has no business being downloadable from the site.
       - name: Smoke test the built server
         run: |
-          NODE_ENV=production node dist/server.cjs &
+          NODE_ENV=production node build/server.cjs &
           SERVER_PID=$!
           ANSWERED=0
           for i in $(seq 1 20); do

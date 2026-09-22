@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
-    "clean": "rimraf dist",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=build/server.cjs",
+    "start": "node build/server.cjs",
+    "clean": "rimraf dist build",
     "lint": "tsc --noEmit && oxlint",
     "export:composite": "tsx scripts/export-composite.ts",
     "lint:fix": "oxlint --fix",
@@ -23,8 +23,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^1.45.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "react-leaflet": "^5.0.0"
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
@@ -33,7 +32,6 @@
     "@types/node": "^26.5.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "autoprefixer": "^10.5.6",
     "esbuild": "^0.28.2",
     "oxlint": "^1.82.0",
     "playwright": "^1.63.0",
