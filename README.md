@@ -148,6 +148,9 @@ npm run clean
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+The dev server only listens on this machine. To reach it from another device on
+your network, such as a phone, start it with `HOST=0.0.0.0 npm run dev`.
+
 There is no backend or database: the Express server only serves the app (Vite
 middleware in dev, static files in production) — all satellite imagery comes
 directly from EUMETSAT's public WMS endpoint, and all state lives client-side

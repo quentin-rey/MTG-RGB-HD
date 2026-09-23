@@ -6,6 +6,7 @@ import {
   computeFireHotspotRgba,
   computeLayerBlendState,
   getExportBadge,
+  getExportKindLayers,
   getExportFileBaseName,
   getHdEnhancementProfile,
   getSolarElevation,
@@ -15,10 +16,11 @@ import {
   LAYER_VIS,
   RGB_VIS_FUSION,
   type ActiveLayers,
-  type CityFeature,
+  type City,
   type ExportKind,
   type HdEnhancementPreset,
   type IrStyle,
+  type LayerBlendState,
   type MapOptions,
   WMS_URL_DIRECT,
 } from './dualMapViewerShared';
@@ -55,10 +57,11 @@ type DownloadSatellitePackOptions = {
   autoReduceVisAtNight: boolean;
   mapOptions: MapOptions;
   language: Language;
-  map1BordersLayer: L.GeoJSON | null;
-  map1DepartmentsLayer: L.GeoJSON | null;
+  /** Overlay data, pending until its first download ends; null while the overlay was never enabled. */
+  bordersData: Promise<GeoJSON.GeoJsonObject | null> | null;
+  departmentsData: Promise<GeoJSON.GeoJsonObject | null> | null;
   cityLoadPromise: Promise<void> | null;
-  getVisibleCityFeatures: (bounds: L.LatLngBounds, zoom: number) => CityFeature[];
+  getVisibleCities: (bounds: L.LatLngBounds, zoom: number) => City[];
   maxDimension?: number;
   imageFormat?: StillImageFormat;
   onProgress?: (progress: number) => void;
@@ -317,6 +320,8 @@ type ExportOverlayLocale = {
   layerLabelPlural: string;
   dateUtcLabel: string;
   fireHotspotSuffix: string;
+  nightFallbackLabel: string;
+  nightFallbackValue: string;
 };
 
 function getExportOverlayLocale(language: Language): ExportOverlayLocale {
@@ -327,6 +332,8 @@ function getExportOverlayLocale(language: Language): ExportOverlayLocale {
       layerLabelPlural: 'LAYERS',
       dateUtcLabel: 'UTC DATE',
       fireHotspotSuffix: 'FIRE',
+      nightFallbackLabel: 'SUN BELOW HORIZON',
+      nightFallbackValue: 'SHOWN IN IR 10.5',
     };
   }
 
@@ -336,6 +343,8 @@ function getExportOverlayLocale(language: Language): ExportOverlayLocale {
     layerLabelPlural: 'COUCHES',
     dateUtcLabel: 'DATE UTC',
     fireHotspotSuffix: 'FEUX',
+    nightFallbackLabel: 'SOLEIL SOUS L\'HORIZON',
+    nightFallbackValue: 'AFFICHÉ EN IR 10.5',
   };
 }
 
@@ -469,6 +478,7 @@ function applyTopInfoBadges(
   locale: ExportOverlayLocale,
   scale: number,
   fireHotspotEnabled: boolean,
+  isNightFallback: boolean,
 ) {
   const left = 10 * scale;
   const top = 10 * scale;
@@ -481,7 +491,19 @@ function applyTopInfoBadges(
   const layerLabel = displayLayerType.includes('+') ? locale.layerLabelPlural : locale.layerLabelSingle;
 
   const layerBadge = drawInfoBadge(context, left, top, layerLabel, displayLayerType, scale);
-  drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel, scale);
+  const dateBadge = drawInfoBadge(context, left + layerBadge.width + gap, top, locale.dateUtcLabel, utcLabel, scale);
+  // The layer badge still names what was asked for; this one says why the pixels are IR instead.
+  // Without it, an "RGB" file that plainly shows infrared would read as a rendering bug.
+  if (isNightFallback) {
+    drawInfoBadge(
+      context,
+      left + layerBadge.width + gap + dateBadge.width + gap,
+      top,
+      locale.nightFallbackLabel,
+      locale.nightFallbackValue,
+      scale,
+    );
+  }
 }
 
 function buildWmsUrl(
@@ -594,6 +616,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       badge: string;
       fileBaseName: string;
       sourceCanvas: HTMLCanvasElement;
+      isNightFallback: boolean;
     };
     blob: Blob;
   }>;
@@ -627,10 +650,10 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     autoReduceVisAtNight,
     mapOptions,
     language,
-    map1BordersLayer,
-    map1DepartmentsLayer,
+    bordersData,
+    departmentsData,
     cityLoadPromise,
-    getVisibleCityFeatures,
+    getVisibleCities,
     imageFormat = 'png',
     onProgress,
   } = options;
@@ -670,12 +693,8 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const overlayScale = Math.max(1, scale);
   const isoTime = new Date(currentTime + 'Z').toISOString();
   const {
-    shouldPreferIrBaseAtNight,
     effectiveRgbVisOnlyVisOpacity: exportRgbVisOnlyVisOpacity,
     effectiveHybridOnlyVisOpacity: exportHybridVisOpacity,
-    effectiveCloudOnlyIrOpacity: exportCloudOnlyIrOpacity,
-    cloudOnlyIrVisMaskWeight: hybridVisMaskWeight,
-    cloudOnlyIrNightFloor,
     rgbVisOnlyNightBrightness,
   } = computeLayerBlendState({
     activeLayers,
@@ -688,12 +707,45 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   const exportOverlayLocale = getExportOverlayLocale(language);
   const selectedKinds = new Set(requestedKinds);
 
-  const needsVis = selectedKinds.has('vis') || selectedKinds.has('hd') || selectedKinds.has('sandwich') || selectedKinds.has('hybrid');
-  const needsRgb = selectedKinds.has('rgb') || selectedKinds.has('hd') || selectedKinds.has('hybrid');
+  /*
+   * Each kind is rendered the way the live map renders its own layer set, including at night. The
+   * live view swaps the base for raw IR once the sun is down (`shouldPreferIrBaseAtNight`) and only
+   * `screen`-blends VIS over it; issue #71 made that identical across every mode. This renderer was
+   * left behind, so the same 22:00 scene came out at 26/255 mean luminance in RGB+VIS, 7 in RGB
+   * alone and 125 in VIS+IR, against 94 on the map for all of them — and since the in-app animation
+   * plays these frames, it went dark the moment it crossed dusk.
+   *
+   * Deciding per kind rather than from `activeLayers` matters for a pack: with all three layers on,
+   * the plain 'ir' kind is still IR by day and night, while every kind involving RGB or VIS switches.
+   */
+  const kindBlendByKind = new Map<ExportKind, LayerBlendState>();
+  const kindBlendFor = (kind: ExportKind): LayerBlendState => {
+    let blend = kindBlendByKind.get(kind);
+    if (!blend) {
+      blend = computeLayerBlendState({
+        activeLayers: getExportKindLayers(kind),
+        rgbHdOpacity,
+        sandwichOpacity,
+        autoReduceVisAtNight,
+        solarElevation: exportSolarElevation,
+      });
+      kindBlendByKind.set(kind, blend);
+    }
+    return blend;
+  };
+  const isNightFallbackKind = (kind: ExportKind) => kindBlendFor(kind).baseLayer === 'ir' && kind !== 'ir';
+  const dayKinds = new Set(requestedKinds.filter((kind) => !isNightFallbackKind(kind)));
+  const hasNightFallbackKind = requestedKinds.some(isNightFallbackKind);
+
+  // The night fallback needs IR for every kind it covers, and VIS only where the live view would
+  // still lay it over the IR base.
+  const needsVis = dayKinds.has('vis') || dayKinds.has('hd') || dayKinds.has('sandwich') || dayKinds.has('hybrid')
+    || requestedKinds.some((kind) => isNightFallbackKind(kind) && kindBlendFor(kind).isVisOverlayEnabled);
+  const needsRgb = dayKinds.has('rgb') || dayKinds.has('hd') || dayKinds.has('hybrid');
   const needsIr = selectedKinds.has('ir')
-    || selectedKinds.has('sandwich')
-    || selectedKinds.has('hybrid')
-    || (selectedKinds.has('hd') && activeLayers.rgb && activeLayers.vis && shouldPreferIrBaseAtNight);
+    || dayKinds.has('sandwich')
+    || dayKinds.has('hybrid')
+    || hasNightFallbackKind;
 
   const [imgVis, imgRgb, imgIr, imgFiretemp] = await Promise.all([
     needsVis ? loadImage(buildWmsUrl(LAYER_VIS, '', bbox, width, height, isoTime)) : Promise.resolve(undefined),
@@ -788,16 +840,14 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     return cloudOnlyIrCanvas;
   };
 
-  const shouldExportHd = selectedKinds.has('hd') && activeLayers.rgb && activeLayers.vis;
-  const shouldExportSandwich = selectedKinds.has('sandwich') && activeLayers.ir && activeLayers.vis;
-  const shouldExportHybrid = selectedKinds.has('hybrid') && activeLayers.rgb && activeLayers.vis && activeLayers.ir;
-  const exportRgbModeBaseCanvas = shouldPreferIrBaseAtNight && imgIr ? irTempCanvas : rgbTempCanvas;
-  // Unfiltered base for the 'hd' (RGB+VIS) export below: it needs to apply the RGB_VIS_FUSION
-  // boost on top of the RAW image, matching the live view's single-pass filter. Reusing
-  // rgbTempCanvas/visTempCanvas (already filtered once for the plain 'rgb'/'vis' exports) here
-  // would filter twice, squaring the saturation/contrast boost and making the export visibly
-  // darker/harsher than the live view for the same slider settings — this was a real bug.
-  const exportRgbModeRawBaseCanvas = shouldPreferIrBaseAtNight && imgIr ? irTempCanvas : rgbRawCanvas;
+  const shouldExportHd = dayKinds.has('hd') && activeLayers.rgb && activeLayers.vis;
+  const shouldExportSandwich = dayKinds.has('sandwich') && activeLayers.ir && activeLayers.vis;
+  const shouldExportHybrid = dayKinds.has('hybrid') && activeLayers.rgb && activeLayers.vis && activeLayers.ir;
+  // The 'hd' (RGB+VIS) export below starts from the *raw* RGB: it applies the RGB_VIS_FUSION boost
+  // itself, matching the live view's single-pass filter. Reusing rgbTempCanvas/visTempCanvas
+  // (already filtered once for the plain 'rgb'/'vis' exports) would filter twice, squaring the
+  // saturation/contrast boost and making the export visibly darker/harsher than the live view for
+  // the same slider settings — this was a real bug.
   const visRawData = imgVis ? visRawCtx.getImageData(0, 0, width, height).data : null;
   const rgbRawData = imgRgb ? rgbRawCtx.getImageData(0, 0, width, height).data : null;
   const irRawData = imgIr ? irTempCtx.getImageData(0, 0, width, height).data : null;
@@ -809,7 +859,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     const outputCtx = outputCanvas.getContext('2d')!;
 
     outputCtx.filter = `saturate(${Math.round(rgbSaturation * RGB_VIS_FUSION.rgbSaturationBoost * 100)}%) brightness(${Math.round(rgbVisOnlyNightBrightness * RGB_VIS_FUSION.rgbBrightnessBoost * 100)}%)`;
-    outputCtx.drawImage(exportRgbModeRawBaseCanvas, 0, 0);
+    outputCtx.drawImage(rgbRawCanvas, 0, 0);
     outputCtx.filter = 'none';
     if (imgVis) {
       outputCtx.filter = `brightness(${Math.min(2, visBrightness * RGB_VIS_FUSION.visBrightnessBoost)}) contrast(${Math.min(2.4, visContrast * RGB_VIS_FUSION.visContrastBoost)})`;
@@ -840,42 +890,28 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     outputCanvas.width = width;
     outputCanvas.height = height;
     const outputCtx = outputCanvas.getContext('2d')!;
+    // This kind's own blend, not the active layers': with RGB+VIS+IR on, the pack's VIS+IR file
+    // must still ramp like VIS+IR does on the map, which starts earlier than the RGB-based modes.
+    const { cloudOnlyIrNightFloor, effectiveCloudOnlyIrOpacity } = kindBlendFor('sandwich');
 
-    // The cloud-only composite below uses `color` blend, which takes its luminosity from the
-    // VIS backdrop — once VIS goes dark (night), that crushes the composite to black regardless
-    // of the IR overlay's own alpha. Once the live view's night fallback (shouldPreferIrBaseAtNight)
-    // kicks in, mirror it here: show the raw IR image directly instead of the VIS-luminance-carried
-    // composite, matching what the map itself renders (see baseLayer in computeLayerBlendState).
-    if (shouldPreferIrBaseAtNight && imgIr) {
-      // Matches the live view's `.ir-base-layer-tiles-vis-ir-fallback` CSS filter (DualMapViewer.tsx)
-      // so the export doesn't look flatter/darker than what's on screen for the same night view.
-      outputCtx.filter = 'brightness(1.35) contrast(1.15) saturate(1.5)';
+    // Daytime only: at night this kind goes through `buildNightFallbackCanvas` like every other.
+    outputCtx.drawImage(visTempCanvas, 0, 0);
+    // The live view's dusk underlay (`.ir-fallback-base-layer-tiles`): grayscale IR faded in under
+    // the composite so its `color` blend has a backdrop to take luminosity from as VIS dims.
+    if (cloudOnlyIrNightFloor > 0.01) {
+      outputCtx.filter = 'grayscale(1) contrast(1.05)';
+      outputCtx.globalAlpha = cloudOnlyIrNightFloor;
       outputCtx.drawImage(irTempCanvas, 0, 0);
       outputCtx.filter = 'none';
-      return outputCanvas;
+      outputCtx.globalAlpha = 1;
     }
-
-    outputCtx.drawImage(visTempCanvas, 0, 0);
-    const cloudOnlyIrCanvas = createCloudOnlyIrCanvas(visRawData, null, irRawData, 1, sandwichOpacity, cloudOnlyIrNightFloor);
-    outputCtx.globalCompositeOperation = 'color';
-    outputCtx.drawImage(cloudOnlyIrCanvas, 0, 0);
-    outputCtx.globalCompositeOperation = 'source-over';
-    outputCtx.globalAlpha = 1;
-    return outputCanvas;
-  })() : null;
-  const hybridCanvas = shouldExportHybrid ? (() => {
-    const outputCanvas = composeVisOverlayCanvas(exportRgbModeBaseCanvas, exportHybridVisOpacity, 'luminosity');
-    const outputCtx = outputCanvas.getContext('2d')!;
-    if (!visRawData || !rgbRawData || !irRawData) {
-      return outputCanvas;
-    }
-
     const cloudOnlyIrCanvas = createCloudOnlyIrCanvas(
       visRawData,
-      rgbRawData,
+      null,
       irRawData,
-      hybridVisMaskWeight,
-      exportCloudOnlyIrOpacity,
+      1,
+      effectiveCloudOnlyIrOpacity,
+      cloudOnlyIrNightFloor,
     );
     outputCtx.globalCompositeOperation = 'color';
     outputCtx.drawImage(cloudOnlyIrCanvas, 0, 0);
@@ -883,6 +919,55 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     outputCtx.globalAlpha = 1;
     return outputCanvas;
   })() : null;
+  const hybridCanvas = shouldExportHybrid ? (() => {
+    const outputCanvas = composeVisOverlayCanvas(rgbTempCanvas, exportHybridVisOpacity, 'luminosity');
+    const outputCtx = outputCanvas.getContext('2d')!;
+    if (!visRawData || !rgbRawData || !irRawData) {
+      return outputCanvas;
+    }
+
+    const { cloudOnlyIrVisMaskWeight, cloudOnlyIrNightFloor, effectiveCloudOnlyIrOpacity } = kindBlendFor('hybrid');
+    // The night floor is what keeps IR on unlit clouds through twilight (issue #69); without it this
+    // file lost half its IR coverage at dusk while the map kept all of it.
+    const cloudOnlyIrCanvas = createCloudOnlyIrCanvas(
+      visRawData,
+      rgbRawData,
+      irRawData,
+      cloudOnlyIrVisMaskWeight,
+      effectiveCloudOnlyIrOpacity,
+      cloudOnlyIrNightFloor,
+    );
+    outputCtx.globalCompositeOperation = 'color';
+    outputCtx.drawImage(cloudOnlyIrCanvas, 0, 0);
+    outputCtx.globalCompositeOperation = 'source-over';
+    outputCtx.globalAlpha = 1;
+    return outputCanvas;
+  })() : null;
+
+  /**
+   * What the map shows for this kind once the sun is down: raw IR as the base, with VIS
+   * `screen`-blended over it where the kind has VIS — the only blend that leaves the IR intact,
+   * since VIS is black at night (`.vis-overlay-layer-tiles-on-ir`). Unfiltered IR on purpose: the
+   * live base carries no filter, and brightening it is what clipped a quarter of the scene (#71).
+   */
+  const buildNightFallbackCanvas = (kind: ExportKind): HTMLCanvasElement => {
+    const blend = kindBlendFor(kind);
+    const outputCanvas = document.createElement('canvas');
+    outputCanvas.width = width;
+    outputCanvas.height = height;
+    const outputCtx = outputCanvas.getContext('2d')!;
+    outputCtx.drawImage(irTempCanvas, 0, 0);
+    if (blend.isVisOverlayEnabled && imgVis) {
+      outputCtx.filter = `brightness(${visBrightness}) contrast(${visContrast}) saturate(1.05)`;
+      outputCtx.globalCompositeOperation = 'screen';
+      outputCtx.globalAlpha = blend.currentVisOverlayOpacity;
+      outputCtx.drawImage(visRawCanvas, 0, 0);
+      outputCtx.globalCompositeOperation = 'source-over';
+      outputCtx.globalAlpha = 1;
+      outputCtx.filter = 'none';
+    }
+    return outputCanvas;
+  };
 
   const drawOverlays = async (context: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
     // Stroke style and width are read from the context, which every caller sets just above.
@@ -914,8 +999,11 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.stroke();
     };
 
-    if (mapOptions.showBorders && map1BordersLayer) {
-      const data = map1BordersLayer.toGeoJSON() as any;
+    // The raw data, not the map layer: converting a Leaflet layer back to GeoJSON cost a full
+    // traversal of every country outline on every frame of an animation.
+    const borders = mapOptions.showBorders && bordersData ? await bordersData : null;
+    if (borders) {
+      const data = borders as any;
       const bordersOpacity = Math.max(0, Math.min(1, mapOptions.bordersOpacity));
       context.save();
       context.strokeStyle = `rgba(255, 255, 255, ${bordersOpacity})`;
@@ -925,8 +1013,9 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.restore();
     }
 
-    if (mapOptions.showFranceDepartments && map1DepartmentsLayer) {
-      const data = map1DepartmentsLayer.toGeoJSON() as any;
+    const departments = mapOptions.showFranceDepartments && departmentsData ? await departmentsData : null;
+    if (departments) {
+      const data = departments as any;
       const departmentsOpacity = Math.max(0, Math.min(1, mapOptions.franceDepartmentsOpacity));
       context.save();
       context.strokeStyle = `rgba(200, 220, 255, ${departmentsOpacity})`;
@@ -941,7 +1030,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
         await cityLoadPromise;
       }
       const zoom = Math.round(map.getZoom());
-      const visibleCities = getVisibleCityFeatures(map.getBounds(), zoom);
+      const visibleCities = getVisibleCities(map.getBounds(), zoom);
       const dotRadius = (zoom >= 8 ? 2.5 : zoom >= 6 ? 2 : 1.5) * overlayScale;
       const cityFontSize = Math.round((zoom >= 8 ? 13 : zoom >= 6 ? 12 : 11) * overlayScale);
       context.save();
@@ -951,11 +1040,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.shadowBlur = 4 * overlayScale;
       context.font = `${cityFontSize}px "Inter", sans-serif`;
 
-      visibleCities.forEach((feature) => {
-        const [lng, lat] = feature.geometry.coordinates;
-        const name = feature.properties.NAME ?? feature.properties.NAMEASCII;
-        if (!name) return;
-
+      visibleCities.forEach(({ lng, lat, name }) => {
         const projected = L.CRS.EPSG3857.project(L.latLng(lat, lng));
         const xPercentage = (projected.x - sw.x) / (ne.x - sw.x);
         const yPercentage = (ne.y - projected.y) / (ne.y - sw.y);
@@ -1009,7 +1094,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   onProgress?.(45);
 
   const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
-  const getBlob = async (canvasObj: HTMLCanvasElement, layerType: string): Promise<Blob> => {
+  const getBlob = async (canvasObj: HTMLCanvasElement, layerType: string, isNightFallback: boolean): Promise<Blob> => {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = width;
     tempCanvas.height = height;
@@ -1023,7 +1108,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     }
     tempCtx.drawImage(canvasObj, 0, 0);
     tempCtx.drawImage(overlayCanvas, 0, 0);
-    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale, overlayScale, fireHotspotEnabled);
+    applyTopInfoBadges(tempCtx, exportUtcLabel, layerType, exportOverlayLocale, overlayScale, fireHotspotEnabled, isNightFallback);
     applyWatermark(tempCtx, width, height, exportOverlayLocale, overlayScale);
 
     return new Promise((resolve, reject) => {
@@ -1039,19 +1124,31 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
     badge: string;
     fileBaseName: string;
     sourceCanvas: HTMLCanvasElement;
+    /** Rendered as the map's night IR fallback rather than from the kind's own layers. */
+    isNightFallback: boolean;
   }> = [];
 
   requestedKinds.forEach((kind) => {
+    if (isNightFallbackKind(kind)) {
+      exportDescriptors.push({
+        kind,
+        badge: getExportBadge(kind, hdEnhanceEnabled),
+        fileBaseName: getExportFileBaseName(kind, hdEnhanceEnabled),
+        sourceCanvas: buildNightFallbackCanvas(kind),
+        isNightFallback: true,
+      });
+      return;
+    }
     if (kind === 'vis' && needsVis) {
-      exportDescriptors.push({ kind: 'vis', badge: getExportBadge('vis', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('vis', hdEnhanceEnabled), sourceCanvas: visTempCanvas });
+      exportDescriptors.push({ kind: 'vis', badge: getExportBadge('vis', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('vis', hdEnhanceEnabled), sourceCanvas: visTempCanvas, isNightFallback: false });
       return;
     }
     if (kind === 'rgb' && needsRgb) {
-      exportDescriptors.push({ kind: 'rgb', badge: getExportBadge('rgb', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('rgb', hdEnhanceEnabled), sourceCanvas: rgbTempCanvas });
+      exportDescriptors.push({ kind: 'rgb', badge: getExportBadge('rgb', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('rgb', hdEnhanceEnabled), sourceCanvas: rgbTempCanvas, isNightFallback: false });
       return;
     }
     if (kind === 'ir' && needsIr) {
-      exportDescriptors.push({ kind: 'ir', badge: getExportBadge('ir', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('ir', hdEnhanceEnabled), sourceCanvas: irTempCanvas });
+      exportDescriptors.push({ kind: 'ir', badge: getExportBadge('ir', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('ir', hdEnhanceEnabled), sourceCanvas: irTempCanvas, isNightFallback: false });
       return;
     }
     if (kind === 'hd' && rgbHdCanvas) {
@@ -1060,15 +1157,16 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
         badge: getExportBadge('hd', hdEnhanceEnabled),
         fileBaseName: getExportFileBaseName('hd', hdEnhanceEnabled),
         sourceCanvas: rgbHdCanvas,
+        isNightFallback: false,
       });
       return;
     }
     if (kind === 'sandwich' && sandwichCanvas) {
-      exportDescriptors.push({ kind: 'sandwich', badge: getExportBadge('sandwich', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('sandwich', hdEnhanceEnabled), sourceCanvas: sandwichCanvas });
+      exportDescriptors.push({ kind: 'sandwich', badge: getExportBadge('sandwich', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('sandwich', hdEnhanceEnabled), sourceCanvas: sandwichCanvas, isNightFallback: false });
       return;
     }
     if (kind === 'hybrid' && hybridCanvas) {
-      exportDescriptors.push({ kind: 'hybrid', badge: getExportBadge('hybrid', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('hybrid', hdEnhanceEnabled), sourceCanvas: hybridCanvas });
+      exportDescriptors.push({ kind: 'hybrid', badge: getExportBadge('hybrid', hdEnhanceEnabled), fileBaseName: getExportFileBaseName('hybrid', hdEnhanceEnabled), sourceCanvas: hybridCanvas, isNightFallback: false });
     }
   });
 
@@ -1079,7 +1177,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
   }> = [];
   for (let index = 0; index < selectedDescriptors.length; index += 1) {
     const descriptor = selectedDescriptors[index];
-    const blob = await getBlob(descriptor.sourceCanvas, descriptor.badge);
+    const blob = await getBlob(descriptor.sourceCanvas, descriptor.badge, descriptor.isNightFallback);
     generatedFiles.push({ descriptor, blob });
     if (onProgress) {
       onProgress(45 + Math.round(((index + 1) / selectedDescriptors.length) * 45));

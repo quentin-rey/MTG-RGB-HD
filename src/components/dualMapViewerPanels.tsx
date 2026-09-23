@@ -1893,6 +1893,8 @@ type ExportModalProps = {
   exportModalRef: React.RefObject<HTMLDivElement | null>;
   fireHotspotEnabled: boolean;
   hdEnhanceEnabled: boolean;
+  /** The sun is down over the map, so every RGB/VIS kind comes out as the IR night fallback. */
+  isNightIrFallbackActive: boolean;
   isOpen: boolean;
   isPreviewLoading: boolean;
   onClose: () => void;
@@ -1924,6 +1926,7 @@ export function ExportModal(props: ExportModalProps) {
     fireHotspotEnabled,
     hdEnhanceEnabled,
     isExporting,
+    isNightIrFallbackActive,
     isOpen,
     isPreviewLoading,
     onClose,
@@ -1977,6 +1980,15 @@ export function ExportModal(props: ExportModalProps) {
           }`}>
             <span className="text-sm leading-none shrink-0" aria-hidden="true">🔥</span>
             <span>{t('downloadFireHotspotHint')}</span>
+          </div>
+        )}
+
+        {isNightIrFallbackActive && selectedExportKinds.some((kind) => kind !== 'ir') && (
+          <div className={`mb-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs ${
+            themedClass(isLight, 'border-blue-300 bg-blue-50 text-blue-800', 'border-blue-400/30 bg-blue-500/10 text-blue-200')
+          }`}>
+            <Moon className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
+            <span>{t('downloadNightFallbackHint')}</span>
           </div>
         )}
 
