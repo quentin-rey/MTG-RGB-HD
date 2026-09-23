@@ -1,14 +1,19 @@
 import express from 'express';
 import path from 'path';
-import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 
 const PORT = 3000;
+// Loopback unless asked otherwise. This used to listen on every interface with a blanket
+// `Access-Control-Allow-Origin: *`, so while `npm run dev` was running, any web page open in the
+// browser — and any device on the local network — could read the files Vite serves from the
+// project root (checked: `/CLAUDE.md`, `/server.ts`). Vite restricts cross-origin reads of its dev
+// server on purpose; the `cors()` middleware undid that, and the app never needed it: pages and
+// assets are same-origin, and the imagery's CORS headers are EUMETSAT's, not ours.
+// `HOST=0.0.0.0 npm run dev` still opens it up, e.g. to test from a phone.
+const HOST = process.env.HOST ?? '127.0.0.1';
 
 async function startServer() {
   const app = express();
-
-  app.use(cors());
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -24,7 +29,7 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, '0.0.0.0');
+  const server = app.listen(PORT, HOST);
 
   // Success is reported from the 'listening' event, not from `listen`'s callback: Express 5 runs
   // that callback whether or not the bind succeeded, so the previous shape announced
@@ -32,7 +37,8 @@ async function startServer() {
   // already taken. Raw `net`/`http` servers do not behave this way, which is what makes it easy
   // to write and hard to notice.
   server.on('listening', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    const where = HOST === '127.0.0.1' || HOST === 'localhost' ? 'localhost' : HOST;
+    console.log(`Server running on http://${where}:${PORT}`);
   });
 
   // `listen` reports its failures on the server object rather than by throwing: without a handler
