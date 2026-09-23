@@ -795,6 +795,9 @@ export default function DualMapViewer() {
     return stored === '3h' || stored === '6h' || stored === '12h' || stored === 'custom' ? stored : '3h';
   });
   const playbackCancelRef = useRef<(() => void) | null>(null);
+  // Set when starting an animation turned auto-update off, so leaving it can turn it back on.
+  // Without this the switch-off was permanent — and persisted — for a setting the user never touched.
+  const autoUpdateSuspendedRef = useRef(false);
   useEffect(() => {
     safeSetLocalStorage(STORAGE_KEYS.playbackFps, JSON.stringify(playbackFps));
   }, [playbackFps]);
@@ -1297,6 +1300,8 @@ export default function DualMapViewer() {
     frames: string[];
     urls: string[];
     blobs: Blob[];
+    /** Slots MTG had no image for, so a replay from the cache reports the same gaps. */
+    skippedCount: number;
   } | null>(null);
   const playbackRenderedViewRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
   // Set while we put the map back ourselves, so the guard below doesn't mistake it for the user
@@ -1378,8 +1383,12 @@ export default function DualMapViewer() {
       return;
     }
 
-    // A new image arriving mid-sequence would move the view out from under the animation.
-    setAutoUpdateEnabled(false);
+    // A new image arriving mid-sequence would move the view out from under the animation. Only
+    // suspended: it comes back when the session ends (see the effect on `isPlaybackBusy`).
+    if (autoUpdateEnabled) {
+      autoUpdateSuspendedRef.current = true;
+      setAutoUpdateEnabled(false);
+    }
     setPlaybackIndex(0);
 
     const renderKey = buildPlaybackRenderKey();
@@ -1407,6 +1416,7 @@ export default function DualMapViewer() {
       setPlaybackFrames(cached.frames);
       setPlaybackUrls(cached.urls);
       setPlaybackIndex(resumeIndex >= 0 ? resumeIndex : 0);
+      setPlaybackSkippedCount(cached.skippedCount);
       setPlaybackLoadedSpec({ quality: playbackQuality, frames: cached.frames });
       setIsPlaying(true);
       return;
@@ -1482,7 +1492,7 @@ export default function DualMapViewer() {
       const renderedFrames = skipped.size > 0 ? frames.filter((frame) => !skipped.has(frame)) : frames;
       const urls = blobs.map((blob) => URL.createObjectURL(blob));
       releasePlaybackCache();
-      playbackCacheRef.current = { renderKey, rangeSpec, frames: renderedFrames, urls, blobs };
+      playbackCacheRef.current = { renderKey, rangeSpec, frames: renderedFrames, urls, blobs, skippedCount: skipped.size };
       playbackCancelRef.current = null;
       setPlaybackFrames(renderedFrames);
       setPlaybackUrls(urls);
@@ -1792,7 +1802,9 @@ export default function DualMapViewer() {
 
   // Opens the panel when a sequence starts existing — on the rising edge only. Reacting to the
   // state itself reopened it the moment preparation turned into a ready sequence, undoing a fold
-  // the user had just asked for.
+  // the user had just asked for. The falling edge is every way a session can end — closed,
+  // cancelled during preparation, failed, or dropped by a layer change — which is why auto-update
+  // is given back here rather than in each of those paths.
   const wasPlaybackBusyRef = useRef(false);
   const isPlaybackBusy = playbackFrames.length > 0 || isPreparingPlayback;
   useEffect(() => {
@@ -1802,6 +1814,10 @@ export default function DualMapViewer() {
       // invisible for the whole sequence.
       setIsAdjustmentsOpen(false);
       setIsFireHotspotOpen(false);
+    }
+    if (!isPlaybackBusy && wasPlaybackBusyRef.current && autoUpdateSuspendedRef.current) {
+      autoUpdateSuspendedRef.current = false;
+      setAutoUpdateEnabled(true);
     }
     wasPlaybackBusyRef.current = isPlaybackBusy;
   }, [isPlaybackBusy, setIsAdjustmentsOpen, setIsFireHotspotOpen]);
@@ -1989,9 +2005,16 @@ export default function DualMapViewer() {
    * skip the animation's exit confirmation. Reading them from a ref at keypress time removes both
    * problems at once.
    */
+  // The map controls are inert while an animation is on screen (Map2ControlBar), so their keyboard
+  // equivalents must be too. `F` was the dangerous one: toggling hotspots changes the layer set,
+  // which closed the animation and dropped its cache with no confirmation at all. `R` rewrote the
+  // image settings under frames rendered with the old ones, and `S` opened a panel nobody could see.
+  const isMapLocked = hasPlaybackOverlay || isPreparingPlayback;
+  const notifyMapLocked = () => setShareToastMessage(t('playbackSettingsLocked'));
+
   const shortcutActionsRef = useRef({
-    handleTimeChange, jumpToLatest, openExportModal, requestPlaybackExit, resetAdjustments,
-    setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
+    handleTimeChange, isMapLocked, jumpToLatest, notifyMapLocked, openExportModal, requestPlaybackExit,
+    resetAdjustments, setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
     setIsInfoOpen, shareCurrentViewWithFeedback,
   });
   // Writes a ref, never state: the rule sees the stored setState functions and assumes they are
@@ -1999,8 +2022,8 @@ export default function DualMapViewer() {
   // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     shortcutActionsRef.current = {
-      handleTimeChange, jumpToLatest, openExportModal, requestPlaybackExit, resetAdjustments,
-      setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
+      handleTimeChange, isMapLocked, jumpToLatest, notifyMapLocked, openExportModal, requestPlaybackExit,
+      resetAdjustments, setFireHotspotEnabled, setIsAdjustmentsOpen, setIsAnimationPanelOpen, setIsHelpOpen,
       setIsInfoOpen, shareCurrentViewWithFeedback,
     };
   });
@@ -2033,6 +2056,12 @@ export default function DualMapViewer() {
       if (lowerKey === 'd') {
         event.preventDefault();
         actions.openExportModal();
+        return;
+      }
+
+      if ((lowerKey === 'f' || lowerKey === 'r' || lowerKey === 's') && actions.isMapLocked) {
+        event.preventDefault();
+        actions.notifyMapLocked();
         return;
       }
 
@@ -2273,7 +2302,7 @@ export default function DualMapViewer() {
           <Map2TitleBadge activeLayers={activeLayers} isNightIrFallbackActive={isNightIrFallbackActive} t={t} theme={resolvedTheme} />
 
           <Map2ControlBar
-            isLocked={hasPlaybackOverlay || isPreparingPlayback}
+            isLocked={isMapLocked}
             activeLayers={activeLayers}
             adjustmentsRef={adjustmentsRef}
             autoReduceVisAtNight={autoReduceVisAtNight}
@@ -2521,6 +2550,7 @@ export default function DualMapViewer() {
         })()}
         hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
+        isNightIrFallbackActive={isNightIrFallbackActive}
         isOpen={isExportModalOpen}
         isPreviewLoading={isPreviewLoading}
         onClose={closeExportModal}

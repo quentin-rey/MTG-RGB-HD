@@ -143,6 +143,15 @@ export function getAvailableExportKindsFromLayers(layers: ActiveLayers): ExportK
   return kinds;
 }
 
+/** The layer set an export kind is made of — the inverse of `getAvailableExportKindsFromLayers`. */
+export function getExportKindLayers(kind: ExportKind): ActiveLayers {
+  return {
+    rgb: kind === 'rgb' || kind === 'hd' || kind === 'hybrid',
+    vis: kind === 'vis' || kind === 'hd' || kind === 'sandwich' || kind === 'hybrid',
+    ir: kind === 'ir' || kind === 'sandwich' || kind === 'hybrid',
+  };
+}
+
 export function getExportLabel(kind: ExportKind, labels: {
   vis: string;
   rgb: string;
