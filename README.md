@@ -162,7 +162,7 @@ Every pull request must pass two required checks before it can be merged:
 
 | Check | What it does |
 | --- | --- |
-| `lint` | `tsc --noEmit` — type checking, in strict mode |
+| `lint` | `npm run lint`: `tsc --noEmit` (strict type checking), then `oxlint` (React hook dependencies, unused code) |
 | `build` | `npm run build`, then boots the built server and verifies it answers with the built page |
 
 The `build` check exists because type checking sees none of the bundler's

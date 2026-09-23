@@ -19,6 +19,9 @@ import type { Language, Translator } from './i18n';
 
 type UiTheme = 'dark' | 'light';
 
+/** Final-frame pauses a GIF can end on, in ms. */
+const GIF_FINAL_PAUSE_CHOICES = [100, 500, 1000, 2000] as const;
+
 // lucide-react dropped brand/logo icons (including Github) in v1 — inlined here instead of
 // pulling in a whole extra icon package for a single mark.
 function GithubIcon(props: { className?: string }) {
@@ -751,20 +754,27 @@ export function TimeDock(props: TimeDockProps) {
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate">{t('animationGifFinalPause')}</span>
-                          <span className="inline-flex items-center gap-1.5 shrink-0">
-                            <input
-                              type="range"
-                              min={0}
-                              max={2000}
-                              step={500}
-                              value={gifFinalPauseMs}
-                              onChange={(e) => onGifFinalPauseChange(Number(e.target.value))}
-                              aria-label={t('animationGifFinalPause')}
-                              className={`w-20 h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 ${
-                                themedClass(isLight, 'bg-slate-200', 'bg-white/10')
-                              }`}
-                            />
-                            <span className="font-mono tabular-nums w-8 text-right">{(gifFinalPauseMs / 1000).toFixed(1)}s</span>
+                          {/* Buttons rather than a slider: these four are the values the encoder,
+                              share links and the export script all agree on. The slider offered 0 s
+                              and 1.5 s, which a link silently turned back into 0.1 s, and showed the
+                              0.1 s default with its thumb on 0. */}
+                          <span className="inline-flex shrink-0">
+                            {GIF_FINAL_PAUSE_CHOICES.map((pause, index) => (
+                              <button
+                                key={pause}
+                                onClick={() => onGifFinalPauseChange(pause)}
+                                aria-pressed={gifFinalPauseMs === pause}
+                                className={`border px-1.5 py-0.5 font-mono tabular-nums transition-colors ${
+                                  index === 0 ? 'rounded-l' : index === GIF_FINAL_PAUSE_CHOICES.length - 1 ? 'rounded-r -ml-px' : '-ml-px'
+                                } ${
+                                  gifFinalPauseMs === pause
+                                    ? isLight ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/20 border-white/30 text-white'
+                                    : isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-[#222] hover:bg-[#333] border-white/10 text-slate-300'
+                                }`}
+                              >
+                                {pause / 1000}s
+                              </button>
+                            ))}
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-2">

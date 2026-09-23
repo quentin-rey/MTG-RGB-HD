@@ -314,6 +314,14 @@ function applyHdEnhancement(sourceCanvas: HTMLCanvasElement, options: {
   return gradeCanvas;
 }
 
+/**
+ * Fonts for the text drawn onto exported images. A canvas can only use a font the system has or the
+ * page has loaded, and this app loads none: the previous "JetBrains Mono" and "Inter" were never
+ * available, so badges fell back to the generic monospace, which is a serif Courier on macOS.
+ */
+const BADGE_FONT_STACK = '"SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace';
+const LABEL_FONT_STACK = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+
 type ExportOverlayLocale = {
   watermarkText: string;
   layerLabelSingle: string;
@@ -361,7 +369,7 @@ function applyWatermark(
   const margin = 10 * scale;
 
   context.save();
-  context.font = `600 ${Math.round(11 * scale)}px "JetBrains Mono", monospace, sans-serif`;
+  context.font = `600 ${Math.round(11 * scale)}px ${BADGE_FONT_STACK}`;
   const badgeWidth = Math.ceil(context.measureText(text).width + horizontalPadding * 2);
   const left = width - badgeWidth - margin;
   const top = height - badgeHeight - margin;
@@ -449,9 +457,9 @@ function drawInfoBadge(
   const height = verticalPaddingTop + labelLineHeight + verticalGap + valueLineHeight + verticalPaddingBottom;
 
   context.save();
-  context.font = `600 ${Math.round(10 * scale)}px "JetBrains Mono", monospace, sans-serif`;
+  context.font = `600 ${Math.round(10 * scale)}px ${BADGE_FONT_STACK}`;
   const labelWidth = context.measureText(label).width;
-  context.font = `700 ${Math.round(14 * scale)}px "JetBrains Mono", monospace, sans-serif`;
+  context.font = `700 ${Math.round(14 * scale)}px ${BADGE_FONT_STACK}`;
   const valueWidth = context.measureText(value).width;
   const width = Math.ceil(Math.max(labelWidth, valueWidth) + horizontalPadding * 2 + 2 * scale);
 
@@ -460,11 +468,11 @@ function drawInfoBadge(
   context.textAlign = 'left';
   context.textBaseline = 'top';
   context.fillStyle = 'rgba(220, 238, 252, 0.9)';
-  context.font = `600 ${Math.round(10 * scale)}px "JetBrains Mono", monospace, sans-serif`;
+  context.font = `600 ${Math.round(10 * scale)}px ${BADGE_FONT_STACK}`;
   context.fillText(label, left + horizontalPadding, top + verticalPaddingTop);
 
   context.fillStyle = 'rgba(250, 252, 255, 0.98)';
-  context.font = `700 ${Math.round(14 * scale)}px "JetBrains Mono", monospace, sans-serif`;
+  context.font = `700 ${Math.round(14 * scale)}px ${BADGE_FONT_STACK}`;
   context.fillText(value, left + horizontalPadding, top + verticalPaddingTop + labelLineHeight + verticalGap);
   context.restore();
 
@@ -1038,7 +1046,7 @@ async function renderSatelliteFrames(options: RenderSatelliteFramesOptions): Pro
       context.textBaseline = 'middle';
       context.shadowColor = 'rgba(0, 0, 0, 0.9)';
       context.shadowBlur = 4 * overlayScale;
-      context.font = `${cityFontSize}px "Inter", sans-serif`;
+      context.font = `${cityFontSize}px ${LABEL_FONT_STACK}`;
 
       visibleCities.forEach(({ lng, lat, name }) => {
         const projected = L.CRS.EPSG3857.project(L.latLng(lat, lng));
@@ -1533,6 +1541,8 @@ export async function exportAnimationWebm(options: ExportAnimationWebmOptions): 
 
   recorder.stop();
   await stopped;
+  // The canvas capture track keeps running until stopped, holding the canvas it draws from.
+  stream.getTracks().forEach((track) => track.stop());
   onProgress?.(100);
   return new Blob(chunks, { type: 'video/webm' });
 }
