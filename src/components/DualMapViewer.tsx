@@ -2528,6 +2528,7 @@ export default function DualMapViewer() {
         })()}
         hdEnhanceEnabled={hdEnhanceEnabled}
         isExporting={isExporting}
+        isNightIrFallbackActive={isNightIrFallbackActive}
         isOpen={isExportModalOpen}
         isPreviewLoading={isPreviewLoading}
         onClose={closeExportModal}
