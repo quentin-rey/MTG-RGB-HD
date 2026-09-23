@@ -10,14 +10,17 @@ import type { GifDitherLevel, GifFinalPauseMs, GifPaletteMode } from './dualMapE
 export type ThemeMode = 'dark' | 'light' | 'auto';
 export type AnimationPreset = '3h' | '6h' | '12h' | 'custom';
 
+/**
+ * Everything that describes the current view, as carried by a `?view=` link.
+ *
+ * The animation fields are the in-app animation's own settings. Links made before that carried
+ * `animationPreset`, `animationFps`, `customAnimationDate`, `customStartStep`, `customEndStep` and
+ * `gifMaxDimension` instead: the export modal's range, which issue #78 removed. Those are ignored
+ * when read — they have described nothing on screen since then.
+ */
 export type ShareSnapshot = {
   activeLayers: ActiveLayers;
-  animationFps: number;
-  animationPreset: AnimationPreset;
   autoReduceVisAtNight: boolean;
-  customAnimationDate: string;
-  customEndStep: number;
-  customStartStep: number;
   currentTime: string;
   fireHotspotEnabled: boolean;
   fireHotspotMinBrightness: number;
@@ -26,7 +29,6 @@ export type ShareSnapshot = {
   gifColorCount: 64 | 128 | 256;
   gifDitherLevel: GifDitherLevel;
   gifFinalPauseMs: GifFinalPauseMs;
-  gifMaxDimension: 960 | 1280 | 1600;
   gifPaletteMode: GifPaletteMode;
   hdEnhanceEnabled: boolean;
   hdEnhanceHighlightProtection: number;
@@ -42,12 +44,20 @@ export type ShareSnapshot = {
   language: Language;
   mapOptions: MapOptions;
   mapView: MapViewState;
+  playbackBoomerang: boolean;
+  playbackCustomDate: string;
+  playbackCustomEndStep: number;
+  playbackCustomStartStep: number;
+  playbackFps: number;
+  playbackPreset: AnimationPreset;
+  playbackQuality: number;
   rgbHdOpacity: number;
   rgbSaturation: number;
   sandwichOpacity: number;
   themeMode: ThemeMode;
   visBrightness: number;
   visContrast: number;
+  webmQuality: number;
 };
 
 export function encodeShareSnapshot(snapshot: ShareSnapshot): string {

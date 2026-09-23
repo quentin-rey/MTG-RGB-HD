@@ -176,9 +176,9 @@ before. Pushes to `main` additionally deploy to GitHub Pages.
 
 `npm run export:composite` downloads a composite RGB+VIS(+IR) animation (GIF
 or WebM) for a given UTC time range without clicking through the app. It
-drives a real (headless) browser against the app via the same share-link
-mechanism as "Copier lien", so it reuses the app's actual compositing/export
-pipeline instead of reimplementing it — see [scripts/export-composite.ts](scripts/export-composite.ts).
+drives a real (headless) browser through the app's animation panel, set up
+via the same share-link mechanism as "Copier lien", so it reuses the app's
+actual compositing/export pipeline instead of reimplementing it — see [scripts/export-composite.ts](scripts/export-composite.ts).
 
 ```bash
 npx playwright install chromium   # one-time browser download
@@ -189,8 +189,8 @@ npm run export:composite -- \
   --out eclipse-12aug.gif
 ```
 
-Run with `--help` for the full option list (layers, format, fps, map
-center/zoom, GIF/WebM quality settings). Note: since it depends on
+Run with `--help` for the full option list (layers, format, fps, frame size,
+map center/zoom, GIF/WebM quality settings). Note: since it depends on
 EUMETSAT's WMS data, it can only export times that have already happened.
 
 ### Image quality & file size
@@ -210,7 +210,7 @@ npm run export:composite -- \
   --layers rgb,vis --center 46.6,1.9 --zoom 6 \
   --hd-enhance --hd-preset natural \
   --vis-brightness 0.85 --vis-contrast 1.0 \
-  --gif-max-dimension 960 \
+  --size 960 \
   --out france.gif
 ```
 
@@ -225,7 +225,7 @@ individual HD sliders (`--hd-strength`, `--hd-highlight-protection`,
 `--hd-saturation-adjust`, `--hd-noise-reduction`, `--hd-radius`) and
 `--rgb-saturation` are also exposed for fine-tuning beyond the presets.
 
-For file size, prefer lowering `--gif-max-dimension` over `--gif-colors`:
+For file size, prefer lowering `--size` over `--gif-colors`:
 on a 25-frame test clip, 1280px→960px cut the file by ~40% with no visible
 quality loss, while 128→64 colors only saved ~23% and introduced visible
 banding on smooth gradients (terrain, ocean). `--gif-dither` trades the

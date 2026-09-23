@@ -4,10 +4,10 @@
  *
  * This does NOT reimplement the compositing/HD-enhancement/GIF-encoding
  * pipeline server-side — it drives a real (headless) browser against the
- * already-deployed app the same way a person would through the "Export"
- * modal, using a share-link URL (`?view=...`, the same mechanism as the
- * "Copier lien" button) to pre-fill the date range, layers and export
- * settings. That keeps this script from ever drifting out of sync with
+ * already-deployed app the same way a person would through the animation
+ * panel (prepare the sequence, then download it as GIF or WebM), using a
+ * share-link URL (`?view=...`, the same mechanism as the "Copier lien"
+ * button) to pre-fill the range, layers, quality and file settings. That keeps this script from ever drifting out of sync with
  * `dualMapExport.ts`'s actual rendering logic, at the cost of not being a
  * real HTTP API: it's a tool you run, not an endpoint anyone can curl.
  *
@@ -18,7 +18,7 @@
 import { parseArgs } from 'node:util';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium, type Page } from 'playwright';
+import { chromium } from 'playwright';
 
 type Layer = 'rgb' | 'vis' | 'ir';
 
@@ -26,6 +26,8 @@ type Layer = 'rgb' | 'vis' | 'ir';
 // there's no shared module to import them from without dragging in the DOM-
 // dependent app bundle, and they change rarely enough that this is fine.
 const MAX_ANIMATION_EXPORT_FRAMES = 73;
+const MIN_PLAYBACK_FPS = 4;
+const MAX_PLAYBACK_FPS = 12;
 const MAX_CUSTOM_RANGE_MS = 12 * 60 * 60 * 1000;
 const MIN_CUSTOM_RANGE_MS = 1 * 60 * 60 * 1000;
 const DAY_MAX_STEP = (24 * 60) / 10 - 1;
@@ -43,7 +45,7 @@ const HD_PRESET_SLIDER_VALUES = {
 } as const;
 
 const DEFAULT_APP_URL = 'https://quentin-rey.github.io/MTG-RGB-HD/';
-const GIF_MAX_DIMENSIONS = [960, 1280, 1600] as const;
+const PLAYBACK_SIZES = [960, 1280, 1600] as const;
 const GIF_COLOR_COUNTS = [64, 128, 256] as const;
 const GIF_DITHER_LEVELS = ['none', 'low', 'medium', 'high'] as const;
 const GIF_FINAL_PAUSE_MS = [100, 500, 1000, 2000] as const;
@@ -58,7 +60,7 @@ Required:
 Options:
   --layers <rgb,vis,ir>                Active layers, comma-separated (default: rgb,vis)
   --format <gif|webm>                  Output format (default: gif)
-  --fps <n>                            Animation frame rate (default: 6)
+  --fps <${MIN_PLAYBACK_FPS}-${MAX_PLAYBACK_FPS}>                         Animation frame rate (default: 8)
   --out <path>                         Output file path (default: auto-generated)
   --url <base URL>                     App URL to drive (default: ${DEFAULT_APP_URL})
   --center <lat,lng>                   Map center override, e.g. "40,-10" (default: app's own default view)
@@ -76,7 +78,8 @@ Options:
   --vis-brightness <0.6-1.8>           VIS layer brightness (default: app default 1.05)
   --vis-contrast <0.6-2>               VIS layer contrast (default: app default 1.15)
   --rgb-saturation <0.5-2>             RGB layer saturation (default: app default 1.15)
-  --gif-max-dimension <${GIF_MAX_DIMENSIONS.join('|')}>    (default: 1280)
+  --size <${PLAYBACK_SIZES.join('|')}>              Frame size, longest side in px (default: 1280;
+                                       --gif-max-dimension is still accepted)
   --gif-colors <${GIF_COLOR_COUNTS.join('|')}>              (default: 128)
   --gif-dither <${GIF_DITHER_LEVELS.join('|')}>       (default: none)
   --gif-pause <${GIF_FINAL_PAUSE_MS.join('|')}>          Final frame pause in ms (default: 100)
@@ -85,9 +88,10 @@ Options:
   --headed                             Show the browser window (for debugging)
   --help                               Show this help
 
-Constraints inherited from the app's own animation export: the range must be
+Constraints inherited from the app's animation panel: the range must be
 between 1h and 12h, fit within a single UTC calendar day, and produce at most
-${MAX_ANIMATION_EXPORT_FRAMES} frames (10-minute steps).
+${MAX_ANIMATION_EXPORT_FRAMES} frames (10-minute steps). Slots MTG never published are skipped, as
+in the app.
 
 Example — RGB+VIS composite of the evening of 12 Aug 2026 over the Atlantic/Spain:
   npm run export:composite -- \\
@@ -103,7 +107,7 @@ function parseCliArgs() {
       end: { type: 'string' },
       layers: { type: 'string', default: 'rgb,vis' },
       format: { type: 'string', default: 'gif' },
-      fps: { type: 'string', default: '6' },
+      fps: { type: 'string', default: '8' },
       out: { type: 'string' },
       url: { type: 'string', default: DEFAULT_APP_URL },
       center: { type: 'string' },
@@ -121,7 +125,8 @@ function parseCliArgs() {
       'vis-brightness': { type: 'string' },
       'vis-contrast': { type: 'string' },
       'rgb-saturation': { type: 'string' },
-      'gif-max-dimension': { type: 'string', default: '1280' },
+      size: { type: 'string' },
+      'gif-max-dimension': { type: 'string' },
       'gif-colors': { type: 'string', default: '128' },
       'gif-dither': { type: 'string', default: 'none' },
       'gif-pause': { type: 'string', default: '100' },
@@ -169,15 +174,6 @@ function parseNumericChoice<T extends number>(raw: string, choices: readonly T[]
   const match = choices.find((choice) => choice === parsed);
   if (match === undefined) fail(`--${flagName} must be one of: ${choices.join(', ')} (got "${raw}")`);
   return match;
-}
-
-async function waitForVisibleExportError(page: Page, stop: { value: boolean }): Promise<string> {
-  while (!stop.value) {
-    const text = await page.locator('p.text-rose-600, p.text-rose-300').first().textContent().catch(() => null);
-    if (text && text.trim()) return text.trim();
-    await page.waitForTimeout(2000);
-  }
-  return '';
 }
 
 async function main() {
@@ -230,8 +226,9 @@ async function main() {
   const frameCount = (customEndStep - customStartStep) / (TEN_MINUTES_MS / 60000 / 10) + 1;
   if (frameCount > MAX_ANIMATION_EXPORT_FRAMES) fail(`the range would produce ${frameCount} frames, more than the app's ${MAX_ANIMATION_EXPORT_FRAMES}-frame export cap`);
 
-  const fps = Math.max(2, Math.min(20, Math.round(Number(args.fps))));
-  const gifMaxDimension = parseNumericChoice(args['gif-max-dimension']!, GIF_MAX_DIMENSIONS, 'gif-max-dimension');
+  const fps = Math.max(MIN_PLAYBACK_FPS, Math.min(MAX_PLAYBACK_FPS, Math.round(Number(args.fps))));
+  if (fps !== Number(args.fps)) console.log(`Note: --fps clamped to ${fps} (the animation panel allows ${MIN_PLAYBACK_FPS}-${MAX_PLAYBACK_FPS})`);
+  const size = parseNumericChoice(args.size ?? args['gif-max-dimension'] ?? '1280', PLAYBACK_SIZES, 'size');
   const gifColorCount = parseNumericChoice(args['gif-colors']!, GIF_COLOR_COUNTS, 'gif-colors');
   const gifFinalPauseMs = parseNumericChoice(args['gif-pause']!, GIF_FINAL_PAUSE_MS, 'gif-pause');
   const gifDitherLevel = args['gif-dither']!;
@@ -279,12 +276,16 @@ async function main() {
 
   const snapshot: Record<string, unknown> = {
     activeLayers,
-    animationPreset: 'custom',
-    customAnimationDate: startDatePart,
-    customStartStep,
-    customEndStep,
-    animationFps: fps,
-    gifMaxDimension,
+    playbackPreset: 'custom',
+    playbackCustomDate: startDatePart,
+    playbackCustomStartStep: customStartStep,
+    playbackCustomEndStep: customEndStep,
+    playbackFps: fps,
+    playbackQuality: size,
+    // A downloaded file never plays back and forth (only the in-app playback does), but keep the
+    // panel matching what is being produced.
+    playbackBoomerang: false,
+    webmQuality,
     gifColorCount,
     gifPaletteMode: 'per-frame',
     gifDitherLevel,
@@ -316,57 +317,63 @@ async function main() {
       if (msg.type() === 'error') console.error('  [console]', msg.text());
     });
 
+    // The app reports failures with window.alert, which Playwright dismisses silently by default:
+    // without this, a failed render would just look like a download that never comes.
+    let appError: string | null = null;
+    page.on('dialog', (dialog) => {
+      appError = dialog.message();
+      void dialog.dismiss();
+    });
+    const failIfAppErrored = () => {
+      if (appError) throw new Error(`the app reported: ${appError}`);
+    };
+
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('text=Temps UTC', { timeout: 30000 });
 
-    await page.getByRole('button', { name: 'Exporter', exact: true }).click();
-    const modeLabel = format === 'gif' ? 'Animation GIF' : 'Vidéo WebM';
-    await page.getByRole('button', { name: modeLabel, exact: true }).click();
+    await page.getByRole('button', { name: 'Animation', exact: true }).click();
+    await page.getByRole('button', { name: /^Lire l'animation/ }).click();
 
-    if (format === 'webm') {
-      // The WebM quality slider has no dedicated share-snapshot field; set it directly in the modal.
-      const qualityInput = page.locator('input[type="range"]').last();
-      await qualityInput.evaluate((el: HTMLInputElement, value: number) => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-        setter.call(el, String(value));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      }, webmQuality).catch(() => {
-        console.log('  Note: could not set --webm-quality via the slider, using the app default.');
-      });
-    }
-
-    const confirmLabel = format === 'gif' ? 'Exporter GIF' : 'Exporter WebM';
-    const stop = { value: false };
-    const errorPromise = waitForVisibleExportError(page, stop);
-    const downloadPromise = page.waitForEvent('download', { timeout: timeoutMs });
-
+    // Preparing renders every frame through the WMS endpoint: this is the long part.
     const progressTimer = setInterval(() => {
-      page
-        .getByRole('button', { name: /^Génération/ })
-        .first()
-        .textContent()
+      page.getByText('Préparation des images').locator('..').textContent()
         .then((text) => {
-          if (text) console.log(`  ${text.trim()}`);
+          const count = text?.match(/(\d+)\/(\d+)/);
+          if (count) console.log(`  Preparing frames: ${count[1]}/${count[2]}`);
         })
         .catch(() => {});
     }, 5000);
-
-    await page.getByRole('button', { name: confirmLabel, exact: true }).click();
-
-    let download: Awaited<typeof downloadPromise> | null = null;
     try {
-      const winner = await Promise.race([
-        downloadPromise.then((d) => ({ kind: 'download' as const, download: d })),
-        errorPromise.then((message) => ({ kind: 'error' as const, message })),
-      ]);
-      if (winner.kind === 'error') {
-        throw new Error(`the app reported: ${winner.message}`);
+      const ready = page.getByLabel('Mettre en pause').waitFor({ timeout: timeoutMs });
+      while (true) {
+        failIfAppErrored();
+        const done = await Promise.race([ready.then(() => true), page.waitForTimeout(1000).then(() => false)]);
+        if (done) break;
       }
-      download = winner.download;
     } finally {
-      stop.value = true;
       clearInterval(progressTimer);
     }
+    failIfAppErrored();
+
+    const skipped = await page.getByText(/créneau\(x\) sans image/).textContent().catch(() => null);
+    if (skipped) console.log(`  Note: ${skipped.trim()} (MTG published no image for those slots)`);
+
+    // Encoding happens in the page from frames already rendered, so it is quick next to preparing.
+    console.log(`Encoding ${format.toUpperCase()}...`);
+    const downloadPromise = page.waitForEvent('download', { timeout: timeoutMs });
+    await page.getByRole('button', { name: `Télécharger cette animation ${format.toUpperCase()}`, exact: true }).click();
+    const download = await Promise.race([
+      downloadPromise,
+      new Promise<never>((_, reject) => {
+        const timer = setInterval(() => {
+          if (appError) {
+            clearInterval(timer);
+            reject(new Error(`the app reported: ${appError}`));
+          }
+        }, 1000);
+        void downloadPromise.finally(() => clearInterval(timer));
+      }),
+    ]);
 
     await download.saveAs(outPath);
     console.log(`Saved: ${outPath}`);
