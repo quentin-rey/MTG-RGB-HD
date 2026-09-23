@@ -13,8 +13,16 @@ export const DEFAULT_FRANCE_BOUNDS: [[number, number], [number, number]] = [
   [41.15, -5.8],
   [51.35, 9.7],
 ];
-export const CITY_GEOJSON_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places.geojson';
-export const FRANCE_DEPARTMENTS_GEOJSON_URL = 'https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/departements.geojson';
+/**
+ * Overlay datasets. Each is fetched only once its overlay is first switched on — all three used
+ * to load at startup whatever the settings, 25 MB on every visit with every overlay off by
+ * default. The remote two are pinned to a commit: a moving `master` could change or vanish under
+ * the app, and what is drawn on the map should not depend on it. The cities ship with the app as
+ * a trimmed copy of Natural Earth (see scripts/build-cities.ts): 216 KB instead of 19.4 MB.
+ */
+export const CITIES_DATA_URL = `${import.meta.env.BASE_URL}data/cities.json`;
+export const COUNTRY_BORDERS_GEOJSON_URL = 'https://raw.githubusercontent.com/datasets/geo-countries/185beb1137f6e9f5d916c91916f0159c20fbab30/data/countries.geojson';
+export const FRANCE_DEPARTMENTS_GEOJSON_URL = 'https://raw.githubusercontent.com/gregoiredavid/france-geojson/5d34ee6d0140c29f785fdb047d9329f1aab58833/departements.geojson';
 export const STORAGE_KEYS = {
   activeLayers: 'mtg_active_layers',
   autoReduceVisAtNight: 'mtg_auto_reduce_vis_night',
@@ -53,14 +61,12 @@ export const STORAGE_KEYS = {
   visContrast: 'mtg_vis_contrast',
 } as const;
 
-export type CityFeature = {
-  geometry: { coordinates: [number, number] };
-  properties: {
-    NAME?: string;
-    NAMEASCII?: string;
-    POP_MAX?: number;
-    FEATURECLA?: string;
-  };
+/** One row of `public/data/cities.json`. */
+export type City = {
+  lng: number;
+  lat: number;
+  population: number;
+  name: string;
 };
 
 export type IrStyle = (typeof IR_STYLES)[number]['id'];
@@ -68,7 +74,7 @@ export type HdEnhancementPreset = 'natural' | 'balanced' | 'punchy' | 'analyze' 
 export type ExportKind = 'vis' | 'rgb' | 'ir' | 'hd' | 'sandwich' | 'hybrid';
 export type MapOptions = {
   bordersOpacity: number;
-  /** Multiplier on the per-zoom city visibility thresholds in `getVisibleCityFeatures`
+  /** Multiplier on the per-zoom city visibility thresholds in `getVisibleCities`
    * (useDualMapLeaflet.ts): scales the population floor down and the on-screen city cap up as it
    * increases, so 1 keeps the original defaults, <1 shows only the biggest cities, and >1 shows
    * more/smaller ones. */
@@ -135,6 +141,15 @@ export function getAvailableExportKindsFromLayers(layers: ActiveLayers): ExportK
   if (layers.vis && layers.ir) kinds.push('sandwich');
   if (layers.rgb && layers.vis && layers.ir) kinds.push('hybrid');
   return kinds;
+}
+
+/** The layer set an export kind is made of — the inverse of `getAvailableExportKindsFromLayers`. */
+export function getExportKindLayers(kind: ExportKind): ActiveLayers {
+  return {
+    rgb: kind === 'rgb' || kind === 'hd' || kind === 'hybrid',
+    vis: kind === 'vis' || kind === 'hd' || kind === 'sandwich' || kind === 'hybrid',
+    ir: kind === 'ir' || kind === 'sandwich' || kind === 'hybrid',
+  };
 }
 
 export function getExportLabel(kind: ExportKind, labels: {
