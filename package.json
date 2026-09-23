@@ -10,7 +10,8 @@
     "clean": "rimraf dist",
     "lint": "tsc --noEmit && oxlint",
     "export:composite": "tsx scripts/export-composite.ts",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "data:cities": "tsx scripts/build-cities.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

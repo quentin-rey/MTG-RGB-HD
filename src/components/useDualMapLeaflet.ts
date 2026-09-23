@@ -3,10 +3,11 @@ import L from 'leaflet';
 
 import {
   type ActiveLayers,
-  CITY_GEOJSON_URL,
+  CITIES_DATA_URL,
   computeCloudOnlyIrRgba,
   computeFireHotspotRgba,
   computeLayerBlendState,
+  COUNTRY_BORDERS_GEOJSON_URL,
   DEFAULT_FRANCE_BOUNDS,
   DEFAULT_MAP_CENTER,
   type FireHotspotThresholds,
@@ -17,7 +18,7 @@ import {
   LAYER_RGB,
   LAYER_VIS,
   WMS_URL_DIRECT,
-  type CityFeature,
+  type City,
   type IrStyle,
   type MapViewState,
   type MapOptions,
@@ -103,9 +104,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     onMapViewChange,
   } = args;
 
-  const map1Ref = useRef<HTMLDivElement>(null);
   const map2Ref = useRef<HTMLDivElement>(null);
-  const map1Instance = useRef<L.Map | null>(null);
   const map2Instance = useRef<L.Map | null>(null);
   const secondaryBaseLayerRef = useRef<L.TileLayer.WMS | null>(null);
   const irFallbackBaseLayerRef = useRef<L.TileLayer.WMS | null>(null);
@@ -116,15 +115,15 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const fireHotspotTileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const fireHotspotTileCacheOrderRef = useRef<string[]>([]);
   const fireHotspotThresholdDebounceRef = useRef<number | null>(null);
-  const map1BordersRef = useRef<L.GeoJSON | null>(null);
   const map2BordersRef = useRef<L.GeoJSON | null>(null);
-  const map1DepartmentsRef = useRef<L.GeoJSON | null>(null);
   const map2DepartmentsRef = useRef<L.GeoJSON | null>(null);
   const map2CitiesRef = useRef<L.LayerGroup | null>(null);
-  const cityFeaturesRef = useRef<CityFeature[] | null>(null);
+  const cityFeaturesRef = useRef<City[] | null>(null);
+  // Each overlay's data, requested the first time the overlay is switched on and kept afterwards.
+  // Promises rather than values so an export started right after enabling one waits for it.
   const cityLoadPromiseRef = useRef<Promise<void> | null>(null);
-  const departmentsLoadPromiseRef = useRef<Promise<void> | null>(null);
-  const isSyncing = useRef(false);
+  const bordersDataRef = useRef<Promise<GeoJSON.GeoJsonObject | null> | null>(null);
+  const departmentsDataRef = useRef<Promise<GeoJSON.GeoJsonObject | null> | null>(null);
   const overlayFadeInTimeoutRef = useRef<number | null>(null);
   const overlayFadeOutTimeoutRef = useRef<number | null>(null);
   // Per-layer tile-loading bookkeeping, one entry per live bindLayerLoading() binding. The
@@ -241,7 +240,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     onMapViewChangeRef.current = onMapViewChange;
   }, [onMapViewChange]);
 
-  const getVisibleCityFeatures = (bounds: L.LatLngBounds, zoom: number): CityFeature[] => {
+  const getVisibleCities = (bounds: L.LatLngBounds, zoom: number): City[] => {
     const allCities = cityFeaturesRef.current;
     if (!allCities || zoom < 4) return [];
 
@@ -265,22 +264,18 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     // already-kept city, so nearby small towns don't visually collide with a nearby major city.
     const minSpacingPx = 40;
 
-    const candidates = allCities
-      .filter((feature) => {
-        const [lng, lat] = feature.geometry.coordinates;
-        const pop = feature.properties.POP_MAX ?? 0;
-        return pop >= minPopulation && paddedBounds.contains(L.latLng(lat, lng));
-      })
-      .sort((a, b) => (b.properties.POP_MAX ?? 0) - (a.properties.POP_MAX ?? 0));
+    // Already sorted by descending population (scripts/build-cities.ts).
+    const candidates = allCities.filter((city) => (
+      city.population >= minPopulation && paddedBounds.contains(L.latLng(city.lat, city.lng))
+    ));
 
-    const kept: CityFeature[] = [];
+    const kept: City[] = [];
     const keptPoints: L.Point[] = [];
-    for (const feature of candidates) {
+    for (const city of candidates) {
       if (kept.length >= hardLimit) break;
-      const [lng, lat] = feature.geometry.coordinates;
-      const point = L.CRS.EPSG3857.latLngToPoint(L.latLng(lat, lng), zoom);
+      const point = L.CRS.EPSG3857.latLngToPoint(L.latLng(city.lat, city.lng), zoom);
       if (keptPoints.some((keptPoint) => point.distanceTo(keptPoint) < minSpacingPx)) continue;
-      kept.push(feature);
+      kept.push(city);
       keptPoints.push(point);
     }
     return kept;
@@ -302,17 +297,13 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   const renderCityLabelsOnMap = (map: L.Map, layer: L.LayerGroup) => {
     const zoom = map.getZoom();
     const bounds = map.getBounds();
-    const visibleCities = getVisibleCityFeatures(bounds, zoom);
+    const visibleCities = getVisibleCities(bounds, zoom);
 
     layer.clearLayers();
-    visibleCities.forEach((feature) => {
-      const [lng, lat] = feature.geometry.coordinates;
-      const name = feature.properties.NAME ?? feature.properties.NAMEASCII;
-      if (!name) return;
-
+    visibleCities.forEach((city) => {
       layer.addLayer(
-        L.marker([lat, lng], {
-          icon: buildCityLabelIcon(zoom, name),
+        L.marker([city.lat, city.lng], {
+          icon: buildCityLabelIcon(zoom, city.name),
           interactive: false,
           keyboard: false,
           zIndexOffset: 1000,
@@ -1015,15 +1006,8 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   };
 
   useEffect(() => {
-    if (!map1Ref.current || !map2Ref.current) return;
-    if (map1Instance.current || map2Instance.current) return;
-
-    const map1 = L.map(map1Ref.current, {
-      center: DEFAULT_MAP_CENTER,
-      zoom: 6,
-      zoomControl: false,
-      attributionControl: false,
-    });
+    if (!map2Ref.current) return;
+    if (map2Instance.current) return;
 
     const map2 = L.map(map2Ref.current, {
       center: DEFAULT_MAP_CENTER,
@@ -1037,11 +1021,9 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       const nextZoom = Math.max(3, Math.min(11, Math.round(rememberedMapView.zoom)));
       const nextLat = Math.max(-85, Math.min(85, rememberedMapView.lat));
       const nextLng = Math.max(-180, Math.min(180, rememberedMapView.lng));
-      map1.setView([nextLat, nextLng], nextZoom, { animate: false });
       map2.setView([nextLat, nextLng], nextZoom, { animate: false });
     } else {
       const franceBounds = L.latLngBounds(DEFAULT_FRANCE_BOUNDS);
-      map1.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
       map2.fitBounds(franceBounds, { animate: false, padding: [0, 0] });
     }
 
@@ -1094,26 +1076,13 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       maybeFinishLoading();
     };
 
-    const syncMaps = (source: L.Map, target: L.Map) => {
-      source.on('move', () => {
-        if (!isSyncing.current) {
-          isSyncing.current = true;
-          target.setView(source.getCenter(), source.getZoom(), { animate: false });
-          isSyncing.current = false;
-        }
-      });
-    };
-
     L.control.attribution({ position: 'bottomright' }).addTo(map2);
-    syncMaps(map1, map2);
-    syncMaps(map2, map1);
     map2.on('loading', handleMapLoading);
     map2.on('load', handleMapLoad);
     map2.on('moveend', updateViewportCenter);
     map2.on('zoomend', updateViewportCenter);
     updateViewportCenter();
 
-    map1Instance.current = map1;
     map2Instance.current = map2;
     setMapsReady(true);
 
@@ -1123,9 +1092,7 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
       map2.off('load', handleMapLoad);
       map2.off('moveend', updateViewportCenter);
       map2.off('zoomend', updateViewportCenter);
-      map1.remove();
       map2.remove();
-      map1Instance.current = null;
       map2Instance.current = null;
       if (loadingIdleTimeoutRef.current !== null) {
         window.clearTimeout(loadingIdleTimeoutRef.current);
@@ -1577,119 +1544,78 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
   ]);
 
   useEffect(() => {
-    if (!mapsReady || !map1Instance.current || !map2Instance.current) return;
+    const map2 = map2Instance.current;
+    if (!mapsReady || !map2) return;
 
-    if (!map1BordersRef.current) {
-      map1BordersRef.current = L.geoJSON(undefined, {
-        style: { color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 },
-        interactive: false,
+    const loadGeoJson = (url: string, what: string): Promise<GeoJSON.GeoJsonObject | null> => fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<GeoJSON.GeoJsonObject>;
+      })
+      .catch((err) => {
+        console.error(`Could not load ${what}:`, err);
+        return null;
       });
-      map2BordersRef.current = L.geoJSON(undefined, {
-        style: { color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 },
-        interactive: false,
-      });
+    const borderStyle = { color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 };
+    const departmentsStyle = { color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 };
 
-      fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
-        .then((res) => res.json())
-        .then((data) => {
-          map1BordersRef.current?.addData(data);
-          map2BordersRef.current?.addData(data);
-        })
-        .catch((err) => console.error('Could not load borders:', err));
+    // Nothing is requested until an overlay is actually wanted: with all three off, which is the
+    // default, the map costs no dataset at all.
+    if (mapOptions.showBorders && !map2BordersRef.current) {
+      const layer = L.geoJSON(undefined, { style: borderStyle, interactive: false });
+      map2BordersRef.current = layer;
+      bordersDataRef.current = loadGeoJson(COUNTRY_BORDERS_GEOJSON_URL, 'borders').then((data) => {
+        if (data) layer.addData(data);
+        return data;
+      });
     }
-
-    if (!map2CitiesRef.current) {
+    if (mapOptions.showFranceDepartments && !map2DepartmentsRef.current) {
+      const layer = L.geoJSON(undefined, { style: departmentsStyle, interactive: false });
+      map2DepartmentsRef.current = layer;
+      departmentsDataRef.current = loadGeoJson(FRANCE_DEPARTMENTS_GEOJSON_URL, 'France departments').then((data) => {
+        if (data) layer.addData(data);
+        return data;
+      });
+    }
+    if (mapOptions.showCities && !map2CitiesRef.current) {
       map2CitiesRef.current = L.layerGroup();
-
-      if (!cityLoadPromiseRef.current) {
-        cityLoadPromiseRef.current = fetch(CITY_GEOJSON_URL)
-          .then((res) => res.json())
-          .then((data) => {
-            cityFeaturesRef.current = (data?.features ?? []) as CityFeature[];
-          })
-          .catch((err) => {
-            console.error('Could not load city labels:', err);
-            cityFeaturesRef.current = [];
-          });
-      }
+      cityLoadPromiseRef.current = fetch(CITIES_DATA_URL)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json() as Promise<{ cities?: Array<[number, number, number, string]> }>;
+        })
+        .then((data) => {
+          cityFeaturesRef.current = (data.cities ?? []).map(([lng, lat, population, name]) => ({ lng, lat, population, name }));
+        })
+        .catch((err) => {
+          console.error('Could not load city labels:', err);
+          cityFeaturesRef.current = [];
+        });
     }
 
-    if (!map1DepartmentsRef.current) {
-      map1DepartmentsRef.current = L.geoJSON(undefined, {
-        style: { color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 },
-        interactive: false,
-      });
-      map2DepartmentsRef.current = L.geoJSON(undefined, {
-        style: { color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 },
-        interactive: false,
-      });
+    map2BordersRef.current?.setStyle(borderStyle);
+    map2DepartmentsRef.current?.setStyle(departmentsStyle);
 
-      if (!departmentsLoadPromiseRef.current) {
-        departmentsLoadPromiseRef.current = fetch(FRANCE_DEPARTMENTS_GEOJSON_URL)
-          .then((res) => res.json())
-          .then((data) => {
-            map1DepartmentsRef.current?.addData(data);
-            map2DepartmentsRef.current?.addData(data);
-          })
-          .catch((err) => {
-            console.error('Could not load France departments:', err);
-          });
-      }
-    }
-
-    map1BordersRef.current?.setStyle({ color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 });
-    map2BordersRef.current?.setStyle({ color: `rgba(255, 255, 255, ${borderStrokeOpacity})`, weight: 1, fillOpacity: 0 });
-    map1DepartmentsRef.current?.setStyle({ color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 });
-    map2DepartmentsRef.current?.setStyle({ color: `rgba(225, 225, 230, ${departmentsStrokeOpacity})`, weight: 1, fillOpacity: 0 });
+    const toggle = (layer: L.Layer | null, visible: boolean) => {
+      if (!layer) return;
+      if (visible && !map2.hasLayer(layer)) layer.addTo(map2);
+      if (!visible && map2.hasLayer(layer)) layer.remove();
+    };
+    toggle(map2BordersRef.current, mapOptions.showBorders);
+    toggle(map2DepartmentsRef.current, mapOptions.showFranceDepartments);
+    toggle(map2CitiesRef.current, mapOptions.showCities);
 
     const refreshCityLabels = async () => {
-      if (!map2CitiesRef.current) return;
-      if (cityLoadPromiseRef.current) {
-        await cityLoadPromiseRef.current;
-      }
-      if (!mapOptions.showCities) return;
-      renderCityLabelsOnMap(map2Instance.current!, map2CitiesRef.current);
+      const layer = map2CitiesRef.current;
+      if (!layer || !mapOptions.showCities) return;
+      await cityLoadPromiseRef.current;
+      renderCityLabelsOnMap(map2, layer);
     };
+    if (mapOptions.showCities) void refreshCityLabels();
 
-    if (mapOptions.showBorders) {
-      if (!map1Instance.current.hasLayer(map1BordersRef.current)) map1BordersRef.current.addTo(map1Instance.current);
-      if (!map2Instance.current.hasLayer(map2BordersRef.current!)) map2BordersRef.current!.addTo(map2Instance.current);
-    } else {
-      if (map1Instance.current.hasLayer(map1BordersRef.current)) map1BordersRef.current.remove();
-      if (map2Instance.current.hasLayer(map2BordersRef.current!)) map2BordersRef.current!.remove();
-    }
-
-    if (mapOptions.showCities) {
-      if (!map2Instance.current.hasLayer(map2CitiesRef.current!)) map2CitiesRef.current!.addTo(map2Instance.current);
-      void refreshCityLabels();
-    } else {
-      if (map2Instance.current.hasLayer(map2CitiesRef.current!)) map2CitiesRef.current!.remove();
-    }
-
-    if (mapOptions.showFranceDepartments) {
-      if (departmentsLoadPromiseRef.current) {
-        void departmentsLoadPromiseRef.current.then(() => {
-          if (map1DepartmentsRef.current && !map1Instance.current!.hasLayer(map1DepartmentsRef.current)) {
-            map1DepartmentsRef.current.addTo(map1Instance.current!);
-          }
-          if (map2DepartmentsRef.current && !map2Instance.current!.hasLayer(map2DepartmentsRef.current)) {
-            map2DepartmentsRef.current.addTo(map2Instance.current!);
-          }
-        });
-      }
-    } else {
-      if (map1DepartmentsRef.current && map1Instance.current.hasLayer(map1DepartmentsRef.current)) {
-        map1DepartmentsRef.current.remove();
-      }
-      if (map2DepartmentsRef.current && map2Instance.current.hasLayer(map2DepartmentsRef.current)) {
-        map2DepartmentsRef.current.remove();
-      }
-    }
-
-    map2Instance.current.on('moveend zoomend', refreshCityLabels);
-
+    map2.on('moveend zoomend', refreshCityLabels);
     return () => {
-      map2Instance.current?.off('moveend zoomend', refreshCityLabels);
+      map2.off('moveend zoomend', refreshCityLabels);
     };
     // `borderStrokeOpacity` and `departmentsStrokeOpacity` are clamps *of* `mapOptions`, which is
     // already listed, and `renderCityLabelsOnMap` is a pure renderer recreated on every pass.
@@ -1700,13 +1626,12 @@ export function useDualMapLeaflet(args: UseDualMapLeafletArgs) {
     cityLoadPromiseRef,
     effectiveHybridVisOpacity,
     effectiveSandwichOpacity,
-    getVisibleCityFeatures,
+    getVisibleCities,
     isNightIrFallbackActive,
     isRgbVisOnlyMode,
     rgbVisOnlyNightBrightness,
-    map1BordersRef,
-    map1DepartmentsRef,
-    map1Ref,
+    bordersDataRef,
+    departmentsDataRef,
     map2Instance,
     map2Ref,
     isMapLoading,
