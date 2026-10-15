@@ -3,12 +3,63 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MTG-RGB-HD</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>" />
+    <title>MTG-RGB-HD · Images satellite Meteosat en temps réel (France, Europe)</title>
+    <meta name="description" content="Images satellite Meteosat (MTG) en quasi temps réel sur la France et l'Europe : RGB, visible et infrarouge, animations et export HD. Gratuit, sans inscription." />
+    <link rel="canonical" href="https://quentin-rey.github.io/MTG-RGB-HD/" />
+    <meta name="theme-color" content="#111111" />
+
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="%BASE_URL%favicon-48.png" sizes="48x48" type="image/png" />
+    <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
+    <link rel="manifest" href="%BASE_URL%site.webmanifest" />
+
+    <!-- Link previews (Discord, Facebook, X, messaging apps). URLs must be absolute. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="MTG-RGB-HD" />
+    <meta property="og:locale" content="fr_FR" />
+    <meta property="og:url" content="https://quentin-rey.github.io/MTG-RGB-HD/" />
+    <meta property="og:title" content="MTG-RGB-HD · Images satellite Meteosat en temps réel" />
+    <meta property="og:description" content="RGB, visible et infrarouge MTG en quasi temps réel sur la France et l'Europe, avec animations et export HD." />
+    <meta property="og:image" content="https://quentin-rey.github.io/MTG-RGB-HD/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Image satellite RGB+VIS de la France et de l'Europe dans MTG-RGB-HD" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "MTG-RGB-HD",
+        "url": "https://quentin-rey.github.io/MTG-RGB-HD/",
+        "description": "Visualiseur d'images satellite Meteosat Third Generation (EUMETSAT) en quasi temps réel : RGB, visible 0,6 µm et infrarouge 10,5 µm, animations et export HD.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Web",
+        "inLanguage": ["fr", "en"],
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "image": "https://quentin-rey.github.io/MTG-RGB-HD/og-image.jpg",
+        "author": { "@type": "Person", "name": "Quentin Rey", "url": "https://github.com/quentin-rey" }
+      }
+    </script>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin: 0; background: #0a0a0a">
+    <!-- Shown while the app loads and replaced by React on mount. It is also the only text a
+         crawler finds in the HTML itself, which is why Google's snippet used to read just
+         "MTG-RGB-HD". Visible, not hidden: same content for people and search engines. -->
+    <div id="root">
+      <main style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; color: #cbd5e1; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; text-align: center">
+        <div style="max-width: 36rem">
+          <h1 style="margin: 0 0 12px; font-size: 22px; font-weight: 500; color: #f1f5f9">MTG-RGB-HD</h1>
+          <p style="margin: 0 0 8px; font-size: 15px; line-height: 1.5">
+            Images satellite Meteosat Third Generation en quasi temps réel sur la France et l'Europe :
+            couleur vraie (RGB), visible 0,6 µm et infrarouge 10,5 µm, combinables, avec animations
+            et export d'images haute définition.
+          </p>
+          <p style="margin: 0; font-size: 13px; color: #64748b">Chargement de la carte… Données EUMETSAT.</p>
+        </div>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
