@@ -52,7 +52,9 @@ the current layer combination:
 
 Country borders, France departments, and city labels — with a
 population-aware decluttering pass so dense regions (Benelux, the Rhine-Ruhr
-area) stay readable instead of turning into overlapping clutter.
+area) stay readable instead of turning into overlapping clutter. Each overlay's
+data is downloaded only the first time it is switched on, so a plain visit
+loads none of it.
 
 ### Export & Download
 
@@ -120,8 +122,8 @@ area) stay readable instead of turning into overlapping clutter.
 
 **Prerequisites:**
 
-- Node.js 18 or higher
-- npm or yarn
+- Node.js 20.19+ or 22.12+ (required by Vite 8; CI uses 22)
+- npm
 
 **Steps:**
 
@@ -144,6 +146,9 @@ npm run start
 
 # Remove build output
 npm run clean
+
+# Regenerate the bundled city labels (public/data/cities.json)
+npm run data:cities
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
@@ -298,7 +303,9 @@ For technical documentation, see:
   [france-geojson](https://github.com/gregoiredavid/france-geojson)
   (Grégoire David)
 - City labels: [Natural Earth](https://www.naturalearthdata.com/) via
-  [natural-earth-vector](https://github.com/nvkelso/natural-earth-vector)
+  [natural-earth-vector](https://github.com/nvkelso/natural-earth-vector),
+  trimmed and bundled in `public/data/cities.json` by
+  [scripts/build-cities.ts](scripts/build-cities.ts)
 
 **Libraries & Tools:**
 
