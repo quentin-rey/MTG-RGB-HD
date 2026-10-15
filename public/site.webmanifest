@@ -1,0 +1,14 @@
+{
+  "name": "MTG-RGB-HD",
+  "short_name": "MTG-RGB-HD",
+  "description": "Images satellite Meteosat (MTG) en quasi temps réel : RGB, VIS et IR sur la France et l'Europe.",
+  "start_url": "/MTG-RGB-HD/",
+  "scope": "/MTG-RGB-HD/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#111111",
+  "icons": [
+    { "src": "/MTG-RGB-HD/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/MTG-RGB-HD/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
