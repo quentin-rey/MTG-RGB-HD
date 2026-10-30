@@ -21,9 +21,9 @@
     "gifenc": "^1.0.3",
     "jszip": "^3.10.2",
     "leaflet": "^1.9.4",
-    "lucide-react": "^1.55.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
@@ -33,12 +33,12 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.2",
-    "oxlint": "^1.87.0",
-    "playwright": "^1.64.0",
+    "oxlint": "^1.89.0",
+    "playwright": "^1.64.1",
     "rimraf": "^6.0.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   }
 }
